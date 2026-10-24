@@ -221,7 +221,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <label class="check" title="How the stress loss is measured">Measure
           <select id="riskModel" aria-label="How the stress loss is measured">
             <option value="worst_case">Worst case: every holding at its worst drop</option>
-            <option value="scenarios">Past crashes replayed on the mix</option>
+            <option value="scenarios">Past crashes replayed (less safe: broke its limit in backtests)</option>
           </select></label>
         <label class="check" title="Aim for this expected growth a year at the least risk; blank for the most growth your level allows">Growth target
           <input type="number" id="targetGrowth" min="0" max="50" step="0.5" placeholder="none" aria-label="Growth target, percent a year"> %</label>
@@ -379,7 +379,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div class="card">
           <h3>Risk levels</h3>
           <div class="table-wrap"><table id="riskTable"></table></div>
-          <p class="muted">Each level caps the <b>stress loss</b>, measured one of two ways. <b>Worst case</b>: what the whole portfolio would lose if every holding repeated its worst historical drop at once. <b>Past crashes</b>: the worst of the real crashes since 1998 (stocks, long bonds, gold, commodities) replayed on the mix, so holdings that did not fall together are not assumed to. Either way no single fund may use more than a quarter of the cap at its own worst drop. Level 10 has no cap; only the per-fund limits apply. A future crash can be deeper than any past one.</p>
+          <p class="muted">Each level caps the <b>stress loss</b>, measured one of two ways. <b>Worst case</b>: what the whole portfolio would lose if every holding repeated its worst historical drop at once. <b>Past crashes</b>: the worst of the real crashes since 1998 (stocks, long bonds, gold, commodities) replayed on the mix, so holdings that did not fall together are not assumed to. In the 2008–2026 backtest it went past its limit by up to 1.5 times (docs/BACKTEST_RISK_MODELS.md), so worst case stays the default. Either way no single fund may use more than a quarter of the cap at its own worst drop. Level 10 has no cap; only the per-fund limits apply. A future crash can be deeper than any past one.</p>
           <p class="muted">With a <b>growth target</b> the plan takes the least stress loss that is expected to reach it, never more than your level allows.</p>
         </div>
         <div class="card">
