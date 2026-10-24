@@ -789,7 +789,7 @@ function renderBatch(res) {
       return head + `<tr data-run="${esc(r.run_id)}" class="${fcView === r.run_id ? "shown" : ""}"><td class="l"><b>${esc(r.model)}</b>${tag}</td>
         <td>${r.mean_ic == null ? "<span class='muted'>no trial</span>" : r.mean_ic.toFixed(3) + ` <span class="muted">(${r.ic_ci[0].toFixed(3)}, ${r.ic_ci[1].toFixed(3)})</span>`}</td>
         <td>${r.p_value_holm == null ? "–" : r.p_value_holm.toFixed(3)}</td><td>${r.calibration_xs == null ? "–" : r.calibration_xs.toFixed(2)}</td>
-        <td>${pct(r.coverage_90, 0)}</td><td>${lpct(r.top_minus_all_net)}</td><td>${r.agreement == null ? "–" : r.agreement.toFixed(2)}</td>
+        <td>${r.coverage_90 == null ? "–" : pct(r.coverage_90, 0)}</td><td>${lpct(r.top_minus_all_net)}</td><td>${r.agreement == null ? "–" : r.agreement.toFixed(2)}</td>
         <td class="l">${r.ranks ? r.top.map(t => `${esc(t.ticker)} <span class="muted">${lpct(t.mean)}</span>`).join(", ") : "<span class='neg'>same forecast for all: ranks nothing</span>"}</td>
         <td>${r.seconds.toFixed(0)} s</td></tr>`;
     }).join("") +

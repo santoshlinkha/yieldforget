@@ -177,7 +177,7 @@ story += [p("3. A normal day", H1),
               "screen is only a preview; saving makes it the record for its session (see section 8).",
               "<b>Place the orders yourself</b> in the Robinhood app. The sells come first; the buys use their "
               "proceeds the next session, once they settle.",
-              "<b>Record what happened</b>: each fill, or import Robinhood's activity CSV (section 9). Holdings in "
+              "<b>Record what happened</b>: each fill, or import Robinhood's activity CSV (section 10). Holdings in "
               "the app change only through what you record, never because a plan was saved or accepted.",
               "<b>Recurring buys</b>: if the Auto-invest card lists changes, update your recurring investments in "
               "the Robinhood app to match."]),
@@ -198,18 +198,21 @@ story += [PageBreak(), p("4. The pages", H1),
                  ["Allocation", "Every fund held or chosen: now, target, the order actually placed (small trades under "
                                 "0.5% of the account are <i>skipped</i>), worst drop, expected growth, and why."],
                  ["Screener", "Every fund scanned, ranked by expected growth per unit of crash risk."],
-                 ["Backtest", "What the account's value today would have become following the plan month by month "
-                              "since a start date, against holding VTI, SPY or SGOV. A simulation of the past."],
-                 ["Forecasts", "Run a forecast model, see each fund's forecast (mean, 5-95% range, chance of a gain), "
-                               "the walk-forward comparison of all models, and the computer's CPU/GPU details."],
+                 ["Forecasts", "Tick horizons and models and run them at once, side by side with each model's evidence; "
+                               "each fund's forecast (mean, 5-95% range, chance of a gain); the <b>live record</b> (saved "
+                               "forecasts scored after the fact); the walk-forward comparison of all models. Section 8 "
+                               "explains how to read it all."],
                  ["Settings", "Holdings, recurring buys, <b>Risk and goals</b> per account, AI ratings, what to scan."],
                  ["Ticker page", "Click any ticker. Opens in a new tab: price and chart against SPY, news newest first, "
-                                 "analyst price targets and rating changes, earnings surprises, financial statements, "
-                                 "your position and the plan's target, forecasts, saved analysis reports."]],
+                                 "Wall Street ratings, price targets and EPS estimates, a <b>quality checklist</b> (economic "
+                                 "moat, financial strength, profitability and cash flow, valuation), earnings surprises, "
+                                 "dividends, splits and share count, financial statements, your position and the plan's "
+                                 "target, forecasts, saved analysis reports."]],
                 [1.2 * inch, 5.7 * inch]),
           Spacer(1, 8),
           shot("allocation.png", caption="Allocation: the Trade column is the order actually placed; small trades are marked skip."),
-          shot("ticker.png", caption="A ticker page (SCHD): everything about one fund in one place."),
+          shot("ticker.png", caption="A ticker page (AAPL): ratings, estimates and forecasts at the top; the quality "
+                                     "checklist, earnings, dividends and statements below."),
           ]
 
 # --- 5. settings ---
@@ -331,8 +334,88 @@ story += [PageBreak(), p("7. The models", H1),
             "them. They are off by default and currently unfunded."),
           ]
 
-# --- 8. records ---
-story += [PageBreak(), p("8. Records, data and costs", H1),
+# --- 8. reading forecasts ---
+story += [PageBreak(), p("8. How to interpret forecasts", H1),
+          p("A forecast here is a small, uncertain tilt between funds, not a prediction of where a price will be. This "
+            "section shows how to read one, using real rows from the Forecasts page on October 23, 2026."),
+          shot("forecasts.png", max_height=4.2 * inch,
+               caption="Forecasts: choose horizons and models, run them at once, compare them side by side, then read one "
+                       "run's forecasts. Here a 5-session batch; the notes column flags runs no walk-forward trial backs."),
+          p("What the number means", H2),
+          bullets(["<b>A log return above cash.</b> +2.00% means the fund is expected to beat SGOV (T-bills) by about 2% "
+                   "over the horizon. It is not the fund's total return, and it is not a yearly rate.",
+                   "<b>The horizon is in trading sessions:</b> 5 is about a week, 20 about a month, 60 about three months. "
+                   "+1.6% over 60 sessions is roughly 6.5% a year above cash <i>if</i> it repeated four times, which it may not.",
+                   "<b>The ticker page shows two kinds of number.</b> The standard rule is a <i>yearly</i> expected growth; the "
+                   "model forecasts below it are for their horizon. Do not compare them directly."]),
+          p("Reading one row", H2),
+          table([["Column", "VOO (60 sessions, XGBoost quantiles)", "How to read it"],
+                 ["Mean", "+0.52%", "The expected return above cash over the horizon: the forecast itself."],
+                 ["Median", "+0.52%", "The middle outcome. Far from the mean means lopsided risk."],
+                 ["5% / 95%", "-8.28% / +8.95%", "Nine times in ten the outcome should fall in this range. The range is "
+                                                  "about 33 times wider than the mean: the tilt is small next to the noise."],
+                 ["P(gain)", "61%", "The chance of beating zero in total. Treat it loosely: in tests these were worse "
+                                    "than simply using how often prices rose in the past."],
+                 ["Model unc.", "±1.42%", "How much the mean moves when the model is refitted on resampled history. A "
+                                         "mean smaller than this is mostly noise from the fit itself."]],
+                [1.0 * inch, 2.1 * inch, 3.8 * inch]),
+          Spacer(1, 6),
+          p("Compare a leveraged fund in the same run: OKLO at +5.33%, range -37.33% to +34.67%. A bigger mean, but a far "
+            "wider range. The top of a forecast list is often the most volatile funds, because a model that ranks by expected "
+            "return gives the biggest numbers to the things that move most. Look at the range before the mean."),
+          p("Use forecasts to rank, not to time", H2),
+          p("Across 2012-2026 the models ranked funds against each other better than chance, but none could tell when the "
+            "whole market would rise or fall. So read a run as an ordering on one date: which funds look relatively better "
+            "than the others. The plan uses forecasts the same way (only the differences between funds move money), and only "
+            "after scaling them by each model's measured calibration."),
+          p("The evidence columns", H2),
+          table([["Column", "What it is", "Good sign"],
+                 ["IC (95%)", "Rank correlation between forecasts and outcomes on each date, averaged; 0 is chance. "
+                              "The range is its 95% confidence interval.", "Above 0.05, and the whole range above 0"],
+                 ["p (Holm)", "The chance the IC is luck, after counting every model tried in the same study.",
+                  "Under 0.05"],
+                 ["Calib. (within date)", "Whether the size of the differences between funds was right: 1 is right, "
+                                          "above 1 too timid, below 1 too bold, below 0 backwards.", "Between 0.5 and 1.5"],
+                 ["Cover.", "Share of outcomes inside the 5-95% range.", "Near 90%"],
+                 ["Net top fifth", "What the top fifth of funds by forecast earned above the average, per period, after "
+                                   "10 bp a side of trading costs.", "Positive"],
+                 ["Agrees", "Rank correlation of this run's forecasts with the other models' at the same horizon.",
+                  "High agreement among models with good evidence is reassuring; a lone outlier deserves doubt"],
+                 ["best evidence", "Tag on the model with the highest IC among those with Holm p under 0.05.", ""]],
+                [1.3 * inch, 3.9 * inch, 1.7 * inch]),
+          Spacer(1, 6),
+          p("Flags in the Notes column", H2),
+          table([["Flag", "Meaning"],
+                 ["no walk-forward trial backs this model at this horizon",
+                  "Nobody has tested it this way. The plan gives it no weight. Read it as an experiment."],
+                 ["trained on ETFs and this ticker was not among them",
+                  "A single stock forecast by a fund model. Treat it as a forecast for an unfamiliar kind of asset."],
+                 ["gives every ticker the same forecast, so it ranks nothing",
+                  "The model kept only market-wide inputs. It says nothing about one fund versus another."],
+                 ["under a year of prices", "Some inputs (12-month momentum) are missing; the forecast leans on the rest."],
+                 ["survivorship-biased (stock models)", "Trained on today's S&amp;P 500, the companies that survived. Its "
+                                                        "results look better than they would have in real time."]],
+                [2.6 * inch, 4.3 * inch]),
+          Spacer(1, 6),
+          p("The live record", H2),
+          p("Every saved run is scored once its horizon has passed, on prices no model can have seen in training. This is the "
+            "fairest test, and the only clean one for Chronos-2, which may have seen past prices in pretraining. The app "
+            "records Chronos-2's forecasts at each new close when it starts. A handful of scored dates says almost nothing; "
+            "wait for a few dozen before reading much into the IC there."),
+          p("Rules of thumb", H2),
+          numbered(["Prefer models whose IC range is above 0 with Holm p under 0.05 at that horizon. Today that is mostly the "
+                    "60-session ones: XGBoost ranking and XGBoost on ETFs (IC about 0.21-0.22), XGBoost ranking on stocks "
+                    "(about 0.07).",
+                    "Look at the 5-95% range and model uncertainty before the mean. A mean inside the model uncertainty is noise.",
+                    "Read forecasts across funds on one date, never as a call on where the market is going.",
+                    "When well-backed models agree, the ordering is sturdier; when they disagree, neither should move you much.",
+                    "Remember the portfolio test: after trading costs, no forecast beat the standard rule in backtests. The "
+                    "standard rule stays the default for that reason."]),
+          p("Forecasts are model estimates, not outcomes, and not advice. The app never places orders.", NOTE),
+          ]
+
+# --- 9. records ---
+story += [PageBreak(), p("9. Records, data and costs", H1),
           table([["What", "Where", "Notes"],
                  ["Holdings, trades, transfers, settings, recommendations, forecast runs",
                   "portfolio.sqlite3 (next to my_portfolio.json)",
@@ -355,8 +438,8 @@ story += [PageBreak(), p("8. Records, data and costs", H1),
                    "faster (large tree models, Chronos-2), one job at a time, falling back to the CPU."]),
           ]
 
-# --- 9. CLI ---
-story += [p("9. Command line", H1),
+# --- 10. CLI ---
+story += [p("10. Command line", H1),
           p("Everything in the web app can also be done from the TradingAgents folder. Prefix each command with "
             "<font face='Courier'>.venv\\Scripts\\python.exe -m cli.main</font>."),
           table([["Command", "What it does"],
@@ -375,8 +458,8 @@ story += [p("9. Command line", H1),
                 [3.1 * inch, 3.8 * inch]),
           ]
 
-# --- 10. limits ---
-story += [p("10. Limits", H1),
+# --- 11. limits ---
+story += [p("11. Limits", H1),
           bullets(["<b>History is not the future.</b> Stress losses replay the past; a new kind of crash can be deeper.",
                    "<b>Expected growth runs high.</b> Backtests realized 0.3-1.3 points a year less than the plan expected.",
                    "<b>Survivorship.</b> The S&amp;P 500 list is today's members; backtests use ETFs to limit this bias.",
