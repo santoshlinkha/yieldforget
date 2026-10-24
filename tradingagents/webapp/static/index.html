@@ -539,8 +539,38 @@ async function refresh() {
     const r = await api("/api/plan", {sleeve: $("sleeve").value, risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
     if (seq !== planSeq) return;   // a newer request is on its way; this answer is stale
     lastPlan = r; render(r);
-  } catch (e) { if (seq === planSeq) { showError(e.message); $("subtitle").textContent = "Could not optimize."; } }
+  } catch (e) { if (seq === planSeq) { showError(e.message); $("subtitle").textContent = "Could not optimize."; showNoPlan(e.message); } }
   finally { if (seq === planSeq) busy(false); }
+}
+
+// No plan could be made: the orders card says why, instead of staying blank or showing an old plan.
+async function showNoPlan(message) {
+  const sleeve = $("sleeve").value;
+  $("ordersTitle").textContent = "No orders";
+  $("tomorrowBox").hidden = true; $("tomorrow").innerHTML = "";
+  $("settle").textContent = ""; $("orderNotes").innerHTML = "";
+  $("orders").innerHTML = `<li><div class="note">${esc(message)}</div></li>`;
+  if (sleeve !== "trading" || !/holds nothing/.test(message)) return;
+  try {
+    const pv = await api("/api/ledger/trading-preview", {});
+    const steps = pv.steps.map(s => s.cash ? `${usd(s.cash)} of settled cash` : `${s.quantity} ${esc(s.ticker)} (${usd(s.value)})`);
+    $("orders").innerHTML += `<li><h4>Fund the Trading sleeve</h4>
+      <p>To give Trading about ${usd(pv.amount)}, move from Investing: <b>${steps.join(", ") || "nothing available"}</b>.` +
+      (pv.short_by > 0 ? ` That is ${usd(pv.short_by)} short: Investing has no more settled cash or SGOV; move other holdings from Settings, or fund less.` : "") +
+      `</p><p class="muted">${esc(pv.note)} The whole IRA does not change: this is bookkeeping between sleeves, and nothing is sold or bought at Robinhood.</p>` +
+      (pv.steps.length ? `<div class="row"><button id="fundTrading">Move these to Trading</button></div>` : "") + `</li>`;
+    const btn = $("fundTrading");
+    if (btn) btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        for (const s of pv.steps) {
+          await api("/api/ledger/transfer", s.cash ? {from: "investing", to: "trading", cash: s.cash}
+                                                   : {from: "investing", to: "trading", ticker: s.ticker, quantity: s.quantity, price: s.price});
+        }
+        refresh();
+      } catch (e) { showError(e.message); btn.disabled = false; }
+    };
+  } catch (e) { /* the message above already says what is wrong */ }
 }
 
 function goalShort(g) {
@@ -1125,6 +1155,9 @@ $("runAi").onclick = async () => {
 (async () => {
   $("useAi").checked = store.get("useAi", false);
   $("scan").checked = store.get("scan", true);
+  // ?sleeve=trading opens a sleeve directly (and is remembered like a choice in the bar).
+  const linkedSleeve = new URLSearchParams(location.search).get("sleeve");
+  if (["investing", "trading"].includes(linkedSleeve)) store.set("sleeve", linkedSleeve);
   $("sleeve").value = store.get("sleeve", "investing");
   const linked = location.hash.slice(1);
   showTab(document.getElementById(linked)?.classList.contains("tab") ? linked : store.get("tab", "today"));

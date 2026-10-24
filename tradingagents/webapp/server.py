@@ -219,8 +219,8 @@ class App:
         sleeve = self.sleeve(body)
         context, cash = self.store.portfolio(sleeve, _today())
         if not context.positions and cash.total <= 0:
-            raise ValueError(f"The {sleeve} sleeve holds nothing yet. Fund it with a transfer from Investing "
-                             f"(Portfolio > Fund Trading) before planning it.")
+            raise ValueError(f"The {sleeve} sleeve holds nothing yet, so there is nothing to plan. Fund it from "
+                             f"Investing first (Overview > Fund the Trading sleeve).")
         # Recurring contributions go to Investing unless configured otherwise.
         schedule = (load_schedule(self.schedule_path) if self.schedule_path.exists() else {}) \
             if sleeve == "investing" else {}
