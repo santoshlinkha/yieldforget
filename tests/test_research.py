@@ -271,3 +271,29 @@ def test_the_live_record_scores_a_run_only_once_its_horizon_has_passed(tmp_path,
     assert rec["made"] == 2 and rec["resolved"] == 1
     assert rec["dates"][0]["date"] == str(cut.date()) and rec["dates"][0]["ended"] == str(close.index[-11].date())
     assert -1 <= rec["mean_ic"] <= 1 and rec["dates"][0]["n"] == 8
+
+
+def test_the_combined_forecast_weights_models_by_their_tested_skill():
+    from tradingagents.research.engine import combine_runs
+
+    def run(rid, model, means, ic=None, p=0.01):
+        cal = {"trial": 1, "mean_ic": ic, "p_value_holm": p} if ic is not None else {}
+        return {"id": rid, "model": model, "calibration": cal,
+                "forecasts": [{"ticker": t, "mean": m, "median": m, "q05": m - 0.1, "q95": m + 0.1, "p_gain": 0.5,
+                               "estimation_sd": 0.01, "flags_json": "[]"} for t, m in means.items()]}
+
+    out = combine_runs([run("a", "xgb_rank", {"X": 0.04, "Y": 0.00}, ic=0.3),
+                        run("b", "elastic_net", {"X": 0.01, "Y": 0.02}, ic=0.1),
+                        run("c", "momentum", {"X": 0.50, "Y": 0.50}, ic=0.05, p=0.4),     # not significant
+                        run("d", "chronos2", {"X": -0.5, "Y": 0.9}, ic=0.2)])              # contamination unknown
+    assert out["basis"] == "evidence"
+    x = next(r for r in out["rows"] if r["ticker"] == "X")
+    assert x["combined"]["mean"] == pytest.approx(0.75 * 0.04 + 0.25 * 0.01)
+    assert x["combined"]["q05"] == pytest.approx(0.75 * -0.06 + 0.25 * -0.09)
+    assert x["combined"]["spread"] == pytest.approx((0.75 * 0.0075 ** 2 + 0.25 * 0.0225 ** 2) ** 0.5)
+    weights = {m["model"]: m["weight"] for m in x["models"]}
+    assert weights == pytest.approx({"xgb_rank": 0.75, "elastic_net": 0.25, "momentum": 0.0, "chronos2": 0.0})
+    assert out["rows"][0]["ticker"] == "X"          # sorted by combined mean, highest first
+
+    unbacked = combine_runs([run("a", "xgb", {"X": 0.02}), run("b", "elastic_net", {"X": 0.04})])
+    assert unbacked["basis"] == "equal" and unbacked["rows"][0]["combined"]["mean"] == pytest.approx(0.03)

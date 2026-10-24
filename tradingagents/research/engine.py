@@ -194,6 +194,94 @@ def load_run(con, run_id: str) -> dict:
     return run
 
 
+COMBINED = ("mean", "median", "q05", "q95", "p_gain")
+
+
+def model_weight(run: dict) -> tuple[float, str]:
+    """A run's weight in the combined forecast before normalizing, and why.
+
+    Its walk-forward IC when its trial found real ranking skill (IC above 0, Holm p under
+    0.05); otherwise none. Chronos-2 gets none either way: its pretraining may include
+    these prices, so its trial scores could be flattered (its live record will tell). A run
+    that gives every ticker the same forecast ranks nothing and gets none.
+    """
+    cal = run.get("calibration") or {}
+    if isinstance(cal, str):
+        cal = json.loads(cal)
+    if not ranks(run):
+        return 0.0, "ranks nothing"
+    if run["model"] == CHRONOS:
+        return 0.0, "pretraining may include these prices; waits on its live record"
+    if not cal.get("trial"):
+        return 0.0, "no walk-forward trial"
+    ic, p = cal.get("mean_ic"), cal.get("p_value_holm")
+    if ic is None or ic <= 0 or p is None or p >= 0.05:
+        return 0.0, f"trial {cal['trial']} found no significant skill"
+    return float(ic), f"IC {ic:.3f} (trial {cal['trial']}, p {p:.3f})"
+
+
+def combine_runs(runs: list[dict]) -> dict:
+    """Every model's forecast for each ticker, and their evidence-weighted combination.
+
+    Weights come from ``model_weight``, normalized over the models that forecast each ticker.
+    When no model has significant evidence, the models that rank are weighted equally and
+    the result says so. The combined 5% and 95% are weighted averages of the models'
+    (quantile averaging); ``spread`` is how far the models' means are apart (their weighted
+    standard deviation), a measure of disagreement the single-model columns cannot show.
+    """
+    weights = {r["id"]: model_weight(r) for r in runs}
+    basis = "evidence"
+    if not any(w for w, _ in weights.values()):
+        basis = "equal"
+        weights = {r["id"]: ((1.0, "equal weight: no model has significant evidence") if ranks(r) and r["model"] != CHRONOS
+                             else (0.0, weights[r["id"]][1])) for r in runs}
+    by_ticker: dict[str, list[tuple[dict, dict]]] = {}
+    for r in runs:
+        for f in r["forecasts"]:
+            by_ticker.setdefault(f["ticker"], []).append((r, f))
+    rows = []
+    for ticker, pairs in by_ticker.items():
+        total = sum(weights[r["id"]][0] for r, _ in pairs)
+        models = []
+        for r, f in sorted(pairs, key=lambda x: -weights[x[0]["id"]][0]):
+            w = weights[r["id"]][0] / total if total else 0.0
+            models.append({"model": r["model"], "run_id": r["id"], "weight": w, "why": weights[r["id"]][1],
+                           "estimation_sd": f.get("estimation_sd"),
+                           "flags": json.loads(f.get("flags_json") or "[]") if "flags_json" in f else f.get("flags", []),
+                           **{k: f[k] for k in COMBINED}})
+        combined = None
+        if total:
+            used = [m for m in models if m["weight"] > 0]
+            combined = {k: sum(m["weight"] * m[k] for m in used) for k in COMBINED}
+            sds = [m for m in used if m["estimation_sd"] is not None]
+            combined["estimation_sd"] = (sum(m["weight"] * m["estimation_sd"] for m in sds) / sum(m["weight"] for m in sds)
+                                         if sds else None)
+            combined["spread"] = float(np.sqrt(sum(m["weight"] * (m["mean"] - combined["mean"]) ** 2 for m in used)))
+            combined["models"] = len(used)
+        rows.append({"ticker": ticker, "combined": combined, "models": models})
+    rows.sort(key=lambda x: -(x["combined"]["mean"] if x["combined"] else float("-inf")))
+    return {"basis": basis, "rows": rows,
+            "weights": [{"model": r["model"], "run_id": r["id"], "raw": weights[r["id"]][0], "why": weights[r["id"]][1]}
+                        for r in runs]}
+
+
+def runs_to_combine(con, horizon: int, universe: str = "etf") -> list[dict]:
+    """The newest run of each model at ``horizon`` for the newest information cutoff."""
+    row = con.execute("SELECT MAX(info_cutoff) FROM forecast_runs WHERE horizon = ? AND universe = ?",
+                      (horizon, universe)).fetchone()
+    if not row or not row[0]:
+        return []
+    ids = con.execute("SELECT model, id FROM forecast_runs WHERE horizon = ? AND universe = ? AND info_cutoff = ?"
+                      " ORDER BY created_at", (horizon, universe, row[0])).fetchall()
+    newest = {r["model"]: r["id"] for r in ids}
+    out = []
+    for rid in newest.values():
+        run = load_run(con, rid)
+        run["calibration"] = json.loads(run.get("calibration_json") or "{}")
+        out.append(run)
+    return out
+
+
 def compare_runs(runs: list[dict], top: int = 3) -> list[dict]:
     """One row per run of a batch (``run_forecast`` results), for a side-by-side table.
 

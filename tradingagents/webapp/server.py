@@ -459,6 +459,17 @@ class App:
 
         return self.daily.start(work)
 
+    def combined_forecasts(self, horizon: int, universe: str = "etf") -> dict:
+        """Each model's latest forecasts at ``horizon`` side by side, with their combination."""
+        from tradingagents.research.engine import combine_runs, runs_to_combine
+
+        runs = runs_to_combine(self.store.con, horizon, universe)
+        out = combine_runs(runs) if runs else {"basis": None, "rows": [], "weights": []}
+        for r in out["rows"]:
+            r["name"] = describe(r["ticker"])
+        return {**out, "horizon": horizon, "universe": universe,
+                "info_cutoff": runs[0]["info_cutoff"] if runs else None}
+
     def live_records(self) -> list[dict]:
         """Every ETF model and horizon with saved runs, scored on what happened after each run."""
         from tradingagents.research.engine import live_record
@@ -950,6 +961,8 @@ def make_handler(app: App):
                     self._json(rec)
                 elif url.path == "/api/ai":
                     self._json(app.ai_usage())
+                elif url.path == "/api/forecasts/combined":
+                    self._json(app.combined_forecasts(int(query.get("horizon") or 20), query.get("universe") or "etf"))
                 elif url.path == "/api/forecasts/live":
                     self._json({"records": app.live_records(), "daily": app.daily.state()})
                 elif url.path == "/api/forecasts":

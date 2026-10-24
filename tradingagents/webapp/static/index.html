@@ -152,7 +152,11 @@ table.compact th, table.compact td { padding: 5px 6px; font-size: 12.5px; }
 table.compact th { white-space: normal; vertical-align: bottom; }
 table.compact tr.group td { font-weight: 600; color: var(--text); background: var(--surface-2); text-align: left; }
 .pill { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--buy) 18%, transparent); color: var(--buy); white-space: nowrap; }
-#fcBatch tr[data-run] { cursor: pointer; } #fcBatch tr.shown td { background: var(--surface-2); }
+#fcBatch tr[data-run] { cursor: pointer; }
+#fcTable tr.comb td { border-top: 1px solid var(--border-strong); }
+#fcTable td.l, #fcTable th.l { text-align: left; }
+#fcTable tr.sub td { font-size: 12px; color: var(--muted); padding-top: 2px; padding-bottom: 2px; border-bottom: 0; }
+#fcTable tr.sub td.pos, #fcTable tr.sub td.neg { opacity: .8; } #fcBatch tr.shown td { background: var(--surface-2); }
 tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .tag { font-size: 10.5px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; margin-left: 6px; font-weight: 600; letter-spacing: .02em; }
 .pos { color: var(--buy); } .neg { color: var(--sell); }
@@ -416,6 +420,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <div class="table-wrap"><table id="fcBatch" class="compact"></table></div>
         </div>
         <div class="row" style="margin:12px 0 0"><label class="check" title="Feed the Investing plan from the run shown below instead of the volatility rule"><input type="checkbox" id="fcUse"> Use the run shown below in the Investing plan</label></div>
+        <div class="row" style="margin:12px 0 4px"><div class="seg" id="fcModeBar"><button data-m="run">This run</button><button data-m="combined">All models, combined</button></div></div>
         <div id="fcRunInfo"></div>
         <div class="table-wrap"><table id="fcTable"></table></div>
         <div class="row" id="fcMore" style="display:none"><button class="ghost" id="fcToggle"></button></div>
@@ -772,6 +777,39 @@ function fcRunLabel() {
   $("fcRun").textContent = n > 1 ? `Run ${n} at once` : "Run forecast";
   if (!(lastFc && lastFc.job.running)) $("fcRun").disabled = n === 0;
 }
+let fcMode = new URLSearchParams(location.search).get("fcMode") || store.get("fcMode", "run");
+// Every model's latest forecast at one horizon, each ticker's combined row above its models' rows.
+async function renderCombined(horizon) {
+  let c;
+  try { c = await api(`/api/forecasts/combined?horizon=${horizon}&universe=${$("fcUniverse").value}`); }
+  catch (e) { $("fcRunInfo").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+  if (fcMode !== "combined") return;
+  const total = c.weights.reduce((t, w) => t + w.raw, 0);
+  const used = c.weights.filter(w => w.raw > 0).sort((a, b) => b.raw - a.raw), unused = c.weights.filter(w => !(w.raw > 0));
+  $("fcRunInfo").innerHTML = `<p class="muted">${c.weights.length} model${c.weights.length > 1 ? "s" : ""} at ${horizon} sessions, information cutoff ${esc(c.info_cutoff || "–")}. ` +
+    (c.basis === "equal" ? "<b>No model has significant walk-forward evidence at this horizon, so the ranking models are weighted equally</b>: treat the combination as an experiment. "
+      : `Weighted by tested skill (walk-forward IC, only where Holm p &lt; 0.05): ${used.map(w => `${esc(w.model)} ${pct(w.raw / total, 0)}`).join(", ")}. `) +
+    (unused.length ? `No weight: ${unused.map(w => `${esc(w.model)} (${esc(w.why)})`).join("; ")}. ` : "") +
+    `A model and its "+chronos" version count separately, though they mostly agree. <b>Apart</b>: how far the weighted models' means differ.</p>`;
+  const key = fcSort.key === "ticker" ? "mean" : fcSort.key;
+  const val = row => row.combined ? row.combined[key] ?? 0 : -Infinity;
+  const rows = [...c.rows].sort((a, b) => fcSort.dir * (val(a) - val(b)) || 0);
+  const FC_SHOWN = 15, shown = fcAll ? rows : rows.slice(0, FC_SHOWN);
+  $("fcMore").style.display = rows.length > FC_SHOWN ? "" : "none";
+  $("fcToggle").textContent = fcAll ? `Show the first ${FC_SHOWN}` : `Show all ${rows.length}`;
+  $("fcToggle").onclick = () => { fcAll = !fcAll; renderCombined(horizon); };
+  const sd = x => x == null ? "–" : "±" + (x * 100).toFixed(2) + "%";
+  const cells = f => `<td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${sd(f.estimation_sd)}</td>`;
+  const head = [["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
+  $("fcTable").innerHTML = "<tr><th>Ticker</th><th class='l'>Model</th><th>Weight</th>" +
+    head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
+    shown.map(t => (t.combined
+      ? `<tr class="comb"><td><b>${tk(t.ticker)}</b> <span class="muted">${esc(t.name || "")}</span></td><td class="l"><b>Combined</b></td><td>100%</td>${cells(t.combined)}<td class="name muted">${t.combined.models} model${t.combined.models > 1 ? "s" : ""}, apart ${sd(t.combined.spread)}</td></tr>`
+      : `<tr class="comb"><td><b>${tk(t.ticker)}</b> <span class="muted">${esc(t.name || "")}</span></td><td class="l muted" colspan="8">no model with weight forecasts it</td><td></td></tr>`) +
+      t.models.map(m => `<tr class="sub"><td></td><td class="l">${esc(m.model)}</td><td>${m.weight > 0 ? pct(m.weight, 0) : "0"}</td>${cells(m)}<td class="name">${esc(m.weight > 0 ? (m.flags || []).join("; ") : m.why)}</td></tr>`).join("")).join("");
+  $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+    fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderCombined(horizon); });
+}
 function renderBatch(res) {
   const rows = res && res.batch || [];
   $("fcBatchWrap").style.display = rows.length || (res && res.failed && res.failed.length) ? "" : "none";
@@ -822,7 +860,12 @@ function renderForecasts(d) {
       rows.map(f => `<tr><td><b>${tk(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join("");
     $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
       fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderForecasts(lastFc); });
+    if (fcMode === "combined") renderCombined(r.horizon);
   }
+  $("fcModeBar").querySelectorAll("button").forEach(b => {
+    b.setAttribute("aria-pressed", b.dataset.m === fcMode);
+    b.onclick = () => { fcMode = b.dataset.m; store.set("fcMode", fcMode); renderForecasts(lastFc); };
+  });
   const latest = {};
   d.trials.filter(x => /^(forecast|challenger|stacking)_study/.test(x.name)).forEach(x => { latest[`${x.name.replace(":rescore", "")}`] = x; });
   // Grouped by universe and horizon, so neither repeats on every row and the table fits its panel.
