@@ -128,7 +128,8 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .split.wide { grid-template-columns: 3fr 2fr; }
 @media (max-width: 900px) { .split, .split.wide { grid-template-columns: 1fr; } }
 
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: visible; }
+@media (max-width: 900px) { .table-wrap { overflow-x: auto; } }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; vertical-align: top; }
 th:first-child, td:first-child { text-align: left; }
@@ -140,7 +141,8 @@ td.name { color: var(--muted); white-space: normal; min-width: 150px; }
 #trDays td.reason { min-width: 0; max-width: none; overflow-wrap: anywhere; }
 #trDays th, #trDays td { padding-left: 6px; padding-right: 6px; }
 .days-wrap { overflow: visible; }
-td.reason { white-space: normal; text-align: left; color: var(--muted); font-size: 12.5px; min-width: 280px; max-width: 460px; }
+td.reason { white-space: normal; text-align: left; color: var(--muted); font-size: 12.5px; min-width: 180px; max-width: 460px; }
+.table-wrap > table { width: 100%; }
 tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .tag { font-size: 10.5px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; margin-left: 6px; font-weight: 600; letter-spacing: .02em; }
 .pos { color: var(--buy); } .neg { color: var(--sell); }
@@ -166,7 +168,7 @@ button:disabled { opacity: .5; cursor: default; }
 .check { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; margin: 0; white-space: nowrap; font-weight: 500; }
 .note { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
 .ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-line); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
-.log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); max-height: 140px; overflow: auto; margin-top: 8px; white-space: pre-wrap; }
+.log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
 .legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; background: var(--c); }
 .loading { position: fixed; top: 0; left: 0; height: 2px; width: 100%; background: linear-gradient(90deg, transparent, #3b82f6, transparent);
@@ -380,7 +382,8 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
       <div class="page-head"><div><h2>Screener</h2><p><b>Score</b> is expected growth above cash for each unit of worst-case drop: what the risk budget is spent on. Chosen funds are marked on the left.</p></div></div>
       <div class="card">
         <div class="row" style="margin:0 0 12px"><input type="text" id="scanFilter" placeholder="Filter by ticker, name or sector, e.g. MSFT, quantum, Technology" style="max-width:420px"></div>
-        <div class="table-wrap" style="max-height:640px;overflow:auto"><table id="scanTable"></table></div>
+        <div class="table-wrap"><table id="scanTable"></table></div>
+        <div class="row" id="scanMore" style="display:none"><button class="ghost" id="scanToggle"></button></div>
       </div>
     </section>
 
@@ -409,7 +412,8 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <span class="muted" id="fcStatus"></span>
         </div>
         <div id="fcRunInfo"></div>
-        <div class="table-wrap" style="max-height:520px;overflow:auto"><table id="fcTable"></table></div>
+        <div class="table-wrap"><table id="fcTable"></table></div>
+        <div class="row" id="fcMore" style="display:none"><button class="ghost" id="fcToggle"></button></div>
       </div>
       <div class="card">
         <h3>Model comparison (walk-forward, out of sample)</h3>
@@ -633,7 +637,7 @@ function render(r) {
   const mixRow = x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td><strong>${x.ticker === p.cash.ticker && x.name === "cash" ? esc(x.ticker) : tk(x.ticker)}</strong>${x.held ? "" : '<span class="tag">NEW</span>'}</td><td class="name">${esc(x.name)}</td>
       <td>${pct(x.current)}</td><td>${weightBar(x.target)}</td>
       ${tradeCell(x)}
-      <td>${x.daily_buy ? usd(x.daily_buy) : "–"}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${pct(x.expected)}</td>
+      <td>${x.daily_buy ? usd(x.daily_buy) : "–"}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.expected == null ? "–" : pct(x.expected)}</td>
       <td class="reason">${esc(x.reason)}${x.rating ? ` <span class="tag">AI ${esc(x.rating)}</span>` : ""}</td></tr>`;
   $("mix").innerHTML = "<tr><th>Ticker</th><th class='name'>Fund</th><th>Now</th><th>Target</th><th>Trade</th><th>Daily</th><th>Worst drop</th><th>Growth</th><th class='name'>Why</th></tr>" +
     shown.map(mixRow).join("") + mixRow({...p.cash, name: "cash", held: true, worst_loss: 0});
@@ -674,16 +678,20 @@ function renderOverviewExtras(r) {
     `<p>Last forecast run: ${f.last_forecast ? `${esc(f.last_forecast.model)}, ${f.last_forecast.horizon} sessions, data to ${esc(f.last_forecast.info_cutoff)}` : "none"}. Last recorded trade or transfer: ${when(f.last_event)}.</p>`;
 }
 
-let scanRows = [];
+let scanRows = [], scanAll = false, fcAll = false;
 function renderScan() {
   const q = $("scanFilter").value.trim().toLowerCase();
   const rows = q ? scanRows.filter(x => (x.ticker + " " + x.name).toLowerCase().includes(q)) : scanRows;
-  const shown = rows.slice(0, 300);
+  const SCAN_SHOWN = 30;
+  const shown = q || scanAll ? rows.slice(0, 600) : rows.slice(0, SCAN_SHOWN);
+  $("scanMore").style.display = !q && rows.length > SCAN_SHOWN ? "" : "none";
+  $("scanToggle").textContent = scanAll ? `Show the first ${SCAN_SHOWN}` : `Show all ${rows.length} funds`;
+  $("scanToggle").onclick = () => { scanAll = !scanAll; renderScan(); };
   $("scanTable").innerHTML = `<tr><th>#</th><th>Ticker</th><th class='name'>Name</th><th>Growth</th><th>Worst drop</th><th>Score</th><th>Target</th><th class='name'>Why</th></tr>` +
     shown.map(x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td class="muted">${scanRows.indexOf(x) + 1}</td><td><strong>${tk(x.ticker)}</strong>${x.held ? '<span class="tag">HELD</span>' : ""}</td><td class="name">${esc(x.name)}</td>
-      <td>${pct(x.expected)}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.score.toFixed(2)}</td>
+      <td>${x.expected == null ? "–" : pct(x.expected)}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.score.toFixed(2)}</td>
       <td>${x.target > 1e-4 ? pct(x.target) : "–"}</td><td class="reason">${esc(x.reason)}</td></tr>`).join("") +
-    (rows.length > shown.length ? `<tr><td colspan="8" class="muted">${rows.length - shown.length} more; type in the filter to find one.</td></tr>` : "");
+    (q && rows.length > shown.length ? `<tr><td colspan="8" class="muted">${rows.length - shown.length} more match; narrow the filter.</td></tr>` : "");
 }
 $("scanFilter").oninput = renderScan;
 
@@ -757,7 +765,12 @@ function renderForecasts(d) {
     const c = r.calibration || {};
     $("fcRunInfo").innerHTML = `<p class="muted"><b>${esc(r.model)}</b>, ${r.horizon} sessions, information cutoff ${esc(r.info_cutoff)} · trained ${esc(r.train_start)} to ${esc(r.train_end)} · ${esc(r.backend)}, ${r.seconds.toFixed(1)} s, peak ${r.peak_memory_mb ? r.peak_memory_mb.toFixed(0) + " MB" : "–"} · ` +
       (c.trial ? `backed by trial ${c.trial}: IC ${c.mean_ic.toFixed(3)} (95% ${c.ic_ci[0].toFixed(3)} to ${c.ic_ci[1].toFixed(3)}), within-date calibration ${c.calibration_xs == null ? "–" : c.calibration_xs.toFixed(2)} (what the plan uses), coverage ${pct(c.coverage_90, 0)}` : "<b>no walk-forward trial backs it</b>: the plan gives it no weight") + `</p>`;
-    const rows = [...r.forecasts].sort((a, b) => fcSort.dir * ((a[fcSort.key] ?? 0) - (b[fcSort.key] ?? 0)));
+    const sorted = [...r.forecasts].sort((a, b) => fcSort.dir * ((a[fcSort.key] ?? 0) - (b[fcSort.key] ?? 0)));
+    const FC_SHOWN = 20;
+    const rows = fcAll ? sorted : sorted.slice(0, FC_SHOWN);
+    $("fcMore").style.display = sorted.length > FC_SHOWN ? "" : "none";
+    $("fcToggle").textContent = fcAll ? `Show the first ${FC_SHOWN}` : `Show all ${sorted.length}`;
+    $("fcToggle").onclick = () => { fcAll = !fcAll; renderForecasts(lastFc); };
     const head = [["ticker", "Ticker"], ["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
     $("fcTable").innerHTML = "<tr>" + head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${fcSort.key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
       rows.map(f => `<tr><td><b>${tk(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join("");

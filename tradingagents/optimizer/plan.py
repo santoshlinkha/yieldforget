@@ -546,6 +546,13 @@ def build_plan(portfolio: PortfolioContext, schedule: dict[str, float], settings
                         if settings.return_model == "forecast" else None),
         unforecast=unforecast,
     )
+    # A fund the forecast model does not cover has no expected return to show: the -100%
+    # used inside the solver (so it is never bought) is not a forecast.
+    for r in rows:
+        if r.ticker in unforecast:
+            r.expected, r.score = float("nan"), 0.0
+            r.reason = ("No forecast for this fund (the forecast model covers the ETF list), so the plan does not "
+                        "buy it" + ("; you hold it, so only its risk counts." if r.held else "."))
     plan.rows += screened
     for level_limit in (settings.frontier if summary else ()):
         w = solve(level_limit)

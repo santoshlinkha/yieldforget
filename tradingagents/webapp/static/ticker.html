@@ -50,7 +50,8 @@ table, .num { font-variant-numeric: tabular-nums; }
 .stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .stat .v { font-size: 16px; font-weight: 600; }
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: visible; }
+@media (max-width: 900px) { .table-wrap { overflow-x: auto; } }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: right; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); }
@@ -69,7 +70,7 @@ th:first-child, td:first-child, th.l, td.l { text-align: left; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; background: var(--c); margin-right: 6px; vertical-align: middle; }
 svg text { fill: var(--muted); font-size: 11px; }
-.report { white-space: pre-wrap; font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 520px; overflow: auto; }
+.report { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 details summary { cursor: pointer; }
 .up { color: var(--buy); font-weight: 600; } .down { color: var(--sell); font-weight: 600; }
 </style>
