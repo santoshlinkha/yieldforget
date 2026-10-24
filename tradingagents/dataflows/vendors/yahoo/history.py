@@ -174,7 +174,8 @@ def profile(symbol: str, cache_dir=None) -> dict:
 
 
 STATEMENT_ROWS = {
-    "income": ("Total Revenue", "Gross Profit", "Operating Income", "Net Income", "Diluted EPS", "EBITDA"),
+    "income": ("Total Revenue", "Gross Profit", "Operating Income", "Pretax Income", "Tax Provision", "Net Income",
+               "Diluted EPS", "EBITDA"),
     "balance": ("Total Assets", "Total Liabilities Net Minority Interest", "Stockholders Equity",
                 "Cash And Cash Equivalents", "Total Debt", "Ordinary Shares Number"),
     "cashflow": ("Operating Cash Flow", "Capital Expenditure", "Free Cash Flow", "Repurchase Of Capital Stock",
@@ -209,7 +210,32 @@ def financials(symbol: str, cache_dir=None) -> dict:
         return json_safe(out)
 
     store = local_store.store(cache_dir)
-    return store.snapshot(symbol, "financials", fetch, ttl=HISTORY_TTL) if store else fetch()
+    # Saved under a new kind whenever STATEMENT_ROWS grows, so the added lines are fetched once.
+    return store.snapshot(symbol, "financials-v2", fetch, ttl=HISTORY_TTL) if store else fetch()
+
+
+def corporate_actions(symbol: str, cache_dir=None) -> dict:
+    """Every dividend (split-adjusted, per share), every split, and the shares-outstanding history
+    (as reported: not adjusted for splits), as ``[date, value]`` pairs oldest first; refetched weekly."""
+    from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+
+    def points(series):
+        if series is None or not len(series):
+            return []
+        return [[str(i)[:10], float(v)] for i, v in series.items() if v == v]
+
+    def fetch():
+        t = _ticker(symbol)
+        try:
+            shares = yf_retry(lambda: t.get_shares_full(start="2000-01-01"))
+        except Exception as exc:  # a fund, or Yahoo has no share history for it
+            logger.info("%s share history unavailable: %s", symbol, exc)
+            shares = None
+        return {"dividends": points(yf_retry(lambda: t.dividends)), "splits": points(yf_retry(lambda: t.splits)),
+                "shares": points(shares)}
+
+    store = local_store.store(cache_dir)
+    return store.snapshot(symbol, "corporate_actions", fetch, ttl=HISTORY_TTL) if store else fetch()
 
 
 def current_analysts(symbol: str, cache_dir=None) -> dict:

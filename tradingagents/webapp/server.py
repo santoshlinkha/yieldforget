@@ -299,7 +299,7 @@ class App:
                              for k, v in books["sleeves"].items()}
         last_rec = next(iter(recommendations.history(self.store.con, self.store.ledger.account_id, limit=1)), None)
         run = self.store.con.execute("SELECT created_at, model, horizon, info_cutoff FROM forecast_runs"
-                                     " ORDER BY created_at DESC LIMIT 1").fetchone()
+                                     " WHERE universe = 'etf' ORDER BY created_at DESC LIMIT 1").fetchone()
         market_store = local_store.store(self.cache_dir)
         extras["freshness"] = {
             "prices_through": c["closes"].index[-1].date().isoformat(),
@@ -375,22 +375,30 @@ class App:
     # --- forecasts (local numerical work; no paid model is called) ---
 
     def start_forecast(self, body: dict) -> bool:
-        from tradingagents.research.engine import run_forecast
+        from tradingagents.research.engine import UNIVERSES, run_forecast
 
         horizon = int(body.get("horizon") or 20)
         if horizon not in (5, 20, 60):
             raise ValueError("the forecast horizon is 5, 20 or 60 sessions")
         model = body.get("model") or "elastic_net"
-        context, _ = self.store.portfolio("combined", _today())
-        held = [p.ticker.upper() for p in context.positions]
-        tickers = [t for t in dict.fromkeys([*ETFS, *read_config(self.universe_path)["extra"], *held])
-                   if t not in ("SGOV", "BIL")]
+        universe = body.get("universe") or "etf"
+        if universe == "etf":
+            context, _ = self.store.portfolio("combined", _today())
+            held = [p.ticker.upper() for p in context.positions]
+            tickers = [t for t in dict.fromkeys([*ETFS, *read_config(self.universe_path)["extra"], *held])
+                       if t not in ("SGOV", "BIL")]
+        elif universe == "stock":
+            tickers = sorted(get_sp500_members(self.cache_dir))
+            if not tickers:
+                raise ValueError("the S&P 500 member list could not be downloaded, and no copy is saved")
+        else:
+            raise ValueError("the forecast universe is etf or stock")
         device = self.store.get("global", "compute_backend")
 
         def work(job):
-            job.progress = f"training {model} on the ETF universe, {horizon}-session horizon"
+            job.progress = f"training {model} on {UNIVERSES[universe]}, {horizon}-session horizon"
             out = run_forecast(self.store.con, self.cache_dir, tickers, horizon=horizon, model=model,
-                               universe="etf", device_setting=device)
+                               universe=universe, device_setting=device)
             return {k: v for k, v in out.items() if k != "forecasts"}
 
         return self.forecast.start(work)
@@ -404,7 +412,9 @@ class App:
             " train_start, train_end, calibration_json FROM forecast_runs ORDER BY created_at DESC LIMIT 30")]
         for r in runs:
             r["calibration"] = json.loads(r.pop("calibration_json"))
-        chosen = load_run(con, query["run"]) if query.get("run") else latest_run(con, int(query.get("horizon") or 0) or None)
+        universe = query.get("universe") or "etf"
+        chosen = (load_run(con, query["run"]) if query.get("run")
+                  else latest_run(con, int(query.get("horizon") or 0) or None, universe=universe))
         if chosen:
             chosen["calibration"] = json.loads(chosen.pop("calibration_json"))
             chosen["config"] = json.loads(chosen.pop("config_json"))
@@ -503,14 +513,18 @@ class App:
             rule = {"growth_above_cash": g, "growth": g + stats.cash_return, "cash": stats.cash_return,
                     "volatility": float(stats.vol[0]), "worst_drop": float(stats.worst_loss[0]),
                     "assumed_drop": bool(stats.floored[0]), "years": float(stats.years[0])}
+            # A company is forecast by the stock model when one has been run; a fund by the ETF model.
+            profile = out.get("profile") if isinstance(out.get("profile"), dict) else {}
+            universes = ("stock", "etf") if profile.get("quoteType") == "EQUITY" else ("etf",)
             models = []
             for h in (5, 20, 60):
-                run = latest_run(self.store.con, horizon=h)
+                run = next((r for u in universes if (r := latest_run(self.store.con, horizon=h, universe=u))), None)
                 if not run:
                     continue
                 f = next((x for x in run["forecasts"] if x["ticker"] == symbol), None)
                 if f:
-                    models.append({"horizon": h, "model": run["model"], "info_cutoff": run["info_cutoff"],
+                    models.append({"horizon": h, "model": run["model"], "universe": run["universe"],
+                                   "info_cutoff": run["info_cutoff"],
                                    "on_demand": False, "flags": json.loads(f.get("flags_json") or "[]"),
                                    **{k: f[k] for k in ("mean", "median", "q05", "q95", "p_gain", "estimation_sd")}})
                     continue
@@ -563,6 +577,14 @@ class App:
         section("analysts", analysts)
         section("earnings", earnings)
         quote_type = (out.get("profile") or {}).get("quoteType") if isinstance(out.get("profile"), dict) else None
+
+        def corporate():
+            from tradingagents.research.corporate import summarize
+
+            last = out["price"].get("last") if isinstance(out.get("price"), dict) else None
+            return summarize(yh.corporate_actions(symbol, self.cache_dir), date.today(), last, fund=quote_type == "ETF")
+
+        section("corporate", corporate)
         if quote_type == "ETF":
             out["financials"] = {"note": "Funds have no company financial statements."}
             out["moat"] = {"note": "Funds have no moat of their own; look at the companies they hold."}
@@ -570,7 +592,8 @@ class App:
             section("financials", lambda: yh.financials(symbol, self.cache_dir))
             if isinstance(out.get("financials"), dict) and "error" not in out["financials"]:
                 from tradingagents.research.moat import moat
-                section("moat", lambda: moat(out["financials"]))
+                profile = out.get("profile") if isinstance(out.get("profile"), dict) else {}
+                section("moat", lambda: moat(out["financials"], profile.get("sector"), profile.get("industry")))
         section("reports", reports)
         return out
 

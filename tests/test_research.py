@@ -144,6 +144,25 @@ def test_a_forecast_run_is_saved_immutably_and_its_model_reloads_identically(tmp
         assert m == pytest.approx(stored[t], abs=1e-9)
 
 
+def test_a_stock_run_never_stands_in_for_the_plans_etf_run(tmp_path, monkeypatch):
+    """The plan holds funds and reads the latest run; a newer stock run must not become that run."""
+    from tradingagents.ledger.db import connect
+    from tradingagents.research import engine
+
+    close, high, low, volume, market = _market(n_assets=6, years=4)
+    close = close.rename(columns={"CASH": "BIL"})
+    high, low, volume = (x.rename(columns={"CASH": "BIL"}) for x in (high, low, volume))
+    monkeypatch.setattr(engine, "bars", _fake_bars(close, high, low, volume, market))
+    con = connect(tmp_path / "p.sqlite3")
+    tickers = [c for c in close.columns if c != "BIL"]
+    etf = engine.run_forecast(con, tmp_path, tickers, horizon=20, model="elastic_net", device_setting="cpu",
+                              bags=0, artifact_dir=tmp_path / "models")
+    stock = engine.run_forecast(con, tmp_path, tickers, horizon=20, model="elastic_net", universe="stock",
+                                device_setting="cpu", bags=0, artifact_dir=tmp_path / "models")
+    assert engine.latest_run(con, horizon=20)["id"] == etf["run_id"]
+    assert engine.latest_run(con, horizon=20, universe="stock")["id"] == stock["run_id"]
+
+
 def test_optimizer_inputs_are_shrunk_clipped_and_conservative():
     from tradingagents.research.engine import expected_returns
 

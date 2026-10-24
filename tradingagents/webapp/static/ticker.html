@@ -75,6 +75,12 @@ details summary { cursor: pointer; }
 .up { color: var(--buy); font-weight: 600; } .down { color: var(--sell); font-weight: 600; }
 .consensus { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .consensus .big { font-size: 22px; font-weight: 700; }
+.events { list-style: none; margin: 0; padding: 0; }
+.events li { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.events .when { color: var(--muted); width: 84px; flex: none; }
+.events .kind { width: 74px; flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.events .kind.good { color: var(--buy); } .events .kind.bad { color: var(--sell); }
+.bars rect.part { opacity: .45; }
 .consensus .big.buy { color: var(--buy); } .consensus .big.sell { color: var(--sell); } .consensus .big.hold { color: #d97706; }
 .ratingbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--surface-2); margin: 6px 0 4px; }
 .ratingbar span { display: block; height: 100%; }
@@ -102,14 +108,15 @@ details summary { cursor: pointer; }
       <div class="card"><h2>Wall Street EPS and revenue estimates</h2><div id="estimates"></div></div>
       <div class="card"><h2>Competitive moat (quantitative)</h2><div id="moat"></div></div>
       <div class="card"><h2>Earnings: estimate vs reported</h2><div class="table-wrap"><table id="earn"></table></div></div>
+      <div class="card"><h2>Dividends, splits and share count</h2><div id="corp"></div></div>
       <div class="card"><h2>Financial statements</h2><div id="fin"></div></div>
+      <div class="card"><h2>About</h2><div id="about"></div></div>
+      <div class="card"><h2>Saved analysis reports</h2><div id="reports"></div></div>
     </div>
     <div>
       <div class="card"><h2>In your account</h2><div id="mine"></div></div>
       <div class="card"><h2>Expected return</h2><div id="fc"></div></div>
       <div class="card"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
-      <div class="card"><h2>About</h2><div id="about"></div></div>
-      <div class="card"><h2>Saved analysis reports</h2><div id="reports"></div></div>
     </div>
   </div>
 </main>
@@ -139,6 +146,50 @@ function chart(c) {
   c.dates.forEach((d, i) => { const y = d.slice(0, 4); if (y !== last && i > 0) { if (+y % 2 === 0) g += `<text x="${sx(i)}" y="${H - 6}" text-anchor="middle">${y}</text>`; } last = y; });
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(symbol)} price against SPY">${g}${line(b, "--s2", 1.25)}${line(a, "--s1", 2)}</svg>
     <div class="legend"><span style="--c: var(--s1)">${esc(symbol)}</span><span style="--c: var(--s2)">SPY, scaled to the same start</span></div>`;
+}
+
+function dividendBars(byYear) {
+  const rows = byYear.slice(-20), W = 760, H = 150, L = 46, B = 22, T = 8;
+  const top = Math.max(...rows.map(r => r[1])) * 1.1 || 1, bw = (W - L) / rows.length;
+  const sy = v => H - B - v / top * (H - T - B);
+  let g = [0.25, 0.5, 0.75, 1].map(f => `<line x1="${L}" x2="${W}" y1="${sy(top * f)}" y2="${sy(top * f)}" stroke="var(--chart-grid)"/><text x="${L - 6}" y="${sy(top * f) + 4}" text-anchor="end">${money(top * f, top < 2 ? 2 : 1)}</text>`).join("");
+  rows.forEach(([y, v, partial], i) => {
+    const x = L + i * bw + bw * 0.15;
+    g += `<rect class="${partial ? "part" : ""}" x="${x}" y="${sy(v)}" width="${bw * 0.7}" height="${H - B - sy(v)}" fill="var(--s1)" rx="2"><title>${y}: ${money(v, 4)} a share${partial ? " so far" : ""}</title></rect>`;
+    if (rows.length <= 12 || i % 2 === rows.length % 2) g += `<text x="${x + bw * 0.35}" y="${H - 6}" text-anchor="middle">${String(y).slice(2)}</text>`;
+  });
+  return `<svg class="bars" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Dividends per share by year">${g}</svg>
+    <div class="legend"><span style="--c: var(--s1)">Dividends per share by year (split-adjusted); the paler bar is this year so far</span></div>`;
+}
+
+function corporate(c) {
+  if (!c) return "<p class='muted'>Not available.</p>";
+  const KIND = {split: ["split", ""], buyback: ["buyback", "good"], dilution: ["dilution", "bad"], cut: ["cut", "bad"],
+                suspended: ["suspended", "bad"], dividend: ["dividend", ""]};
+  const dv = c.dividends;
+  let h = "";
+  if (dv) {
+    h += `<div class="stats">${[["Last 12 months", money(dv.ttm, dv.ttm < 1 ? 3 : 2)], ["Yield", pct(dv.yield, 2)],
+      ["Raised", dv.raised_years ? `${dv.raised_years} yr${dv.raised_years > 1 ? "s" : ""} in a row` : "not last year"],
+      ["5-yr growth", dv.growth_5y == null ? "–" : spct(dv.growth_5y) + "<span class='muted small'> a yr</span>"], ["Paid since", esc(dv.since)]]
+      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}</div>
+      <div style="margin-top:10px">${dividendBars(dv.by_year)}</div>`;
+  } else h += `<p class="muted">No dividends on record.</p>`;
+  h += c.events.length ? `<h3 style="margin:14px 0 4px;font-size:13px">Events, newest first</h3><ul class="events">` +
+    c.events.slice(0, 15).map(e => { const [label, cls] = KIND[e.kind] || [e.kind, ""];
+      return `<li><span class="when">${esc(e.date)}</span><span class="kind ${cls}">${label}</span><span>${esc(e.text)}</span></li>`; }).join("") + "</ul>" +
+    (c.events.length > 15 ? `<details><summary class="small">${c.events.length - 15} older events</summary><ul class="events">` +
+      c.events.slice(15).map(e => `<li><span class="when">${esc(e.date)}</span><span class="kind ${(KIND[e.kind] || [])[1] || ""}">${esc((KIND[e.kind] || [e.kind])[0])}</span><span>${esc(e.text)}</span></li>`).join("") + "</ul></details>" : "")
+    : `<p class="muted small">No splits, dividend changes or large share-count changes on record.</p>`;
+  if (c.shares.length) {
+    const n = c.shares_net;
+    h += `<details style="margin-top:8px"><summary class="small">Shares outstanding by year${n ? `: ${n.change >= 0 ? "up" : "down"} ${pct(Math.abs(n.change), 0)} from ${n.from} to ${n.to}` : ""}</summary>
+      <table><tr><th class="l">Year</th><th>Shares (today's, split-adjusted)</th><th>Change</th></tr>` +
+      c.shares.map(r => `<tr><td class="l">${r.year}</td><td>${big(r.shares)}</td><td>${r.change == null ? "–" : `<span class="${r.change > 0.02 ? "down" : r.change < -0.02 ? "up" : ""}">${r.change >= 0 ? "+" : "−"}${Math.abs(r.change * 100).toFixed(1)}%</span>`}</td></tr>`).join("") + "</table></details>";
+  }
+  if (dv) h += `<details><summary class="small">All ${dv.count} dividend payments</summary><table><tr><th class="l">Date</th><th>Per share</th></tr>` +
+    dv.payments.map(x => `<tr><td class="l">${esc(x.date)}</td><td>${money(x.amount, 4)}</td></tr>`).join("") + "</table></details>";
+  return h + `<p class="muted small">From Yahoo Finance. Dividends are per share, adjusted for later splits. A year's share-count rise of 2% or more is dilution (new shares issued), a fall of 2% or more a buyback; counts are restated for splits.${c.fund ? " A fund's share count is left out: it moves as investors come and go, and its payouts follow what its holdings pay." : ""}</p>`;
 }
 
 function statementTable(st, which) {
@@ -197,12 +248,14 @@ async function load() {
   else {
     const cls = {"strong indicators": "buy", "some indicators": "hold", "few indicators": "sell"}[mo.verdict] || "";
     $("moat").innerHTML = `<div class="consensus"><span class="big ${cls}">${esc(mo.verdict[0].toUpperCase() + mo.verdict.slice(1))}</span>
-        <span class="muted">${mo.passed} of ${mo.scored} checks passed${mo.years ? `, annual statements ${esc(mo.years)}` : ""}</span></div>
+        <span class="muted">${mo.passed} of ${mo.scored} checks passed${mo.years ? `, annual statements ${esc(mo.years)}` : ""}${mo.basis ? `; ${esc(mo.basis)}` : ""}</span></div>
       <table><tr><th class="l">Check</th><th class="l">This company</th><th class="l">Needs</th><th>Result</th></tr>` +
       mo.checks.map(c => `<tr><td class="l">${esc(c.name)}</td><td class="l">${esc(c.value)}</td><td class="l muted">${esc(c.rule)}</td>
         <td>${c.passed == null ? "<span class='muted'>no data</span>" : c.passed ? "<span class='up'>pass</span>" : "<span class='down'>fail</span>"}</td></tr>`).join("") +
-      `</table><p class="muted small">The app's own indicators from Yahoo's annual statements: signs a moat leaves in the numbers (pricing power, returns on capital, cash). Not Morningstar's moat rating, and it can't see brands, patents or network effects directly. Banks and insurers report differently, so it says less about them.</p>`;
+      `</table><p class="muted small">The app's own indicators from Yahoo's annual statements: signs a moat leaves in the numbers (pricing power, returns on capital, cash). Not Morningstar's moat rating, and it can't see brands, patents or network effects directly. The bars for each sector are the app's rough judgment, not measured sector averages.</p>`;
   }
+
+  $("corp").innerHTML = failed(d.corporate) || corporate(d.corporate);
 
   const e = d.earnings;
   $("earn").innerHTML = failed(e) ? `<tr><td>${failed(e)}</td></tr>` : (e.length ? "<tr><th class='l'>Report date</th><th>EPS estimate</th><th>Reported</th><th>Surprise</th></tr>" +
@@ -228,7 +281,7 @@ async function load() {
       `${r.assumed_drop ? " (assumed: under 10 years of history)" : ""}.</p>`;
     if (fc.models.length) {
       h += `<table><tr><th class="l">Model forecast</th><th>Mean</th><th>5–95%</th><th>P(gain)</th></tr>` +
-        fc.models.map(x => `<tr><td class="l">${x.horizon} sessions <span class="muted small">${esc(x.model)}${x.on_demand ? ", computed now" : ""}</span></td><td>${spct(x.mean, 2)}</td><td>${spct(x.q05)} to ${spct(x.q95)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + "</table>";
+        fc.models.map(x => `<tr><td class="l">${x.horizon} sessions <span class="muted small">${esc(x.model)}, trained on ${x.universe === "stock" ? "stocks" : "ETFs"}${x.on_demand ? ", computed now" : ""}</span></td><td>${spct(x.mean, 2)}</td><td>${spct(x.q05)} to ${spct(x.q95)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + "</table>";
       const flags = [...new Set(fc.models.flatMap(x => x.flags || []))];
       if (flags.length) h += `<p class="note small">${esc(flags.join("; "))}.</p>`;
       h += `<p class="muted small">Log return above cash over the horizon, from data to ${esc(fc.models[0].info_cutoff)}. In backtests these models ranked funds better than chance but did not beat the standard rule in the portfolio after costs.</p>`;

@@ -37,6 +37,9 @@ from .prices import MARKET, bars
 
 MODEL_VERSION = "forecast-v1"
 SEED = 7
+# What each universe's runs train on. ETF runs feed the plan; stock runs back the ticker page's
+# forecast for single companies, and are survivorship-biased (today's S&P 500 members).
+UNIVERSES = {"etf": "ETFs", "stock": "S&P 500 stocks"}
 
 
 def factory(name: str, device: str = "cpu"):
@@ -148,8 +151,9 @@ def load_run(con, run_id: str) -> dict:
     return run
 
 
-def latest_run(con, horizon: int | None = None, model: str | None = None) -> dict | None:
-    sql, args = "SELECT id FROM forecast_runs WHERE 1=1", []
+def latest_run(con, horizon: int | None = None, model: str | None = None, universe: str = "etf") -> dict | None:
+    """The newest run of a universe: ETF runs by default, the ones the plan may use."""
+    sql, args = "SELECT id FROM forecast_runs WHERE universe = ?", [universe]
     if horizon:
         sql += " AND horizon = ?"
         args.append(horizon)
@@ -230,8 +234,9 @@ def forecast_one(con, cache_dir: Path, run: dict, symbol: str, cash: str = "BIL"
     model = load_model(run)
     row = model.predict(panel.loc[[(cutoff, symbol)]]).iloc[0]
     flags = [] if symbol in config.get("tickers", []) else [
-        f"this model was trained only on {run['universe'].upper()}s and {symbol} was not among them; "
-        "treat it as a forecast for an unfamiliar kind of asset"]
-    return {"horizon": run["horizon"], "model": run["model"], "info_cutoff": run["info_cutoff"], "on_demand": True,
+        f"this model was trained on {UNIVERSES.get(run['universe'], run['universe'])} and {symbol} was not among them"
+        + ("; treat it as a forecast for an unfamiliar kind of asset" if run["universe"] == "etf" else "")]
+    return {"horizon": run["horizon"], "model": run["model"], "universe": run["universe"],
+            "info_cutoff": run["info_cutoff"], "on_demand": True,
             "flags": flags, **{k: float(row[k]) for k in ("mean", "median", "q05", "q95", "p_gain")},
             "estimation_sd": None}

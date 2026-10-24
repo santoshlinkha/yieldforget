@@ -3,6 +3,7 @@
 Run from the TradingAgents folder:
     PYTHONPATH=. .venv/Scripts/python.exe experiments/forecast_study.py etf
     PYTHONPATH=. .venv/Scripts/python.exe experiments/forecast_study.py sp500
+    PYTHONPATH=. .venv/Scripts/python.exe experiments/forecast_study.py stock 20 60
 
 Settings are fixed here, before results are seen, and every run is written to
 the trial registry (research_trials in portfolio.sqlite3), whatever it finds.
@@ -14,6 +15,11 @@ the trial registry (research_trials in portfolio.sqlite3), whatever it finds.
   the companies that survived and grew, so absolute returns are flattered. Rank
   comparisons between models are less affected, but still optimistic. Tests from 2015,
   so the analyst history (from about 2012) has years to train on.
+- stock: today's S&P 500 members with the price and market features only, the ones
+  the app's forecast runs train on, so the trial backs the stock model the ticker
+  page uses. Survivorship-biased in the same way. Tests from 2012.
+
+Horizons given after the universe run alone (the default is all three).
 
 Horizons 5, 20 and 60 sessions; decisions every min(horizon, 20) sessions; refit yearly;
 10 bp per side on top-fifth turnover.
@@ -29,7 +35,7 @@ import pandas as pd
 HERE = Path(__file__).parent / "output"
 HERE.mkdir(exist_ok=True)
 HORIZONS = (5, 20, 60)
-FIRST_TEST = {"etf": "2012-01-01", "sp500": "2015-01-01"}
+FIRST_TEST = {"etf": "2012-01-01", "sp500": "2015-01-01", "stock": "2012-01-01"}
 
 
 def build(universe: str):
@@ -97,9 +103,10 @@ def main():
     from tradingagents.research.walkforward import record_trial
 
     universe = sys.argv[1]
+    horizons = [int(h) for h in sys.argv[2:]] or list(HORIZONS)
     build(universe)   # fill the price store once, before the workers read it
-    with Pool(len(HORIZONS)) as pool:
-        results = pool.map(run, [(universe, h) for h in HORIZONS])
+    with Pool(len(horizons)) as pool:
+        results = pool.map(run, [(universe, h) for h in horizons])
     store = Store(Path("my_portfolio.json").resolve().parent)
     summary = {}
     for universe, horizon, result, feats, shape in results:

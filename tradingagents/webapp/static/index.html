@@ -405,6 +405,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
       <div class="page-head"><div><h2>Forecast models</h2><p>Return forecasts made on this machine from Yahoo prices: no paid AI. A forecast is a log return <b>above cash</b> over its horizon in trading sessions, not a yearly rate, with a 5-95% range and the chance of a gain. These are model estimates, not outcomes; the evidence for each model is its walk-forward record below.</p></div></div>
       <div class="card">
         <div class="row" style="margin-top:0">
+          <div style="width:170px"><label for="fcUniverse">Trained on</label><select id="fcUniverse"><option value="etf" selected>ETFs (the plan's)</option><option value="stock">S&amp;P 500 stocks</option></select></div>
           <div style="width:140px"><label for="fcHorizon">Horizon</label><select id="fcHorizon"><option value="5">5 sessions</option><option value="20" selected>20 sessions</option><option value="60">60 sessions</option></select></div>
           <div style="width:180px"><label for="fcModel">Model</label><select id="fcModel"><option value="elastic_net">Elastic Net</option><option value="momentum">Momentum</option><option value="xgb">XGBoost</option><option value="xgb_rank">XGBoost ranking</option><option value="xgb_quantile">XGBoost quantiles</option></select></div>
           <button id="fcRun">Run forecast</button>
@@ -758,6 +759,8 @@ function renderForecasts(d) {
   const r = d.run;
   const inv = d.settings.investing;
   $("fcUse").checked = inv.return_model === "forecast";
+  // The plan holds funds, so only ETF runs can feed it; stock runs serve the ticker page.
+  $("fcUse").disabled = $("fcUniverse").value !== "etf";
   $("fcUse").parentElement.title = inv.return_model === "forecast"
     ? `The Investing plan uses the latest ${inv.forecast_model} run at ${inv.forecast_horizon} sessions` : "The Investing plan uses the standard rule";
   if (!r) { $("fcRunInfo").innerHTML = '<p class="muted">No forecast run yet.</p>'; $("fcTable").innerHTML = ""; }
@@ -781,13 +784,13 @@ function renderForecasts(d) {
   d.trials.filter(x => /^(forecast|challenger)_study/.test(x.name)).forEach(x => { latest[`${x.name.replace(":rescore", "")}`] = x; });
   const t = Object.values(latest).sort((a, b) => a.horizon - b.horizon);
   $("fcTrials").innerHTML = "<tr><th>Universe</th><th>Horizon</th><th>Model</th><th>IC (95%)</th><th>R²</th><th>Calibration (within date)</th><th>Coverage</th><th>Brier vs null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
-    t.flatMap(x => Object.values(x.scores).map(m => `<tr><td>${esc(x.universe)}${x.universe === "sp500" ? " (survivorship-biased)" : ""}</td><td>${x.horizon}</td><td>${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` (${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(4)} / ${m.brier_null.toFixed(4)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`)).join("");
+    t.flatMap(x => Object.values(x.scores).map(m => `<tr><td>${esc(x.universe)}${x.universe === "sp500" || x.universe === "stock" ? " (survivorship-biased)" : ""}</td><td>${x.horizon}</td><td>${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` (${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(4)} / ${m.brier_null.toFixed(4)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`)).join("");
   const j = d.job;
   $("fcStatus").textContent = j.running ? j.progress : j.error ? "Failed: " + j.error : "";
   $("fcRun").disabled = j.running;
 }
 async function loadForecasts() {
-  try { const d = await api("/api/forecasts?horizon=" + $("fcHorizon").value); renderForecasts(d); if (d.job.running) setTimeout(loadForecasts, 3000); }
+  try { const d = await api(`/api/forecasts?horizon=${$("fcHorizon").value}&universe=${$("fcUniverse").value}`); renderForecasts(d); if (d.job.running) setTimeout(loadForecasts, 3000); }
   catch (e) { $("fcRunInfo").innerHTML = `<p class="note">${esc(e.message)}</p>`; }
 }
 async function loadHardware() {
@@ -801,10 +804,11 @@ async function loadHardware() {
   } catch (e) { $("fcHardware").textContent = e.message; }
 }
 $("fcRun").onclick = async () => {
-  try { await api("/api/forecasts/run", {horizon: +$("fcHorizon").value, model: $("fcModel").value}); loadForecasts(); }
+  try { await api("/api/forecasts/run", {horizon: +$("fcHorizon").value, model: $("fcModel").value, universe: $("fcUniverse").value}); loadForecasts(); }
   catch (e) { showError(e.message); }
 };
 $("fcHorizon").onchange = loadForecasts;
+$("fcUniverse").onchange = loadForecasts;
 $("fcUse").onchange = async () => {
   try {
     await api("/api/risk", {sleeve: "investing", return_model: $("fcUse").checked ? "forecast" : "vol_prior",
