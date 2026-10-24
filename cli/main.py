@@ -152,5 +152,116 @@ def backtest(
         console.print(f"[yellow]unsettled:[/yellow] {ticker}: {reason}")
 
 
+@app.command()
+def suggest(
+    portfolio: str = typer.Option("my_portfolio.json", "--portfolio", help="JSON file with holdings and settled cash"),
+    schedule: str = typer.Option("my_buys.json", "--schedule", help="JSON file with recurring buys"),
+    risk: int | None = typer.Option(None, "--risk", min=1, max=10,
+                                    help="Risk level 1-10, saved for next time; the saved level if omitted"),
+    max_loss: float | None = typer.Option(None, "--max-loss",
+                                          help="Stress-loss limit in percent, overriding the risk level; 0 for none"),
+    model: str | None = typer.Option(None, "--model",
+                                     help="How the stress loss is measured, saved for next time: worst_case "
+                                          "(every holding at its worst drop at once) or scenarios (the worst past "
+                                          "crash replayed on the mix); the saved one if omitted"),
+    target_growth: float | None = typer.Option(None, "--target-growth",
+                                               help="Expected growth to aim for, percent a year (8 for 8%), saved "
+                                                    "for next time; the least risky mix that reaches it, within the "
+                                                    "risk level. 0 clears it"),
+    scan: bool = typer.Option(True, "--scan/--no-scan", help="Also consider the funds in the scan list"),
+    universe: str = typer.Option("my_universe.json", "--universe", help="Scan list file; the built-in list if absent"),
+    ai: bool = typer.Option(False, "--ai", help="Run the agents on each holding and tilt toward their ratings"),
+    analysts: str = typer.Option("market,news", "--analysts", help="Analysts for --ai, comma-separated"),
+):
+    """Print today's orders and the optimized mix behind them."""
+    from datetime import date
+    from pathlib import Path
+
+    from rich.markdown import Markdown
+
+    from tradingagents.optimizer import OptimizerSettings, build_plan, load_schedule, render_plan
+    from tradingagents.optimizer.ai_views import collect_ratings
+    from tradingagents.optimizer.plan import daily_orders, render_suggestion
+    from tradingagents.optimizer.risk import read_choice, risk_level, write_choice
+    from tradingagents.optimizer.universe import load_universe
+
+    try:
+        book = load_portfolio(portfolio)
+        buys = load_schedule(schedule)
+        risk_file = Path(portfolio).resolve().parent / "my_risk.json"
+        if risk or model or target_growth is not None:
+            kwargs = {} if target_growth is None else {"target_growth": target_growth / 100 if target_growth else None}
+            write_choice(risk_file, level=risk, model=model, **kwargs)
+        choice = read_choice(risk_file)
+        level = risk_level(choice.level)
+        limit = level.loss_limit if max_loss is None else (max_loss / 100 if max_loss > 0 else None)
+        goal = "" if choice.target_growth is None else f", growth target {choice.target_growth:.1%}"
+        console.print(f"[dim]Risk level {level.level} ({level.name}), stress-loss limit "
+                      f"{'none' if limit is None else f'{limit:.1%}'} ({choice.model.replace('_', ' ')}){goal}[/dim]")
+        settings = OptimizerSettings(loss_limit=limit, risk_model=choice.model, target_growth=choice.target_growth)
+        ratings = None
+        if ai:
+            cash = settings.cash_ticker
+            ratings, failures = collect_ratings(
+                [p.ticker.upper() for p in book.positions if p.ticker.upper() != cash], DEFAULT_CONFIG,
+                [a.strip() for a in analysts.split(",") if a.strip()],
+                progress=lambda t, s: console.print(f"[dim]{t}: {s}[/dim]"))
+            for ticker, reason in failures:
+                console.print(f"[yellow]no rating:[/yellow] {ticker}: {reason}")
+        plan = build_plan(book, buys, settings, ratings=ratings,
+                          universe=load_universe(universe, Path(DEFAULT_CONFIG["data_cache_dir"]) / "optimizer") if scan else None,
+                          cache_dir=Path(DEFAULT_CONFIG["data_cache_dir"]) / "optimizer")
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(Markdown(render_suggestion(daily_orders(plan, float(book.cash or 0.0)), date.today().isoformat())))
+    console.print(Markdown(render_plan(plan)))
+
+
+@app.command()
+def track(
+    portfolio: str = typer.Option("my_portfolio.json", "--portfolio", help="JSON file with holdings and settled cash"),
+    schedule: str = typer.Option("my_buys.json", "--schedule", help="JSON file with recurring buys"),
+):
+    """Record the paper portfolios for every closed trading day not yet recorded (run daily after 4:30 pm ET)."""
+    from pathlib import Path
+
+    from tradingagents.webapp.server import App
+
+    portfolio_path = Path(portfolio).resolve()
+    app_ = App(portfolio_path, Path(schedule).resolve(), portfolio_path.parent / "my_universe.json", DEFAULT_CONFIG)
+    try:
+        result = app_.track_now()
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(f"Paper tracker: {result['days']} days recorded, last {result['last_day']}.")
+
+
+@app.command()
+def web(
+    portfolio: str = typer.Option("my_portfolio.json", "--portfolio", help="JSON file with holdings and settled cash"),
+    schedule: str = typer.Option("my_buys.json", "--schedule", help="JSON file with recurring buys"),
+    port: int = typer.Option(8765, "--port", help="Port on localhost"),
+):
+    """Open the daily optimizer web app on this machine."""
+    import webbrowser
+
+    from tradingagents.webapp import serve
+
+    try:
+        server = serve(portfolio, schedule, port)
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+    url = f"http://127.0.0.1:{port}/"
+    console.print(f"Daily optimizer at {url} (Ctrl+C to stop)")
+    webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.server_close()
+
+
 if __name__ == "__main__":
     app()

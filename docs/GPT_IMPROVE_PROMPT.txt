@@ -1,0 +1,91 @@
+You are a senior quantitative portfolio researcher reviewing my personal portfolio optimizer.
+I want it to be state of the art for a small, long-only, retail Roth IRA. Read the description,
+then give me a prioritized improvement plan. Be specific and honest: tell me where a fancy method
+would not help an account this size, and where my current method is weak.
+
+## The account
+- Robinhood Roth IRA, cash account, about $5,750. Selling is not taxed. No commissions.
+- Long only, fractional shares, no margin, no shorting, no options trading.
+- Settlement is T+1: buys may only use settled cash.
+- SGOV (0-3 month T-bills) is cash waiting to be invested.
+- About $27.61 of new money is invested every trading day.
+
+## What the program does today (Python; numpy, pandas, yfinance; no scipy)
+
+Data
+- Adjusted daily closes from Yahoo Finance over each ticker's full history, cached per day.
+- Universe: my holdings plus groups I switch on or off: about 40 long-lived ETFs (one per market
+  corner, bonds and gold included), today's S&P 500 members, and "disruptive theme" stocks and
+  ETFs (quantum, AI, nuclear, robotics, space, crypto, EVs, drones, genomics). About 566 funds are
+  scanned. A scanned fund needs at least 3 years of prices.
+
+Risk
+- Stress loss per asset = its deepest peak-to-trough drawdown in its whole history. A young fund
+  borrows the drawdown of an older fund on the same index (QQQM from QQQ, AVUV from VBR); if it
+  has under 10 years of history and no proxy, its drawdown is floored at 50%.
+- Portfolio stress loss = sum of (weight x stress loss), i.e. every holding hits its worst drop
+  at the same time. This is a HARD constraint.
+- Risk dial 1-10 sets that limit: 1%, 2.5%, 5%, 10%, 15%, 20%, 30%, 40%, 50%, none.
+- Per-asset caps: at most 35% of the portfolio, and at most 25% of the loss budget.
+- Covariance: sample covariance of daily returns over 10 years (pairwise, then clipped to PSD).
+
+Expected returns
+- Expected excess return = volatility x Sharpe, where the Sharpe is shrunk toward a common
+  prior of 0.3: trust = 0.5 x min(years of history / 10, 1);
+  Sharpe = trust x clip(historical Sharpe, -1, 1.5) + (1 - trust) x 0.3.
+  The historical Sharpe is measured against the cash return on the same days.
+- Ranked by compound growth: expected excess minus 0.5 x variance.
+- Optional AI tilt: a multi-agent LLM system (market-technicals analyst and news analyst;
+  a fundamentals analyst exists but is off for this optimizer) rates each holding Buy /
+  Overweight / Hold / Underweight / Sell. Each notch above Hold adds 0.15 to that asset's Sharpe.
+
+Optimization
+- Mean-variance: maximize excess.x - (3/2) x'Sx, subject to 0 <= x <= caps, sum(x) <= 1, and
+  stress loss <= limit. Solved with an augmented Lagrangian and accelerated projected gradient.
+  Whatever is not invested sits in SGOV.
+- Trades under 0.5% of the portfolio are skipped.
+
+Output and tracking
+- Daily orders: sells today, buys the next trading day once the sales settle (T+1), and how to
+  spread the daily recurring buys across funds under target.
+- A table of the trade-off at every risk level (invested %, stress loss, expected growth).
+- A paper tracker since 2026-10-22: "followed the plan" vs "kept as is", filled at the close.
+- A walk-forward backtest that uses only the prices available at each rebalance date. It cannot
+  test the AI ratings, ignores survivorship bias (today's scan list) and assumes free rebalancing.
+- A local web app, plus a daily market brief: index, sector and VIX returns explained by an LLM
+  from cited headlines and FRED macro data.
+
+What it does NOT have
+- No growth-rate target mode (I can only pick a loss limit, not "aim for X% a year").
+- No regime detection (HMM, Markov switching, change-point detection).
+- No volatility forecasting (GARCH, EWMA, realized vol) and no option-implied volatility or skew.
+- No covariance shrinkage, factor model, CVaR or scenario-based risk.
+- No analyst consensus estimates, earnings revisions or price targets. Point-in-time SEC EDGAR
+  statements exist in the codebase but feed only the LLM fundamentals analyst, which is off here.
+- No transaction-cost or turnover model beyond the 0.5% band.
+
+## What I want from you
+1. Critique the method. In particular: is summing worst-ever drawdowns the right hard constraint,
+   given that it ignores diversification? Today at the 2.5% limit it invests only 4.6% of the
+   portfolio. Propose a better measure (for example CVaR over historical joint scenarios) and say
+   how to calibrate the risk dial so the levels still mean something to me.
+2. Design a "target growth" mode: I give a target annual growth rate and the optimizer finds the
+   least risky mix that reaches it, or tells me the target needs more risk than I allow. Give the
+   math and how it fits the existing solver.
+3. For each of these, say whether it is worth adding at this account size, how to implement it in
+   Python, and how to validate it out of sample: HMM or Markov-switching regime detection,
+   GARCH/EWMA volatility forecasts, option-implied volatility (VIX, VIX term structure, options
+   chains), Ledoit-Wolf covariance shrinkage, factor models, Black-Litterman for the AI views
+   (in place of the fixed 0.15-per-notch tilt), volatility targeting, and momentum or trend
+   filters.
+4. Which free data sources would improve expected returns or risk: SEC EDGAR (filings, insider
+   Form 4), earnings estimates and revisions, FRED, options data. Point out look-ahead-bias traps.
+5. How to make the backtest trustworthy: survivorship-free universes, costs, and
+   multiple-testing / overfitting controls (deflated Sharpe, combinatorial purged CV).
+6. Rank everything by expected benefit per hour of work, as a table with: change, why,
+   difficulty (S/M/L), how to test it, and the risk of making things worse.
+
+Rules for your answer: plain language first, then math. No promises of returns. Prefer simple,
+robust methods over complex ones unless the evidence for the complex one is strong. Show the key
+formulas and short Python sketches using numpy, pandas, and, only if needed, scipy, arch,
+hmmlearn or scikit-learn.

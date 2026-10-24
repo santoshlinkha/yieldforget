@@ -50,6 +50,7 @@ include = ["tradingagents*", "cli*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
+"tradingagents.webapp" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -185,3 +185,26 @@ def get_global_news_yfinance(
         return gap or f"No global news found between {start_date} and {as_of_date}"
 
     return f"## Global Market News, from {start_date} to {as_of_date}:\n\n{news_str}"
+
+
+def get_market_headlines(as_of_date: str, queries: list[str], look_back_days: int = 7,
+                         per_query: int = 10, limit: int = 30) -> list[dict]:
+    """Recent market headlines as records (title, publisher, link, date, summary), newest first.
+
+    For callers that show the sources beside what they say about them; the
+    agents' tools use the formatted ``get_global_news_yfinance`` instead.
+    """
+    end_dt = datetime.strptime(as_of_date, "%Y-%m-%d")
+    start_dt = end_dt - relativedelta(days=look_back_days)
+    found, seen = [], set()
+    for query in queries:
+        articles = yf_retry(lambda q=query: yf.Search(query=q, news_count=per_query,
+                                                      enable_fuzzy_query=True).news)
+        for article in articles or []:
+            data = _extract_article_data(article)
+            if not in_window(data["pub_date"], start_dt, end_dt) or data["title"] in seen:
+                continue
+            seen.add(data["title"])
+            found.append(data)
+    found.sort(key=lambda d: d["pub_date"] or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return [{**d, "pub_date": d["pub_date"].isoformat() if d["pub_date"] else None} for d in found[:limit]]

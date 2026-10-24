@@ -272,6 +272,30 @@ def get_closes(symbol: str, start_date: str, end_date: str) -> pd.Series:
     return history["Close"] if history is not None and "Close" in history else pd.Series(dtype=float)
 
 
+def get_full_history_closes_many(symbols: list[str], end_date: str) -> pd.DataFrame:
+    """Adjusted daily closes over each symbol's whole history, up to, not including,
+    ``end_date``, in one batched download, indexed by calendar day.
+
+    A symbol Yahoo has no prices for comes back as an all-empty column, for the
+    caller to report; one bad symbol does not fail the batch.
+    """
+    canonical = {normalize_symbol(s): s for s in symbols}
+    frame = yf_retry(lambda: yf.download(list(canonical), start="1990-01-01", end=end_date,
+                                         auto_adjust=True, progress=False, threads=True,
+                                         group_by="column"))
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=symbols, dtype=float)
+    closes = frame["Close"] if isinstance(frame.columns, pd.MultiIndex) else frame[["Close"]]
+    if not isinstance(frame.columns, pd.MultiIndex):
+        closes.columns = list(canonical)[:1]
+    closes = closes.rename(columns=canonical)
+    if getattr(closes.index, "tz", None) is not None:
+        closes = closes.tz_localize(None)
+    closes.index = closes.index.normalize()
+    closes = closes[~closes.index.duplicated(keep="last")]
+    return closes.reindex(columns=symbols)
+
+
 def get_stock_stats(
     symbol: Annotated[str, "ticker symbol for the company"],
     indicator: Annotated[

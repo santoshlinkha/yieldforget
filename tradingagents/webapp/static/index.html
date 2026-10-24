@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio Optimizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #64748b; --faint: #94a3b8;
+  --border: #e5e7eb; --border-strong: #d1d5db;
+  --brand-bg: #0b1220; --brand-text: #e2e8f0; --brand-muted: #8391a7;
+  --accent: #2563eb; --accent-soft: #eff4ff; --buy: #059669; --sell: #dc2626;
+  --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d; --ok-bg: #ecfdf5; --ok: #065f46; --ok-line: #6ee7b7;
+  --chart-grid: #eef0f3; --s1: #2563eb; --s2: #f97316; --s3: #a16207; --s4: #059669;
+  --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
+    --border: #1f2937; --border-strong: #334155;
+    --brand-bg: #060a13; --brand-text: #e2e8f0; --brand-muted: #8391a7;
+    --accent: #60a5fa; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
+    --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --ok-bg: #0f2a20; --ok: #6ee7b7; --ok-line: #1f6b4f;
+    --chart-grid: #1c2433; --s1: #60a5fa; --s2: #fb923c; --s3: #facc15; --s4: #34d399;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+.num, table, .kpi .value { font-variant-numeric: tabular-nums; }
+
+/* app bar */
+header { position: sticky; top: 0; z-index: 10; }
+.appbar { background: var(--brand-bg); color: var(--brand-text); }
+.appbar .wrap { display: flex; align-items: center; gap: 28px; height: 56px; }
+.brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; flex-shrink: 0; }
+.brand .mark { width: 28px; height: 28px; border-radius: 7px; background: linear-gradient(135deg, #3b82f6, #10b981); display: grid; place-items: center; }
+.brand .mark svg { width: 16px; height: 16px; }
+.brand h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+.brand .acct { color: var(--brand-muted); font-size: 12px; font-weight: 500; }
+nav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; height: 100%; min-width: 0; flex: 0 1 auto; }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--brand-muted);
+  padding: 0 12px; height: 100%; font-weight: 500; font-size: 13.5px; white-space: nowrap; }
+nav button:hover { color: var(--brand-text); }
+nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
+.appbar .status { margin-left: auto; color: var(--brand-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+.controls { background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); }
+.controls .wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; }
+.risk { display: flex; align-items: center; gap: 14px; flex: 1 1 520px; min-width: 0; }
+.risk .lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+.risk input[type=range] { flex: 1; min-width: 120px; }
+.risk-read { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; min-width: 250px; }
+.risk-read .lvl { font-size: 13px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 6px; padding: 1px 8px; }
+.risk-read .name { font-weight: 600; }
+.risk-read .limit { color: var(--muted); font-size: 12.5px; }
+.ticks { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); padding: 0 2px; margin-top: -2px; }
+.risk-track { flex: 1; min-width: 120px; display: flex; flex-direction: column; }
+.toggles { display: flex; gap: 16px; }
+.riskopts { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.riskopts select, .riskopts input { font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.riskopts input { width: 64px; }
+@media (max-width: 760px) {
+  .appbar .wrap { gap: 12px; } .brand .acct, .appbar .status { display: none; }
+  .risk { flex-wrap: wrap; flex-basis: 100%; } .risk-read { min-width: 0; flex-wrap: wrap; }
+  .kpis { grid-template-columns: 1fr 1fr; } .kpi .value { font-size: 20px; }
+  .card { padding: 14px; } .movers { grid-template-columns: 1fr; }
+}
+
+main { padding: 24px 0 64px; }
+.tab { display: none; } .tab.active { display: block; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.page-head h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0; }
+.page-head p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; min-width: 0; box-shadow: var(--shadow); margin-bottom: 16px; }
+.grid > .card { margin-bottom: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.card-head h3, .card > h3 { margin: 0; }
+h3 { font-size: 14px; font-weight: 600; margin: 0 0 12px; letter-spacing: -.005em; }
+h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 16px 0 8px; }
+.muted { color: var(--muted); font-size: 13px; }
+.small { font-size: 12px; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); min-width: 0; }
+.kpi .label { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.kpi .value { font-size: 24px; font-weight: 650; letter-spacing: -.02em; margin-top: 4px; line-height: 1.2; }
+.kpi .from { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.kpi.hero { border-top: 3px solid var(--accent); }
+
+.orders { list-style: none; padding: 0; margin: 0; }
+.orders li { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.orders li:last-child { border-bottom: 0; }
+.order-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.side { font-weight: 700; font-size: 10.5px; letter-spacing: .06em; padding: 3px 8px; border-radius: 5px; }
+.side.buy { background: color-mix(in srgb, var(--buy) 14%, transparent); color: var(--buy); }
+.side.sell { background: color-mix(in srgb, var(--sell) 14%, transparent); color: var(--sell); }
+.amt { font-weight: 650; font-variant-numeric: tabular-nums; }
+.why { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.split > .card, .split > div > .card:last-child { margin-bottom: 16px; }
+.split.wide { grid-template-columns: 3fr 2fr; }
+@media (max-width: 900px) { .split, .split.wide { grid-template-columns: 1fr; } }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; vertical-align: top; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: var(--surface-2); border-bottom: 1px solid var(--border-strong); }
+tbody tr:hover td, table tr:hover td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+td.name, th.name { text-align: left; }
+td.name { color: var(--muted); white-space: normal; min-width: 150px; }
+td.reason { white-space: normal; text-align: left; color: var(--muted); font-size: 12.5px; min-width: 280px; max-width: 460px; }
+tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.tag { font-size: 10.5px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; margin-left: 6px; font-weight: 600; letter-spacing: .02em; }
+.pos { color: var(--buy); } .neg { color: var(--sell); }
+.bar-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.bar-cell i { display: inline-block; height: 6px; border-radius: 3px; background: var(--accent); min-width: 1px; }
+
+label { display: block; color: var(--muted); font-size: 12.5px; font-weight: 500; margin-bottom: 4px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+input[type=number], input[type=text], input[type=date], textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--border-strong);
+  border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; }
+input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+textarea { min-height: 90px; font: 12.5px/1.45 ui-monospace, Consolas, monospace; }
+button { font: inherit; font-weight: 500; font-size: 13px; padding: 7px 14px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+button:hover { filter: brightness(1.06); }
+button.ghost { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
+button.ghost:hover { background: var(--surface-2); filter: none; }
+button:disabled { opacity: .5; cursor: default; }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: var(--surface); color: var(--muted); padding: 5px 11px; font-size: 12.5px; }
+.seg button + button { border-left: 1px solid var(--border-strong); }
+.seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; }
+.check { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; margin: 0; white-space: nowrap; font-weight: 500; }
+.note { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
+.ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-line); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
+.log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); max-height: 140px; overflow: auto; margin-top: 8px; white-space: pre-wrap; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; background: var(--c); }
+.loading { position: fixed; top: 0; left: 0; height: 2px; width: 100%; background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+  background-size: 50% 100%; animation: slide 1.1s linear infinite; z-index: 20; display: none; }
+.loading.on { display: block; }
+@keyframes slide { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.section-title { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 32px 0 12px; }
+.section-title h2 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; margin: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); min-width: 0; }
+.tile .label { color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .value { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.tile .chg { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.tile .sub { color: var(--muted); font-size: 11.5px; }
+.tile svg { display: block; margin-top: 6px; }
+td.heat { font-variant-numeric: tabular-nums; }
+tr.grp td { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding-top: 14px; border-bottom: 0; background: none !important; }
+.bars { display: grid; grid-template-columns: minmax(110px, auto) 1fr 64px; gap: 7px 10px; align-items: center; font-size: 13px; }
+.bars .track { position: relative; height: 10px; }
+.bars .track::before { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; border-left: 1px solid var(--border-strong); }
+.bars .bar { position: absolute; top: 0; height: 10px; border-radius: 3px; }
+.bars .num { text-align: right; font-variant-numeric: tabular-nums; }
+.movers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.movers ol { margin: 0; padding-left: 18px; font-size: 13px; }
+.movers li { margin: 4px 0; }
+.trend { border-top: 1px solid var(--border); padding: 12px 0; }
+.trend:first-of-type { border-top: 0; }
+.trend h3 { font-size: 14px; margin: 0 0 4px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.trend p { margin: 4px 0; font-size: 13.5px; }
+.trend .src { font-size: 12px; color: var(--muted); }
+.trend .src a, a { color: var(--accent); }
+.conf { font-size: 10.5px; font-weight: 600; border-radius: 4px; padding: 1px 6px; background: var(--accent-soft); color: var(--accent); }
+.conf.low { background: var(--warn-bg); color: var(--warn); }
+.arrow { font-weight: 700; }
+#error { display: none; margin: 16px 0 0; } #error.show { display: block; }
+.editor td { padding: 6px 4px; } .editor td input { min-width: 64px; }
+.editor button.ghost { padding: 5px 9px; }
+.empty { text-align: center; padding: 32px 16px; color: var(--muted); }
+footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--border); padding-top: 16px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="loading" id="loading"></div>
+<header>
+  <div class="appbar">
+    <div class="wrap">
+      <div class="brand">
+        <div class="mark"><svg viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12l4-4 3 3 5-6"/></svg></div>
+        <div><h1>Portfolio Optimizer</h1></div>
+        <span class="acct">Roth IRA</span>
+      </div>
+      <nav role="tablist">
+        <button role="tab" data-tab="today" aria-selected="true">Overview</button>
+        <button role="tab" data-tab="tracker">Performance</button>
+        <button role="tab" data-tab="plan">Allocation</button>
+        <button role="tab" data-tab="scanTab">Screener</button>
+        <button role="tab" data-tab="backtest">Backtest</button>
+        <button role="tab" data-tab="settings">Settings</button>
+      </nav>
+      <div class="status" id="subtitle">Loading…</div>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="wrap">
+      <div class="risk">
+        <span class="lbl">Risk level</span>
+        <div class="risk-track">
+          <input type="range" id="risk" min="1" max="10" step="1" value="2" aria-label="Risk level, 1 to 10">
+          <div class="ticks" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>
+        </div>
+        <div class="risk-read"><span class="lvl" id="riskNum">2</span><span class="name" id="riskName">…</span><span class="limit" id="riskLimit"></span></div>
+      </div>
+      <div class="riskopts">
+        <label class="check" title="How the stress loss is measured">Measure
+          <select id="riskModel" aria-label="How the stress loss is measured">
+            <option value="worst_case">Worst case: every holding at its worst drop</option>
+            <option value="scenarios">Past crashes replayed on the mix</option>
+          </select></label>
+        <label class="check" title="Aim for this expected growth a year at the least risk; blank for the most growth your level allows">Growth target
+          <input type="number" id="targetGrowth" min="0" max="50" step="0.5" placeholder="none" aria-label="Growth target, percent a year"> %</label>
+      </div>
+      <div class="toggles">
+        <label class="check"><input type="checkbox" id="scan" checked> Scan <span id="scanCount">funds</span></label>
+        <label class="check"><input type="checkbox" id="useAi"> AI ratings</label>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="error" class="note"></div>
+  <main>
+    <section class="tab active" id="today">
+      <div class="page-head"><div><h2>Overview</h2><p id="ovSub">Today's orders at your risk level, and where the market stands.</p></div></div>
+      <div class="kpis" id="kpis"></div>
+      <div class="split wide">
+        <div class="card">
+          <div class="card-head"><h3 id="ordersTitle">Today's orders</h3></div>
+          <ul class="orders" id="orders"></ul>
+          <div id="tomorrowBox" hidden>
+            <h4>Next trading day, once today's sales settle</h4>
+            <ul class="orders" id="tomorrow"></ul>
+          </div>
+          <p class="muted" id="settle"></p>
+          <div id="orderNotes"></div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="card-head"><h3>Since day one</h3><button class="ghost" data-goto="tracker">Performance →</button></div>
+            <div id="ovPerf"><p class="muted">Loading the paper record…</p></div>
+          </div>
+          <div class="card">
+            <h3>Growth vs. risk level</h3>
+            <p class="muted">The best mix at each level, 1 to 10. Ring: your level. Cross: your portfolio now.</p>
+            <div id="chart"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Market</h2><span class="muted" id="mkAsOf">Loading market data…</span></div>
+      <div class="tiles" id="mkTiles"></div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Why it's happening</h3>
+          <span><span class="muted" id="mkStatus"></span> <button class="ghost" id="mkExplain">Explain today's moves</button></span>
+        </div>
+        <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
+      </div>
+      <div class="split">
+        <div class="card">
+          <h3>Returns</h3>
+          <p class="muted">Yields and the VIX change in points; everything else in percent.</p>
+          <div class="table-wrap"><table id="mkTable"></table></div>
+        </div>
+        <div>
+          <div class="card"><h3>Sectors, last month</h3><div class="bars" id="mkSectors"></div></div>
+          <div class="card"><h3>Disruptive themes, last month</h3><p class="muted">Median move of each theme's stocks and funds.</p><div class="bars" id="mkThemes"></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>S&amp;P 500 under the surface</h3>
+        <p class="muted" id="mkBreadth"></p>
+        <div class="movers">
+          <div><h4>Best, last month</h4><ol id="mkLeaders"></ol></div>
+          <div><h4>Worst, last month</h4><ol id="mkLaggards"></ol></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tracker">
+      <div class="page-head">
+        <div><h2>Performance</h2><p>Two paper portfolios recorded after every close since day one: <b>Followed the plan</b> trades each day's suggested orders under T+1; <b>Kept as is</b> keeps your holdings and usual buys.</p></div>
+      </div>
+      <div class="card" id="trackerIntro">
+        <h3>Start the record</h3>
+        <p class="muted">The record starts from your real holdings and is kept for as long as you use the app. Changing the risk level later does not restart it; each day is traded at the level in force that day.</p>
+        <div class="row">
+          <div style="width:180px"><label for="trStart">Start from</label><input type="date" id="trStart"></div>
+          <button id="trStartBtn">Start the record</button>
+        </div>
+        <p class="muted small">Leave the date at today to record from now on. An earlier date replays from that day using today's holdings.</p>
+      </div>
+      <div id="trackerBody" hidden>
+        <div class="kpis" id="trKpis"></div>
+        <div class="card">
+          <div class="card-head">
+            <div class="seg" id="trRange" role="group" aria-label="Chart range">
+              <button data-range="1M">1M</button><button data-range="3M">3M</button><button data-range="YTD">YTD</button><button data-range="1Y">1Y</button><button data-range="ALL" aria-pressed="true">All</button>
+            </div>
+            <span><span class="muted" id="trStatus"></span> <button class="ghost" id="trUpdate">Update now</button> <button class="ghost" id="trReset">Start over</button></span>
+          </div>
+          <div id="trChart"></div>
+        </div>
+        <div class="split wide">
+          <div class="card">
+            <h3>Day by day</h3>
+            <div class="table-wrap" style="max-height:460px;overflow:auto"><table id="trDays"></table></div>
+          </div>
+          <div class="card">
+            <h3>Paper holdings, followed the plan</h3>
+            <div class="table-wrap"><table id="trHoldings"></table></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="plan">
+      <div class="page-head"><div><h2>Allocation</h2><p>Funds you hold and funds the plan buys. The reason under each names the numbers that decided its weight.</p></div></div>
+      <div class="card">
+        <div class="table-wrap"><table id="mix"></table></div>
+        <p class="muted" id="mixNotes"></p>
+      </div>
+    </section>
+
+    <section class="tab" id="scanTab">
+      <div class="page-head"><div><h2>Screener</h2><p><b>Score</b> is expected growth above cash for each unit of worst-case drop: what the risk budget is spent on. Chosen funds are marked on the left.</p></div></div>
+      <div class="card">
+        <div class="row" style="margin:0 0 12px"><input type="text" id="scanFilter" placeholder="Filter by ticker, name or sector, e.g. MSFT, quantum, Technology" style="max-width:420px"></div>
+        <div class="table-wrap" style="max-height:640px;overflow:auto"><table id="scanTable"></table></div>
+      </div>
+    </section>
+
+    <section class="tab" id="backtest">
+      <div class="page-head"><div><h2>Backtest</h2><p>Replays the optimizer month by month using only prices known at each date, at your risk level, against VTI, a 60/40 mix and your current mix. AI ratings are left out: the models already know how those years ended.</p></div></div>
+      <div class="card">
+        <div class="row" style="margin-top:0">
+          <div style="width:180px"><label for="btStart">Start</label><input type="date" id="btStart" value="2012-01-03" min="2008-01-02"></div>
+          <button id="runBt">Run backtest at level <span id="btLimit">2</span></button>
+          <span class="muted" id="btStatus"></span>
+        </div>
+        <div id="btVerdict"></div>
+        <div id="btChart"></div>
+        <div class="table-wrap"><table id="btTable"></table></div>
+      </div>
+    </section>
+
+    <section class="tab" id="settings">
+      <div class="page-head"><div><h2>Settings</h2><p>Your holdings, recurring buys and what to scan. Saved to the JSON files next to the app.</p></div></div>
+      <div class="grid">
+        <div class="card">
+          <h3>Holdings</h3>
+          <div class="table-wrap"><table class="editor" id="holdings"></table></div>
+          <div class="row"><div style="flex:1"><label for="cash">Settled cash (spendable today)</label><input type="number" id="cash" step="0.01" min="0"></div></div>
+          <div class="row"><button class="ghost" id="addHolding">Add ticker</button><button id="saveHoldings">Save holdings</button></div>
+        </div>
+        <div class="card">
+          <h3>Recurring buys</h3>
+          <div class="table-wrap"><table class="editor" id="schedule"></table></div>
+          <div class="row"><button class="ghost" id="addBuy">Add ticker</button><button id="saveSchedule">Save buys</button></div>
+          <p class="muted">The optimizer keeps your daily total but moves it to the funds that are under target.</p>
+        </div>
+        <div class="card">
+          <h3>Risk levels</h3>
+          <div class="table-wrap"><table id="riskTable"></table></div>
+          <p class="muted">Each level caps the <b>stress loss</b>, measured one of two ways. <b>Worst case</b>: what the whole portfolio would lose if every holding repeated its worst historical drop at once. <b>Past crashes</b>: the worst of the real crashes since 1998 (stocks, long bonds, gold, commodities) replayed on the mix, so holdings that did not fall together are not assumed to. Either way no single fund may use more than a quarter of the cap at its own worst drop. Level 10 has no cap; only the per-fund limits apply. A future crash can be deeper than any past one.</p>
+          <p class="muted">With a <b>growth target</b> the plan takes the least stress loss that is expected to reach it, never more than your level allows.</p>
+        </div>
+        <div class="card">
+          <h3>AI ratings</h3>
+          <p class="muted">Rates your holdings and the funds the plan wants to buy, then tilts expected growth. It never changes the risk level. Costs about one full analysis per fund.</p>
+          <button class="ghost" id="runAi">Run AI ratings</button>
+          <div class="muted" id="aiStatus" style="margin-top:8px"></div>
+          <div class="log" id="aiLog"></div>
+        </div>
+        <div class="card">
+          <h3>What to scan</h3>
+          <div id="groups"></div>
+          <label for="universe" style="margin-top:10px">Extra tickers (commas or spaces)</label>
+          <textarea id="universe" aria-label="Extra tickers" placeholder="e.g. PLTR, HIMS, SPCX"></textarea>
+          <p class="muted">Your holdings are always included. Tickers with under 3 years of prices are skipped, since their crash risk cannot be measured. The best 60 scores go on to the optimizer.</p>
+          <div class="row"><button id="saveUniverse">Save</button></div>
+        </div>
+      </div>
+    </section>
+    <footer>Estimates from price history, not forecasts. A future crash can be deeper than any past one. Nothing here places an order.</footer>
+  </main>
+</div>
+
+<script>
+const SERIES = ["--s1", "--s2", "--s3", "--s4"];
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const usd = x => (x < 0 ? "-" : "") + "$" + Math.abs(x).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const pct = (x, d = 1) => x == null ? "none" : (x * 100).toFixed(d) + "%";
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+let state = null, lastPlan = null, timer = null, pending = 0;
+
+function busy(on) { pending += on ? 1 : -1; $("loading").classList.toggle("on", pending > 0); }
+function showError(msg) { const e = $("error"); e.textContent = msg || ""; e.classList.toggle("show", !!msg); }
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const data = await res.json();
+  if (!res.ok && res.status !== 409) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+// --- tabs ---
+function showTab(id) {
+  document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === id));
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === id));
+  store.set("tab", id);
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+// --- risk level: 1 to 10 ---
+let levels = [], riskLevel = 2;
+const levelInfo = n => levels[n - 1] || {level: n, name: "", loss_limit: null};
+const capText = l => l == null ? "no cap" : (l * 100).toFixed(1).replace(/\.0$/, "") + "%";
+function showRisk(n) {
+  const r = levelInfo(n);
+  $("risk").value = n; $("riskNum").textContent = n; $("riskName").textContent = r.name;
+  $("riskLimit").textContent = r.loss_limit == null ? "no stress-loss cap" : `max stress loss ${capText(r.loss_limit)}`;
+  $("btLimit").textContent = n;
+  if (levels.length) drawRiskTable();
+}
+async function saveRisk(extra = {}) {
+  riskLevel = +$("risk").value;
+  try { await api("/api/risk", {level: riskLevel, ...extra}); } catch (e) { showError(e.message); }
+  refresh();
+}
+function showRiskOptions(r) {
+  $("riskModel").value = r.model || "worst_case";
+  $("targetGrowth").value = r.target_growth == null ? "" : +(r.target_growth * 100).toFixed(2);
+}
+$("riskModel").onchange = () => saveRisk({model: $("riskModel").value});
+$("targetGrowth").onchange = () => {
+  const v = $("targetGrowth").value.trim();
+  saveRisk({target_growth: v === "" || +v === 0 ? null : +v / 100});
+};
+$("risk").oninput = () => { showRisk(+$("risk").value); clearTimeout(timer); timer = setTimeout(saveRisk, 400); };
+function drawRiskTable() {
+  $("riskTable").innerHTML = "<tr><th>Level</th><th class='name'>Name</th><th>Stress-loss cap</th></tr>" +
+    levels.map(r => `<tr class="${r.level === +$("risk").value ? "chosen" : ""}"><td><strong>${r.level}</strong></td><td class="name">${esc(r.name)}</td><td>${capText(r.loss_limit)}</td></tr>`).join("");
+}
+document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => showTab(b.dataset.goto));
+
+const kpi = (label, value, from, cls = "") => `<div class="kpi ${cls}"><div class="label">${label}</div><div class="value">${value}</div><div class="from">${from}</div></div>`;
+const spct = (x, d = 2) => x == null ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%`;
+const susd = x => `${x >= 0 ? "+" : "−"}${usd(Math.abs(x))}`;
+
+async function refresh() {
+  showError(""); busy(true);
+  $("subtitle").textContent = $("scan").checked ? "Scanning… the first scan of the day takes about a minute" : "Optimizing…";
+  try {
+    const r = await api("/api/plan", {risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
+    lastPlan = r; render(r);
+  } catch (e) { showError(e.message); $("subtitle").textContent = "Could not optimize."; }
+  finally { busy(false); }
+}
+
+function goalShort(g) {
+  if (!g.reachable) return ": out of reach";
+  const need = g.needed == null ? "no cap" : capText(g.needed) + " stress loss";
+  const capped = g.level_limit != null && (g.needed == null || g.needed > g.level_limit + 1e-9);
+  return capped ? `: needs ${need}, above your level` : `: needs ${need}`;
+}
+function render(r) {
+  const p = r.plan, s = r.suggestion, limit = p.settings.loss_limit;
+  $("subtitle").textContent = `${r.date} · ${usd(p.total)} · ${p.scanned} funds scanned${r.ai_used ? " · AI applied" : ""}`;
+  $("subtitle").title = "Saved to " + r.saved_to;
+
+  $("kpis").innerHTML =
+    kpi("Portfolio value", usd(p.total), `level ${r.risk.level} · ${esc(r.risk.name)}`, "hero") +
+    kpi("Stress loss", usd(p.target_stress * p.total), `${pct(p.target_stress)} · now ${pct(p.current_stress)} (${usd(p.current_stress * p.total)})`) +
+    kpi("Expected growth", pct(p.expected_target) + "/yr", `≈ ${usd(p.expected_target * p.total)}/yr · now ${pct(p.expected_current)}` +
+      (p.goal ? ` · target ${pct(p.goal.target)}${goalShort(p.goal)}` : "")) +
+    kpi("Invested", pct(1 - p.cash.target), `rest in ${esc(p.cash.ticker)} · now ${pct(1 - p.cash.current)}`) +
+    kpi("Daily buys", usd(p.daily_budget), p.days_to_target == null ? "paused: nothing under target" : `${Math.ceil(p.days_to_target)} trading days to target`);
+
+  $("ordersTitle").textContent = `Orders for ${r.date}`;
+  const orderItem = o => `<li><div class="order-head"><span class="side ${o.side}">${o.side.toUpperCase()}</span><span class="amt">${usd(o.amount)}</span><strong>${esc(o.ticker)}</strong></div><div class="why">${esc(o.why)}</div></li>`;
+  const orders = [...s.orders].sort((a, b) => (a.side === "sell" ? 0 : 1) - (b.side === "sell" ? 0 : 1));
+  $("orders").innerHTML = orders.length ? orders.map(orderItem).join("") : "<li>No orders today.</li>";
+  $("tomorrowBox").hidden = !s.tomorrow.length;
+  $("tomorrow").innerHTML = s.tomorrow.map(orderItem).join("");
+  $("settle").textContent = `Settled cash ${usd(s.settled_cash)} · left after buys ${usd(s.cash_left)} · ${usd(s.settling_tomorrow)} settles next trading day`;
+  $("orderNotes").innerHTML = s.notes.map(n => `<div class="note">${esc(n)}</div>`).join("");
+
+  renderChart(p);
+
+  const maxT = Math.max(...p.rows.map(x => x.target), p.cash.target, 1e-9);
+  const weightBar = w => `<span class="bar-cell">${pct(w)}<i style="width:${Math.round(48 * w / maxT)}px"></i></span>`;
+  const shown = [...p.rows].filter(x => x.value > 0 || x.target > 1e-4).sort((a, b) => b.target - a.target || b.value - a.value);
+  const mixRow = x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td><strong>${esc(x.ticker)}</strong>${x.held ? "" : '<span class="tag">NEW</span>'}</td><td class="name">${esc(x.name)}</td>
+      <td>${pct(x.current)}</td><td>${weightBar(x.target)}</td>
+      <td class="${x.trade > 0 ? "pos" : "neg"}">${Math.abs(x.trade) < 0.01 ? "–" : (x.trade > 0 ? "+" : "−") + usd(Math.abs(x.trade))}</td>
+      <td>${x.daily_buy ? usd(x.daily_buy) : "–"}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${pct(x.expected)}</td>
+      <td class="reason">${esc(x.reason)}${x.rating ? ` <span class="tag">AI ${esc(x.rating)}</span>` : ""}</td></tr>`;
+  $("mix").innerHTML = "<tr><th>Ticker</th><th class='name'>Fund</th><th>Now</th><th>Target</th><th>Trade</th><th>Daily</th><th>Worst drop</th><th>Growth</th><th class='name'>Why</th></tr>" +
+    shown.map(mixRow).join("") + mixRow({...p.cash, name: "cash", held: true, worst_loss: 0});
+  $("mixNotes").textContent = p.notes.join(" ") + (p.rows.some(x => x.floored) ? " * assumed, not observed." : "");
+
+  scanRows = [...p.rows].sort((a, b) => b.target - a.target || b.score - a.score);
+  renderScan();
+}
+
+let scanRows = [];
+function renderScan() {
+  const q = $("scanFilter").value.trim().toLowerCase();
+  const rows = q ? scanRows.filter(x => (x.ticker + " " + x.name).toLowerCase().includes(q)) : scanRows;
+  const shown = rows.slice(0, 300);
+  $("scanTable").innerHTML = `<tr><th>#</th><th>Ticker</th><th class='name'>Name</th><th>Growth</th><th>Worst drop</th><th>Score</th><th>Target</th><th class='name'>Why</th></tr>` +
+    shown.map(x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td class="muted">${scanRows.indexOf(x) + 1}</td><td><strong>${esc(x.ticker)}</strong>${x.held ? '<span class="tag">HELD</span>' : ""}</td><td class="name">${esc(x.name)}</td>
+      <td>${pct(x.expected)}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.score.toFixed(2)}</td>
+      <td>${x.target > 1e-4 ? pct(x.target) : "–"}</td><td class="reason">${esc(x.reason)}</td></tr>`).join("") +
+    (rows.length > shown.length ? `<tr><td colspan="8" class="muted">${rows.length - shown.length} more; type in the filter to find one.</td></tr>` : "");
+}
+$("scanFilter").oninput = renderScan;
+
+function axes(W, H, L, R, T, B, sx, sy, xTicks, yTicks, xFmt, yFmt) {
+  let g = "";
+  for (const y of yTicks) g += `<line x1="${L}" x2="${W - R}" y1="${sy(y)}" y2="${sy(y)}" stroke="var(--chart-grid)"/><text x="${L - 6}" y="${sy(y) + 4}" text-anchor="end">${yFmt(y)}</text>`;
+  for (const x of xTicks) g += `<text x="${sx(x)}" y="${H - B + 16}" text-anchor="middle">${xFmt(x)}</text>`;
+  return g;
+}
+
+function renderChart(p) {
+  const pts = p.frontier.map((f, i) => ({x: f.stress_loss, y: f.expected_return, level: i + 1}));
+  const cur = {x: p.current_stress, y: p.expected_current}, sel = {x: p.target_stress, y: p.expected_target};
+  const all = [...pts, cur, sel];
+  const W = 520, H = 250, L = 44, R = 12, T = 12, B = 34;
+  const xMax = Math.max(...all.map(a => a.x)) * 1.05 || 0.01;
+  const yMin = Math.min(...all.map(a => a.y)) * 0.95, yMax = Math.max(...all.map(a => a.y)) * 1.05;
+  const sx = x => L + (x / xMax) * (W - L - R), sy = y => H - B - ((y - yMin) / (yMax - yMin || 1)) * (H - T - B);
+  const t = [0, 1, 2, 3, 4];
+  const grid = axes(W, H, L, R, T, B, sx, sy, t.map(i => xMax * i / 4), t.map(i => yMin + (yMax - yMin) * i / 4), x => pct(x, 0), y => pct(y, 1));
+  const path = pts.map((a, i) => `${i ? "L" : "M"}${sx(a.x)},${sy(a.y)}`).join("");
+  const dots = pts.map(a => `<circle cx="${sx(a.x)}" cy="${sy(a.y)}" r="3.5" fill="var(--s1)"><title>level ${a.level}: stress loss ${pct(a.x)}, growth ${pct(a.y)}</title></circle>`).join("");
+  $("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Expected growth against stress loss">
+    ${grid}<text x="${(W + L) / 2}" y="${H - 2}" text-anchor="middle">stress loss (${p.settings.risk_model === "scenarios" ? "past crashes" : "worst case"})</text>
+    <path d="${path}" fill="none" stroke="var(--s1)" stroke-width="2"/>${dots}
+    <circle cx="${sx(sel.x)}" cy="${sy(sel.y)}" r="8" fill="none" stroke="var(--s4)" stroke-width="2.5"><title>your level: ${pct(sel.x)} loss, ${pct(sel.y)} growth</title></circle>
+    <path d="M${sx(cur.x) - 6},${sy(cur.y) - 6}l12,12M${sx(cur.x) + 6},${sy(cur.y) - 6}l-12,12" stroke="var(--s2)" stroke-width="2.5"><title>your portfolio now: ${pct(cur.x)} loss, ${pct(cur.y)} growth</title></path>
+  </svg>`;
+}
+
+function renderBacktest(r) {
+  const names = Object.keys(r.curves);
+  const W = 720, H = 280, L = 48, R = 16, T = 12, B = 32;
+  const vals = names.flatMap(n => r.curves[n]);
+  const lo = Math.log(Math.min(...vals) * 0.95), hi = Math.log(Math.max(...vals) * 1.05);
+  const n = r.dates.length;
+  const sx = i => L + (i / (n - 1)) * (W - L - R), sy = v => H - B - ((Math.log(v) - lo) / (hi - lo || 1)) * (H - T - B);
+  const yTicks = [0.5, 1, 1.5, 2, 3, 4, 6, 8, 12].filter(v => Math.log(v) >= lo && Math.log(v) <= hi);
+  const years = []; let lastY = "";
+  r.dates.forEach((d, i) => { const y = d.slice(0, 4); if (y !== lastY && +y % 2 === 0) years.push(i); lastY = y; });
+  const grid = axes(W, H, L, R, T, B, sx, sy, years, yTicks, i => r.dates[i].slice(0, 4), v => "$" + v);
+  const lines = names.map((name, k) => `<path d="${r.curves[name].map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join("")}" fill="none" stroke="var(${SERIES[k % 4]})" stroke-width="${k ? 1.5 : 2.75}"><title>${esc(name)}</title></path>`).join("");
+  $("btChart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Growth of one dollar, log scale">${grid}${lines}</svg>
+    <div class="legend">${names.map((name, k) => `<span style="--c: var(${SERIES[k % 4]})">${esc(name)}</span>`).join("")}</div>`;
+  $("btTable").innerHTML = "<tr><th>Strategy</th><th>$1 became</th><th>Per year</th><th>Worst drop</th><th>Volatility</th><th>Sharpe</th><th>Worst month</th></tr>" +
+    names.map(name => { const m = r.metrics[name]; return `<tr><td>${esc(name)}</td><td>$${m.final.toFixed(2)}</td><td>${pct(m.cagr)}</td><td>${pct(m.max_drawdown)}</td><td>${pct(m.volatility)}</td><td>${m.sharpe.toFixed(2)}</td><td>${pct(m.worst_month)}</td></tr>`; }).join("");
+  const opt = r.metrics["Optimizer"], avg = r.invested.reduce((a, b) => a + b[1], 0) / (r.invested.length || 1);
+  const held = r.loss_limit == null || opt.max_drawdown <= r.loss_limit;
+  $("btVerdict").innerHTML = `<div class="${held ? "ok" : "note"}"><b>${r.loss_limit == null ? "No stress cap" : capText(r.loss_limit) + " stress cap"}, ${r.start} to ${r.end}:</b> the optimizer's worst drop was ${pct(opt.max_drawdown)}, ` +
+    `${held ? "so the limit held" : "so the limit did NOT hold"}. It earned ${pct(opt.cagr)} a year, ${pct(avg, 0)} invested on average over ${r.rebalances} monthly rebalances.` +
+    (() => { const scored = r.history.filter(h => h.limit != null && h.next_year_drop != null);
+             const broken = scored.filter(h => h.next_year_drop > h.limit + 1e-9);
+             return scored.length ? ` Each month's mix, held a year, fell further than its limit ${broken.length} times in ${scored.length}.` : ""; })() + `</div>` +
+    r.notes.map(x => `<p class="muted">${esc(x)}</p>`).join("");
+}
+
+async function pollBacktest() {
+  const b = await api("/api/backtest");
+  $("runBt").disabled = b.running;
+  $("btStatus").textContent = b.running ? `Running: ${b.progress}…` : "";
+  if (b.error) showError("Backtest failed: " + b.error);
+  if (b.result) renderBacktest(b.result);
+  if (b.running) setTimeout(pollBacktest, 1500);
+}
+$("runBt").onclick = async () => {
+  try { await api("/api/backtest", {risk_level: riskLevel, start: $("btStart").value}); pollBacktest(); }
+  catch (e) { showError(e.message); }
+};
+
+// --- settings editors ---
+function editorRows(table, rows, cols) {
+  table.innerHTML = "<tr>" + cols.map(c => `<th>${c.label}</th>`).join("") + "<th></th></tr>" +
+    rows.map((r, i) => "<tr>" + cols.map(c => `<td><input type="${c.type}" step="any" data-k="${c.key}" value="${esc(r[c.key] ?? "")}"></td>`).join("") +
+      `<td><button class="ghost" data-del="${i}" aria-label="Remove">✕</button></td></tr>`).join("");
+}
+function readRows(table) {
+  const rows = [];
+  table.querySelectorAll("tr").forEach((tr, n) => {
+    if (!n) return; const r = {};
+    tr.querySelectorAll("input").forEach(inp => r[inp.dataset.k] = inp.type === "number" ? (inp.value === "" ? null : +inp.value) : inp.value.trim().toUpperCase());
+    if (r.ticker) rows.push(r);
+  });
+  return rows;
+}
+const HOLD_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "quantity", label: "Shares", type: "number"}];
+const BUY_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "amount", label: "Amount", type: "number"}, {key: "period", label: "daily / weekly", type: "text"}];
+function toSchedule(rows) {
+  const s = {daily: {}, weekly: {}};
+  rows.forEach(r => { const p = (r.period || "daily").toLowerCase() === "weekly" ? "weekly" : "daily"; if (r.amount) s[p][r.ticker] = r.amount; });
+  return s;
+}
+function drawEditors() {
+  editorRows($("holdings"), state.portfolio.positions, HOLD_COLS);
+  $("cash").value = state.portfolio.cash ?? 0;
+  const buys = [];
+  for (const period of ["daily", "weekly"]) for (const [t, a] of Object.entries(state.schedule[period] || {})) buys.push({ticker: t, amount: a, period});
+  editorRows($("schedule"), buys, BUY_COLS);
+  $("groups").innerHTML = Object.entries(state.groups).map(([key, label]) =>
+    `<label class="check" style="margin:6px 0"><input type="checkbox" data-group="${key}" ${state.universe.groups.includes(key) ? "checked" : ""}> ${esc(label)}</label>`).join("");
+  $("universe").value = state.universe.extra.join(", ");
+  $("scanCount").textContent = state.universe.groups.length ? "market" : "extra list";
+}
+document.addEventListener("click", e => {
+  const del = e.target.dataset?.del; if (del === undefined) return;
+  const table = e.target.closest("table");
+  if (table.id === "holdings") { state.portfolio.positions = readRows(table); state.portfolio.positions.splice(+del, 1); }
+  else { const rows = readRows(table); rows.splice(+del, 1); state.schedule = toSchedule(rows); }
+  drawEditors();
+});
+$("addHolding").onclick = () => { state.portfolio.positions = readRows($("holdings")); state.portfolio.positions.push({ticker: "", quantity: 0}); drawEditors(); };
+$("addBuy").onclick = () => { const rows = readRows($("schedule")); rows.push({ticker: "", amount: 0, period: "daily"}); editorRows($("schedule"), rows, BUY_COLS); };
+$("saveHoldings").onclick = async () => {
+  try {
+    state.portfolio = {...state.portfolio, positions: readRows($("holdings")).filter(r => r.quantity), cash: +$("cash").value || 0};
+    await api("/api/portfolio", state.portfolio); drawEditors(); refresh();
+  } catch (e) { showError(e.message); }
+};
+$("saveSchedule").onclick = async () => {
+  try { state.schedule = toSchedule(readRows($("schedule"))); await api("/api/schedule", state.schedule); drawEditors(); refresh(); }
+  catch (e) { showError(e.message); }
+};
+$("saveUniverse").onclick = async () => {
+  const groups = [...document.querySelectorAll("[data-group]")].filter(c => c.checked).map(c => c.dataset.group);
+  const extra = $("universe").value.split(/[\s,;]+/).filter(Boolean);
+  try { await api("/api/universe", {groups, extra}); state = await api("/api/state"); drawEditors(); refresh(); }
+  catch (e) { showError(e.message); }
+};
+
+// --- market ---
+const signed = (v, kind, d = 1) => v == null ? "–" : kind === "level" ? `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}` : `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(d)}%`;
+const tone = (v, kind) => v == null ? "" : (kind === "level" ? 0 : v) === 0 ? "" : ((kind === "level" ? 0 : v) > 0 ? "pos" : "neg");
+function heat(v, kind, scale) {
+  if (v == null) return "";
+  const x = kind === "level" ? 0 : Math.max(-1, Math.min(1, v / scale));
+  if (!x) return "";
+  return `background: color-mix(in srgb, var(${x > 0 ? "--buy" : "--sell"}) ${Math.round(Math.abs(x) * 28)}%, transparent)`;
+}
+function spark(values, up) {
+  if (!values || values.length < 2) return "";
+  const W = 140, H = 30, lo = Math.min(...values), hi = Math.max(...values);
+  const pts = values.map((v, i) => `${(i / (values.length - 1) * W).toFixed(1)},${(H - 2 - (v - lo) / ((hi - lo) || 1) * (H - 4)).toFixed(1)}`).join(" ");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="var(${up ? "--buy" : "--sell"})" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function bars(el, items, scale) {
+  const max = Math.max(scale, ...items.map(i => Math.abs(i.value)));
+  el.innerHTML = items.map(i => {
+    const w = Math.abs(i.value) / max * 50;
+    const pos = i.value >= 0 ? `left:50%;width:${w}%;background:var(--buy)` : `left:${50 - w}%;width:${w}%;background:var(--sell)`;
+    return `<span title="${esc(i.title || "")}">${esc(i.label)}</span><span class="track" title="${esc(i.title || "")}"><span class="bar" style="${pos}"></span></span><span class="num ${i.value >= 0 ? "pos" : "neg"}">${signed(i.value, "price")}</span>`;
+  }).join("");
+}
+function renderMarket(m) {
+  const o = m.overview, by = Object.fromEntries(o.rows.map(r => [r.ticker, r]));
+  $("mkAsOf").textContent = `Closing prices as of ${o.as_of}; today's bar is live until the close.`;
+  $("mkTiles").innerHTML = ["SPY", "QQQ", "IWM", "^TNX", "^VIX", "GLD", "BTC-USD"].filter(t => by[t]).map(t => {
+    const r = by[t], d = r.changes["1D"], mo = r.changes["1M"];
+    const value = r.kind === "level" ? r.last.toFixed(2) + (t === "^TNX" ? "%" : "") : r.last.toLocaleString(undefined, {maximumFractionDigits: 2});
+    const up = r.spark.length > 1 && r.spark[r.spark.length - 1] >= r.spark[0];
+    return `<div class="tile" title="${esc(r.name)}: 6-month line"><div class="label">${esc(r.name)}</div><div class="value">${value}</div>
+      <div class="chg"><span class="${tone(d, r.kind)}">${signed(d, r.kind)}</span> today · <span class="${tone(mo, r.kind)}">${signed(mo, r.kind)}</span> 1M</div>
+      ${spark(r.spark, up)}<div class="sub">${r.kind === "level" ? "" : r.from_high != null ? (r.from_high > -0.005 ? "at its 52-week high" : `${(Math.abs(r.from_high) * 100).toFixed(1)}% below 52-week high`) : ""}</div></div>`;
+  }).join("");
+
+  const periods = ["1D", "1W", "1M", "3M", "YTD", "1Y"], scales = {"1D": .03, "1W": .05, "1M": .1, "3M": .15, "YTD": .3, "1Y": .3};
+  let html = "<tr><th>Asset</th>" + periods.map(p => `<th>${p}</th>`).join("") + "</tr>", group = "";
+  for (const r of o.rows) {
+    if (r.group !== group) { group = r.group; html += `<tr class="grp"><td colspan="${periods.length + 1}">${esc(group)}</td></tr>`; }
+    html += `<tr><td title="${esc(r.ticker)}">${esc(r.name)}</td>` + periods.map(p => `<td class="heat" style="${heat(r.changes[p], r.kind, scales[p])}">${signed(r.changes[p], r.kind)}</td>`).join("") + "</tr>";
+  }
+  $("mkTable").innerHTML = html;
+
+  bars($("mkSectors"), o.rows.filter(r => r.group === "Sectors").map(r => ({label: r.name, value: r.changes["1M"], title: `${r.ticker}: ${signed(r.changes["1M"], "price")} over the last month`}))
+    .filter(i => i.value != null).sort((a, b) => b.value - a.value), 0.05);
+  bars($("mkThemes"), o.themes.map(t => ({label: t.theme, value: t.median_1m,
+    title: `${t.count} names. Best ${t.best[0]} ${signed(t.best[1], "price")}, worst ${t.worst[0]} ${signed(t.worst[1], "price")}`})), 0.1);
+
+  const sp = o.sp500;
+  $("mkBreadth").textContent = sp.count ? `${Math.round(sp.up_1m * 100)}% of the ${sp.count} members rose over the last month; ${Math.round(sp.above_50 * 100)}% trade above their 50-day average and ${Math.round(sp.above_200 * 100)}% above their 200-day average. When the index falls but most members hold up, the drop is concentrated in a few large companies.` : "S&P 500 member prices not loaded yet.";
+  const mover = x => `<li><strong>${esc(x.ticker)}</strong> <span class="${x.change >= 0 ? "pos" : "neg"}">${signed(x.change, "price")}</span> <span class="muted">${esc(x.name.replace(/ \(.*\)$/, ""))}</span></li>`;
+  $("mkLeaders").innerHTML = sp.leaders_1m.map(mover).join("");
+  $("mkLaggards").innerHTML = sp.laggards_1m.map(mover).join("");
+  renderBrief(m.brief, m.explain);
+}
+function renderBrief(b, job) {
+  $("mkExplain").disabled = job.running;
+  $("mkExplain").textContent = b ? "Explain again" : "Explain today's moves";
+  $("mkStatus").textContent = job.running ? `Working: ${job.progress}…` : "";
+  if (job.error && !job.running) $("mkStatus").textContent = "Failed: " + job.error.slice(0, 200);
+  if (!b) return;
+  const arrow = d => d === "up" ? '<span class="arrow pos">▲</span>' : d === "down" ? '<span class="arrow neg">▼</span>' : '<span class="arrow muted">◆</span>';
+  const headlineList = () => `<h2 style="font-size:13px;margin-top:12px">Headlines it read (numbers match its sources)</h2><ol class="src" style="padding-left:22px">` +
+    b.headlines.map(h => `<li>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)} <span class="muted">(${esc(h.publisher)})</span></li>`).join("") + "</ol>";
+  if (!b.structured) {
+    $("mkBrief").innerHTML = `<div class="trend">${miniMarkdown(b.summary)}</div>${headlineList()}` +
+      `<p class="muted">Written by ${esc(b.model)} as free text, so its sources are numbers into the list above. AI-written: check them before relying on it.</p>`;
+    return;
+  }
+  $("mkBrief").innerHTML = `<p>${esc(b.summary)}</p>` +
+    (b.trends || []).map(t => `<div class="trend"><h3>${arrow(t.direction)} ${esc(t.title)} <span class="conf ${t.confidence === "low" ? "low" : ""}">${esc(t.confidence)} confidence</span></h3>
+      <p><b>What:</b> ${esc(t.what)}</p><p><b>Why:</b> ${esc(t.why)}</p>
+      <div class="src">${t.sources.length ? "Sources: " + t.sources.map(s => s.link ? `<a href="${esc(s.link)}" target="_blank" rel="noopener">${esc(s.title)}</a> (${esc(s.publisher)})` : `${esc(s.title)} (${esc(s.publisher)})`).join(" · ") : "No headline cited, so treat the why as unconfirmed."}</div></div>`).join("") +
+    (b.watch && b.watch.length ? `<h2 style="font-size:13px;margin-top:12px">Worth watching</h2><ul class="muted" style="margin:0;padding-left:18px">${b.watch.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "") +
+    `<p class="muted" style="margin-top:12px">Written by ${esc(b.model)} from ${b.headlines.length} headlines (week to ${esc(b.as_of)}) and FRED data. AI-written: open the sources before relying on it. It explains the past, it does not predict.</p>`;
+}
+// Headings, bold, italics, bullets and rules from the model's free text; everything else is escaped.
+function miniMarkdown(text) {
+  const inline = t => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>");
+  let html = "", list = false;
+  for (const line of String(text).split(/\r?\n/)) {
+    const l = line.trim();
+    const item = l.match(/^[-*] (.*)/);
+    if (list && !item) { html += "</ul>"; list = false; }
+    if (!l) continue;
+    if (/^-{3,}$/.test(l)) html += "<hr style='border:0;border-top:1px solid var(--border)'>";
+    else if (/^#{1,6} /.test(l)) html += `<h3>${inline(l.replace(/^#+ /, ""))}</h3>`;
+    else if (item) { if (!list) { html += "<ul style='margin:4px 0;padding-left:18px'>"; list = true; } html += `<li>${inline(item[1])}</li>`; }
+    else html += `<p>${inline(l)}</p>`;
+  }
+  return html + (list ? "</ul>" : "");
+}
+
+async function loadMarket() {
+  try { const m = await api("/api/market"); renderMarket(m); return m; }
+  catch (e) { $("mkAsOf").textContent = "Market data unavailable: " + e.message; }
+}
+async function pollExplain() {
+  const j = await api("/api/market/explain");
+  if (j.running) { renderBrief(null, j); setTimeout(pollExplain, 2000); }
+  else loadMarket();
+}
+$("mkExplain").onclick = async () => {
+  try { await api("/api/market/explain", {}); pollExplain(); } catch (e) { showError(e.message); }
+};
+
+// --- performance: the paper record since day one ---
+let trRange = store.get("trRange", "ALL"), lastTracker = null;
+const RANGE_LABEL = {"1M": "1 month", "3M": "3 months", "YTD": "year to date", "1Y": "1 year", "ALL": "since day one"};
+function rangeFrom(H, range) {
+  if (range === "ALL" || H.length < 2) return 0;
+  const end = new Date(H[H.length - 1].date + "T12:00:00"), from = new Date(end);
+  if (range === "1M") from.setMonth(from.getMonth() - 1);
+  else if (range === "3M") from.setMonth(from.getMonth() - 3);
+  else if (range === "1Y") from.setFullYear(from.getFullYear() - 1);
+  else from.setMonth(0, 1);
+  const iso = from.toISOString().slice(0, 10), i = H.findIndex(h => h.date >= iso);
+  return i <= 0 ? 0 : i - 1;   // the close before the range is its base
+}
+function perf(V, key) {
+  const a = V[0][key], b = V[V.length - 1][key], ret = a ? b / a - 1 : 0;
+  const days = (new Date(V[V.length - 1].date) - new Date(V[0].date)) / 864e5;
+  let peak = -Infinity, dd = 0;
+  for (const h of V) { peak = Math.max(peak, h[key]); dd = Math.min(dd, h[key] / peak - 1); }
+  return {ret, ann: days >= 365 ? Math.pow(1 + ret, 365 / days) - 1 : null, dd};
+}
+const capOf = (h, L) => ("loss_limit" in h ? h.loss_limit : L.loss_limit);
+function renderOvPerf(L) {
+  const el = $("ovPerf");
+  if (!L || !L.history.length) {
+    el.innerHTML = "<p class='muted'>The record starts with the next close. From then on the suggested portfolio's value is stored every trading day.</p>";
+    return;
+  }
+  const H = L.history, first = H[0], last = H[H.length - 1], s = perf(H, "plan"), diff = last.plan - last.hold;
+  el.innerHTML = `<div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><div class="muted small">Followed the plan</div><div style="font-size:22px;font-weight:650" class="num">${usd(last.plan)}</div>
+        <div class="small ${s.ret >= 0 ? "pos" : "neg"}">${susd(last.plan - first.plan)} (${spct(s.ret)})</div></div>
+      <div style="text-align:right"><div class="muted small">vs. kept as is</div><div style="font-size:22px;font-weight:650" class="num ${diff >= 0 ? "pos" : "neg"}">${susd(diff)}</div>
+        <div class="muted small">${H.length} day${H.length > 1 ? "s" : ""} since ${L.start}</div></div></div>
+    ${H.length > 1 ? spark(H.map(h => h.plan), last.plan >= first.plan) : ""}`;
+}
+function renderTracker(t) {
+  lastTracker = t;
+  const L = t.ledger;
+  renderOvPerf(L);
+  $("trackerIntro").hidden = !!L; $("trackerBody").hidden = !L;
+  $("trStatus").textContent = t.running ? `Updating: ${t.progress}…` : t.error ? "Update failed: " + t.error : "";
+  $("trUpdate").disabled = $("trReset").disabled = t.running;
+  document.querySelectorAll("#trRange button").forEach(b => b.setAttribute("aria-pressed", b.dataset.range === trRange));
+  if (!L || !L.history.length) { if (L) $("trKpis").innerHTML = kpi("Starting", "…", "first day being recorded"); return; }
+  const H = L.history, V = H.slice(rangeFrom(H, trRange)), last = H[H.length - 1];
+  const all = perf(H, "plan"), p = perf(V, "plan"), k = perf(V, "hold"), diff = last.plan - last.hold;
+  const lvl = L.risk_level ? `level ${L.risk_level}` : `cap ${capText(L.loss_limit)}`;
+  $("trKpis").innerHTML =
+    kpi("Plan portfolio", usd(last.plan), `${susd(last.plan - H[0].plan)} (${spct(all.ret)}) since ${L.start}`, "hero") +
+    kpi(`Return, ${RANGE_LABEL[trRange]}`, `<span class="${p.ret >= 0 ? "pos" : "neg"}">${spct(p.ret)}</span>`, `kept as is ${spct(k.ret)}`) +
+    kpi("Annualized", p.ann == null ? "–" : spct(p.ann), p.ann == null ? "shown once the range spans a year" : `kept as is ${spct(k.ann)}`) +
+    kpi("Max drawdown", spct(p.dd), `kept as is ${spct(k.dd)}`) +
+    kpi("Plan vs. kept", `<span class="${diff >= 0 ? "pos" : "neg"}">${susd(diff)}</span>`, diff >= 0 ? "following the plan is ahead" : "keeping as is is ahead") +
+    kpi("Record", `${H.length} day${H.length > 1 ? "s" : ""}`, `${lvl} · last ${last.date}${L.backfilled ? " · replayed start" : ""}`);
+  renderTrackerChart(V, L);
+  const fmtOrders = os => os.length ? os.map(o => `${o[0] === "buy" ? "+" : "−"}${esc(o[1])} ${usd(o[2])}`).join(", ") : "–";
+  $("trDays").innerHTML = "<tr><th>Date</th><th>Plan</th><th>Kept</th><th>Diff</th><th>Cap</th><th>Invested</th><th class='name'>Plan's orders</th></tr>" +
+    [...H].reverse().map(h => `<tr><td>${h.date}</td><td>${usd(h.plan)}</td><td>${usd(h.hold)}</td>
+      <td class="${h.plan >= h.hold ? "pos" : "neg"}">${susd(h.plan - h.hold)}</td>
+      <td>${capText(capOf(h, L))}</td><td>${h.invested == null ? "–" : pct(h.invested, 0)}</td>
+      <td class="reason">${fmtOrders(h.orders.plan)}</td></tr>`).join("");
+  const rows = (L.holdings?.plan || []);
+  const settledCash = L.books.plan.settled + L.books.plan.unsettled;
+  $("trHoldings").innerHTML = "<tr><th>Ticker</th><th class='name'>Name</th><th>Shares</th><th>Value</th></tr>" +
+    rows.map(r => `<tr><td><strong>${esc(r[0])}</strong></td><td class="name">${esc(r[3])}</td><td>${r[1].toFixed(4)}</td><td>${usd(r[2])}</td></tr>`).join("") +
+    (settledCash >= 0.01 ? `<tr><td>Cash</td><td class="name">settled and settling</td><td></td><td>${usd(settledCash)}</td></tr>` : "");
+}
+function renderTrackerChart(H, L) {
+  const W = 760, H2 = 280, Lm = 70, R = 16, T = 14, B = 32;
+  const vals = H.flatMap(h => [h.plan, h.hold]);
+  let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.12 || hi * 0.005; lo -= pad; hi += pad;
+  const n = H.length, sx = i => Lm + (n > 1 ? i / (n - 1) : 0.5) * (W - Lm - R), sy = v => H2 - B - ((v - lo) / (hi - lo)) * (H2 - T - B);
+  const yt = [0, 1, 2, 3].map(i => lo + (hi - lo) * i / 3);
+  const step = Math.max(1, Math.ceil(n / 7)); const xt = H.map((_, i) => i).filter(i => i % step === 0);
+  const fmtX = i => n > 300 ? H[i].date.slice(0, 7) : H[i].date.slice(5);
+  const grid = axes(W, H2, Lm, R, T, B, sx, sy, xt, yt, fmtX, v => "$" + Math.round(v).toLocaleString());
+  const pts = key => H.map((h, i) => `${sx(i).toFixed(1)},${sy(h[key]).toFixed(1)}`);
+  const area = n > 1 ? `<path d="M${pts("plan").join("L")}L${sx(n - 1)},${H2 - B}L${sx(0)},${H2 - B}Z" fill="var(--s1)" fill-opacity=".07"/>` : "";
+  const line = (key, color, w) => `<path d="M${pts(key).join("L")}" fill="none" stroke="var(${color})" stroke-width="${w}" stroke-linejoin="round"/>` +
+    (n < 60 ? H.map((h, i) => `<circle cx="${sx(i)}" cy="${sy(h[key])}" r="2.5" fill="var(${color})"><title>${h.date}: ${usd(h[key])}</title></circle>`).join("") : "");
+  const marks = H.map((h, i) => i && capOf(h, L) !== capOf(H[i - 1], L) ?
+    `<line x1="${sx(i)}" x2="${sx(i)}" y1="${T}" y2="${H2 - B}" stroke="var(--s3)" stroke-dasharray="3 3"><title>${h.date}: risk cap changed to ${capText(capOf(h, L))}</title></line>` : "").join("");
+  $("trChart").innerHTML = `<svg viewBox="0 0 ${W} ${H2}" width="100%" role="img" aria-label="Paper portfolio values">${grid}${area}${marks}${line("hold", "--s2", 1.75)}${line("plan", "--s1", 2.5)}</svg>
+    <div class="legend"><span style="--c: var(--s1)">Followed the plan</span><span style="--c: var(--s2)">Kept as is</span>${marks ? '<span style="--c: var(--s3)">Risk level changed</span>' : ""}</div>`;
+}
+async function pollTracker() {
+  const t = await api("/api/tracker");
+  renderTracker(t);
+  if (t.running) setTimeout(pollTracker, 1500);
+  return t;
+}
+document.querySelectorAll("#trRange button").forEach(b => b.onclick = () => {
+  trRange = b.dataset.range; store.set("trRange", trRange); if (lastTracker) renderTracker(lastTracker);
+});
+$("trStartBtn").onclick = async () => {
+  try { await api("/api/tracker/start", {start: $("trStart").value}); pollTracker(); }
+  catch (e) { showError(e.message); }
+};
+$("trUpdate").onclick = async () => { try { await api("/api/tracker/update", {}); pollTracker(); } catch (e) { showError(e.message); } };
+$("trReset").onclick = async () => {
+  if (!confirm("Start a new record? The current one is archived next to your holdings file, not deleted.")) return;
+  try { await api("/api/tracker/reset", {}); pollTracker(); } catch (e) { showError(e.message); }
+};
+
+$("useAi").onchange = () => { store.set("useAi", $("useAi").checked); refresh(); };
+$("scan").onchange = () => { store.set("scan", $("scan").checked); refresh(); };
+
+async function pollAi() {
+  const a = await api("/api/ratings");
+  $("runAi").disabled = a.running;
+  const n = Object.keys(a.ratings || {}).length;
+  $("aiStatus").textContent = a.running ? "Agents running… each fund takes a few minutes." :
+    a.error ? "AI ratings failed: " + a.error : a.date ? `${n} ratings from ${a.date}.` : "Not run today.";
+  $("aiLog").textContent = (a.log || []).join("\n");
+  if (a.running) setTimeout(pollAi, 5000);
+  else if (n && $("useAi").checked && lastPlan && !lastPlan.ai_used) refresh();
+}
+$("runAi").onclick = async () => {
+  if (!confirm("Run the AI agents on your holdings and the funds the plan wants to buy? This uses your OpenAI credit and takes a while.")) return;
+  try { await api("/api/ratings", {}); $("useAi").checked = true; store.set("useAi", true); pollAi(); } catch (e) { showError(e.message); }
+};
+
+(async () => {
+  $("useAi").checked = store.get("useAi", false);
+  $("scan").checked = store.get("scan", true);
+  const linked = location.hash.slice(1);
+  showTab(document.getElementById(linked)?.classList.contains("tab") ? linked : store.get("tab", "today"));
+  if (linked) history.replaceState(null, "", location.pathname);
+  window.scrollTo(0, 0);
+  try {
+    state = await api("/api/state");
+    levels = state.risk.levels; riskLevel = state.risk.level; showRisk(riskLevel); showRiskOptions(state.risk); drawEditors();
+  } catch (e) { showError(e.message); }
+  $("trStart").value = new Date().toISOString().slice(0, 10);
+  pollAi(); pollBacktest(); refresh(); loadMarket();
+  // The record runs from day one: catch it up on every visit, or start it if there is none.
+  pollTracker().then(t => {
+    if (t.running) return;
+    api(t.ledger ? "/api/tracker/update" : "/api/tracker/start", {}).then(pollTracker).catch(() => {});
+  });
+})();
+</script>
+</body>
+</html>
