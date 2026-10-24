@@ -113,6 +113,11 @@ class Probabilistic:
         return pd.DataFrame({"mean": mean, "median": q50, "q05": q05, "q95": q95, "p_gain": p_gain,
                              "sigma": sigma, "cash_h": cash}, index=rows.index)
 
+    def __getstate__(self):
+        # The fitted model is what gets saved; the function that made it is not needed again
+        # (and a lambda cannot be pickled).
+        return {k: v for k, v in self.__dict__.items() if k != "make"}
+
     def describe(self) -> dict:
         return {**self.model.describe(), "z_quantiles": self.z_q, "z_count": int(len(self.z)),
                 "train_start": self.train_start, "train_end": self.train_end}

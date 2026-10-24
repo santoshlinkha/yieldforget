@@ -635,7 +635,7 @@ function renderForecasts(d) {
   else {
     const c = r.calibration || {};
     $("fcRunInfo").innerHTML = `<p class="muted"><b>${esc(r.model)}</b>, ${r.horizon} sessions, information cutoff ${esc(r.info_cutoff)} · trained ${esc(r.train_start)} to ${esc(r.train_end)} · ${esc(r.backend)}, ${r.seconds.toFixed(1)} s, peak ${r.peak_memory_mb ? r.peak_memory_mb.toFixed(0) + " MB" : "–"} · ` +
-      (c.trial ? `backed by trial ${c.trial}: IC ${c.mean_ic.toFixed(3)} (95% ${c.ic_ci[0].toFixed(3)} to ${c.ic_ci[1].toFixed(3)}), calibration ${c.calibration.toFixed(2)}, coverage ${pct(c.coverage_90, 0)}` : "<b>no walk-forward trial backs it</b>: the plan gives it no weight") + `</p>`;
+      (c.trial ? `backed by trial ${c.trial}: IC ${c.mean_ic.toFixed(3)} (95% ${c.ic_ci[0].toFixed(3)} to ${c.ic_ci[1].toFixed(3)}), within-date calibration ${c.calibration_xs == null ? "–" : c.calibration_xs.toFixed(2)} (what the plan uses), coverage ${pct(c.coverage_90, 0)}` : "<b>no walk-forward trial backs it</b>: the plan gives it no weight") + `</p>`;
     const rows = [...r.forecasts].sort((a, b) => fcSort.dir * ((a[fcSort.key] ?? 0) - (b[fcSort.key] ?? 0)));
     const head = [["ticker", "Ticker"], ["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
     $("fcTable").innerHTML = "<tr>" + head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${fcSort.key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
@@ -643,9 +643,11 @@ function renderForecasts(d) {
     $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
       fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderForecasts(lastFc); });
   }
-  const t = d.trials.filter(x => x.name.startsWith("forecast_study"));
-  $("fcTrials").innerHTML = "<tr><th>Universe</th><th>Horizon</th><th>Model</th><th>IC (95%)</th><th>R²</th><th>Calibration</th><th>Coverage</th><th>Brier vs null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
-    t.flatMap(x => Object.values(x.scores).map(m => `<tr><td>${esc(x.universe)}${x.universe === "sp500" ? " (survivorship-biased)" : ""}</td><td>${x.horizon}</td><td>${esc(m.name)}</td><td>${m.mean_ic == null || isNaN(m.mean_ic) ? "–" : m.mean_ic.toFixed(3) + ` (${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration == null || isNaN(m.calibration) ? "–" : m.calibration.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(4)} / ${m.brier_null.toFixed(4)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`)).join("");
+  const latest = {};
+  d.trials.filter(x => /^(forecast|challenger)_study/.test(x.name)).forEach(x => { latest[`${x.name.replace(":rescore", "")}`] = x; });
+  const t = Object.values(latest).sort((a, b) => a.horizon - b.horizon);
+  $("fcTrials").innerHTML = "<tr><th>Universe</th><th>Horizon</th><th>Model</th><th>IC (95%)</th><th>R²</th><th>Calibration (within date)</th><th>Coverage</th><th>Brier vs null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
+    t.flatMap(x => Object.values(x.scores).map(m => `<tr><td>${esc(x.universe)}${x.universe === "sp500" ? " (survivorship-biased)" : ""}</td><td>${x.horizon}</td><td>${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` (${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(4)} / ${m.brier_null.toFixed(4)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`)).join("");
   const j = d.job;
   $("fcStatus").textContent = j.running ? j.progress : j.error ? "Failed: " + j.error : "";
   $("fcRun").disabled = j.running;

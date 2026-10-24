@@ -124,7 +124,7 @@ def test_a_forecast_run_is_saved_immutably_and_its_model_reloads_identically(tmp
     monkeypatch.setattr(engine, "bars", _fake_bars(close, high, low, volume, market))
     con = connect(tmp_path / "p.sqlite3")
     run = engine.run_forecast(con, tmp_path, [c for c in close.columns if c != "BIL"], horizon=20,
-                              model="elastic_net", device_setting="cpu", bags=2, artifact_dir=tmp_path / "models")
+                              model="xgb_quantile", device_setting="cpu", bags=2, artifact_dir=tmp_path / "models")
     assert run["info_cutoff"] == str(close.index[-1].date()) and len(run["forecasts"]) == 12
     f = run["forecasts"][0]
     assert f["q05"] <= f["median"] <= f["q95"] and 0 <= f["p_gain"] <= 1 and f["estimation_sd"] >= 0
@@ -134,6 +134,14 @@ def test_a_forecast_run_is_saved_immutably_and_its_model_reloads_identically(tmp
     saved = engine.load_run(con, run["run_id"])
     model = engine.load_model(saved)
     assert model.horizon == 20 and saved["backend"] == "cpu"
+    # The reloaded model reproduces the saved forecasts exactly.
+    last = close.index[-1]
+    panel = F.build_panel(close, high, low, volume, market, "BIL", pd.DatetimeIndex([last]), horizon=20)
+    again = model.predict(panel.xs(last, level="date", drop_level=False))
+    stored = {f["ticker"]: f["mean"] for f in saved["forecasts"]}
+    assert len(again) == len(stored)
+    for (_, t), m in again["mean"].items():
+        assert m == pytest.approx(stored[t], abs=1e-9)
 
 
 def test_optimizer_inputs_are_shrunk_clipped_and_conservative():

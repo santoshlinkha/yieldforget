@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import uuid
@@ -92,6 +93,17 @@ class Job:
     def state(self) -> dict:
         return {"running": self.running, "progress": self.progress, "result": self.result,
                 "error": self.error, "log": self.log}
+
+
+def _finite(value):
+    """NaN and infinity as null: they are not JSON, and a browser refuses the whole response."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
 
 
 def _today() -> str:
@@ -507,7 +519,7 @@ def make_handler(app: App):
             self.wfile.write(body)
 
         def _json(self, payload, status=HTTPStatus.OK):
-            self._send(status, json.dumps(payload, default=str).encode(), "application/json")
+            self._send(status, json.dumps(_finite(payload), default=str, allow_nan=False).encode(), "application/json")
 
         def _body(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
