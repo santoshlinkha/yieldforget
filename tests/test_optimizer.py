@@ -452,3 +452,13 @@ def test_a_small_share_is_bought_less_often_not_dropped():
     assert _frequency(5.0, 1.0) == ("every market day", 5.0)
     assert _frequency(0.30, 1.0) == ("every week", 1.5)
     assert _frequency(0.06, 1.0) == ("every month", 1.26)
+
+
+def test_an_account_without_contributions_funds_its_gaps_from_the_cash_fund():
+    book = PortfolioContext(positions=[Position(ticker="CASH", quantity=1000)])
+    plan = build_plan(book, {}, _settings(loss_limit=0.10), closes=_closes(), universe=["AAA", "BBB", "WILD"])
+    assert plan.daily_budget == 0 and any(r.trade > 0 for r in plan.rows)
+    s = daily_orders(plan, settled_cash=0.0)
+    sold = sum(o.amount for o in s.orders if o.side == "sell" and o.ticker == "CASH")
+    bought = sum(o.amount for o in s.tomorrow if o.side == "buy" and o.ticker != "CASH")
+    assert sold > 0 and bought == pytest.approx(sum(r.trade for r in plan.rows if r.trade >= max(1, 0.005 * plan.total)), abs=0.05)

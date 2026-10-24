@@ -61,6 +61,11 @@ nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
 .risk-summary .name { font-weight: 600; }
 .risk-summary .limit { color: var(--muted); font-size: 12.5px; }
 .small-btn { padding: 3px 10px; font-size: 12.5px; }
+.acct-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.acct-tabs button { background: var(--surface); color: var(--muted); border: 0; border-radius: 0; padding: 5px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.acct-tabs button + button { border-left: 1px solid var(--border); }
+.acct-tabs button[aria-selected="true"] { background: var(--accent); color: #fff; }
+.acct-tabs .v { font-weight: 500; opacity: .85; margin-left: 4px; }
 .risk .lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
 .risk input[type=range] { flex: 1; min-width: 120px; }
 .risk-read { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; min-width: 250px; }
@@ -235,8 +240,11 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <button class="ghost small-btn" id="riskEdit" title="Risk level, stress measure and growth target are set in Settings">Change</button>
       </div>
       <div class="toggles">
-        <label class="check" title="Which part of the IRA this plan is for; each has its own settings">Sleeve
-          <select id="sleeve" aria-label="Sleeve"><option value="investing">Investing</option><option value="trading">Trading</option></select></label>
+        <div class="acct-tabs" role="tablist" aria-label="Account" id="acctTabs">
+          <button role="tab" data-s="investing" title="The long-term portfolio; recurring contributions go here">Investing <span class="v"></span></button>
+          <button role="tab" data-s="trading" title="The experimental allocation; its value moves only with its own results and transfers">Trading <span class="v"></span></button>
+        </div>
+        <select id="sleeve" aria-label="Account" hidden><option value="investing">Investing</option><option value="trading">Trading</option></select>
         <label class="check"><input type="checkbox" id="scan" checked> Scan <span id="scanCount">funds</span></label>
         <label class="check"><input type="checkbox" id="useAi"> AI ratings</label>
       </div>
@@ -265,7 +273,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         </div>
         <div>
           <div class="card">
-            <div class="card-head"><h3>Since day one</h3><button class="ghost" data-goto="tracker">Performance →</button></div>
+            <div class="card-head"><h3>Since day one <span class="muted small">whole IRA, paper record</span></h3><button class="ghost" data-goto="tracker">Performance →</button></div>
             <div id="ovPerf"><p class="muted">Loading the paper record…</p></div>
           </div>
           <div class="card">
@@ -538,7 +546,7 @@ async function refresh() {
   try {
     const r = await api("/api/plan", {sleeve: $("sleeve").value, risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
     if (seq !== planSeq) return;   // a newer request is on its way; this answer is stale
-    lastPlan = r; render(r);
+    lastPlan = r; render(r); loadAcctTabs();
   } catch (e) { if (seq === planSeq) { showError(e.message); $("subtitle").textContent = "Could not optimize."; showNoPlan(e.message); } }
   finally { if (seq === planSeq) busy(false); }
 }
@@ -567,7 +575,7 @@ async function showNoPlan(message) {
           await api("/api/ledger/transfer", s.cash ? {from: "investing", to: "trading", cash: s.cash}
                                                    : {from: "investing", to: "trading", ticker: s.ticker, quantity: s.quantity, price: s.price});
         }
-        refresh();
+        refresh(); loadAcctTabs();
       } catch (e) { showError(e.message); btn.disabled = false; }
     };
   } catch (e) { /* the message above already says what is wrong */ }
@@ -581,6 +589,8 @@ function goalShort(g) {
 }
 function render(r) {
   const p = r.plan, s = r.suggestion, limit = p.settings.loss_limit;
+  const acct = r.sleeve === "trading" ? "Trading account" : "Investing account";
+  $("ovSub").textContent = `${acct}: today's orders at its risk level, and where the market stands.`;
   $("subtitle").textContent = `${r.date} · ${usd(p.total)} · ${p.scanned} funds scanned${r.ai_used ? " · AI applied" : ""}`;
   $("subtitle").textContent += " · preview, not saved";
   $("subtitle").title = "A preview is computed, not stored. Save it to make it the official recommendation.";
@@ -591,7 +601,8 @@ function render(r) {
     kpi("Expected growth", pct(p.expected_target) + "/yr", `≈ ${usd(p.expected_target * p.total)}/yr · now ${pct(p.expected_current)}` +
       (p.goal ? ` · target ${pct(p.goal.target)}${goalShort(p.goal)}` : "")) +
     kpi("Invested", pct(1 - p.cash.target), `rest in ${esc(p.cash.ticker)} · now ${pct(1 - p.cash.current)}`) +
-    kpi("Daily buys", usd(p.daily_budget), p.days_to_target == null ? "paused: nothing under target" : `${Math.ceil(p.days_to_target)} trading days to target`);
+    kpi("Daily buys", usd(p.daily_budget), p.daily_budget <= 0 ? "no recurring contributions to this account"
+      : p.days_to_target == null ? "paused: nothing under target" : `${Math.ceil(p.days_to_target)} trading days to target`);
 
   const sessionDay = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric"});
   $("ordersTitle").textContent = r.orders_session
@@ -1128,7 +1139,20 @@ $("saveRiskSettings").onclick = async () => {
   } catch (e) { showError(e.message); }
 };
 
+async function loadAcctTabs() {
+  document.querySelectorAll("#acctTabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.s === $("sleeve").value));
+  try {
+    const d = await api("/api/ledger");
+    document.querySelectorAll("#acctTabs button").forEach(b => { b.querySelector(".v").textContent = usd(d.sleeves[b.dataset.s].equity); });
+  } catch (e) { /* values are a convenience; the tabs work without them */ }
+}
+document.querySelectorAll("#acctTabs button").forEach(b => b.onclick = () => {
+  if ($("sleeve").value === b.dataset.s) return;
+  $("sleeve").value = b.dataset.s; $("sleeve").onchange();
+});
+
 $("sleeve").onchange = async () => {
+  loadAcctTabs();
   store.set("sleeve", $("sleeve").value);
   try { const st = await api("/api/state?sleeve=" + $("sleeve").value); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk); } catch (e) { showError(e.message); }
   $("setSleeve").value = $("sleeve").value; loadRiskSettings();
@@ -1171,7 +1195,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadHardware(); loadRiskSettings();
+  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over

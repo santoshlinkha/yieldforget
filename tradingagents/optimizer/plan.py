@@ -634,12 +634,17 @@ def daily_orders(plan: Plan, settled_cash: float, min_order: float = 1.0) -> Dai
         orders.append(Order("sell", ticker, amount, why(ticker)))
     proceeds = round(sum(a for _, a in trims), 2)
 
-    # Today: new money from the cash fund, at the daily pace, for what trims will not cover.
+    # Today: money from the cash fund for what trims will not cover. With recurring
+    # contributions it goes in at their daily pace; an account without them (Trading)
+    # has no pace to keep, so the cash fund covers the whole gap at once.
     remaining = max(sum(gaps.values()) - proceeds, 0.0)
-    from_cash = round(min(remaining, plan.daily_budget, plan.cash.value), 2)
+    pace = plan.daily_budget if plan.daily_budget > 0 else remaining
+    from_cash = round(min(remaining, pace, plan.cash.value), 2)
     if from_cash >= min_order:
         orders.append(Order("sell", cash, from_cash,
-                            "new money for tomorrow's buys, at your daily pace; it settles overnight"))
+                            "new money for tomorrow's buys, at your daily pace; it settles overnight"
+                            if plan.daily_budget > 0 else
+                            "cash-fund money for tomorrow's buys; it settles overnight"))
     else:
         from_cash = 0.0
     settling = round(proceeds + from_cash, 2)

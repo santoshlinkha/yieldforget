@@ -141,6 +141,9 @@ class Store:
         first, then the cash-like fund, then nothing else unless you pick it. A preview;
         nothing moves until you confirm with ``ledger.transfer``."""
         state = self.ledger.state("investing", as_of, prices)
+        # Only what Trading still lacks: funding it twice would double its allocation.
+        already = self.ledger.state("trading", as_of, prices).equity
+        target, amount = amount, max(amount - already, 0.0)
         steps, left = [], amount
         if state.cash.available > 0.005:
             take = min(left, state.cash.available)
@@ -152,7 +155,8 @@ class Store:
             qty = min(state.positions[t], left / prices[t])
             steps.append({"ticker": t, "quantity": round(qty, 6), "price": prices[t], "value": round(qty * prices[t], 2)})
             left -= qty * prices[t]
-        return {"amount": amount, "steps": steps, "short_by": round(max(left, 0.0), 2),
+        return {"amount": amount, "target": target, "trading_already": round(already, 2),
+                "steps": steps, "short_by": round(max(left, 0.0), 2),
                 "unsettled_not_movable": round(state.cash.unsettled, 2),
                 "note": ("Moves only what Investing really holds. Unsettled proceeds cannot move until they settle. "
                          "To use other holdings, pick them yourself.")}

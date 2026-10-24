@@ -330,3 +330,13 @@ def test_a_running_job_is_not_paid_for_twice_and_reservations_count(ledger, monk
     gw.run(task="brief", provider="openai", model="test-model", schema_version="v1", info_cutoff="2026-10-16",
            inputs={"x": 1}, work=work, est_usd=0.04, est_requests=1, allow_paid=True)
     assert gw.reserved() == (0.0, 0)
+
+
+def test_funding_trading_twice_proposes_only_what_is_missing(tmp_path):
+    (tmp_path / "my_portfolio.json").write_text(json.dumps({"positions": [{"ticker": "SGOV", "quantity": 30}]}))
+    store = Store(tmp_path)
+    first = store.trading_assignment_preview(1000.0, {"SGOV": 100.0}, "2100-01-01")
+    step = first["steps"][0]
+    store.ledger.transfer("investing", "trading", "2100-01-01", ticker="SGOV", quantity=step["quantity"], price=100.0)
+    again = store.trading_assignment_preview(1000.0, {"SGOV": 100.0}, "2100-01-01")
+    assert again["steps"] == [] and again["trading_already"] == 1000.0 and again["amount"] == 0.0
