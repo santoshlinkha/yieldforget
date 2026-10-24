@@ -55,6 +55,12 @@ nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
 .controls { background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); }
 .controls .wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; }
 .risk { display: flex; align-items: center; gap: 14px; flex: 1 1 520px; min-width: 0; }
+.risk-summary { display: flex; align-items: baseline; gap: 8px; flex: 1 1 520px; min-width: 0; flex-wrap: wrap; }
+.risk-summary .lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.risk-summary .lvl { font-size: 13px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 6px; padding: 1px 8px; }
+.risk-summary .name { font-weight: 600; }
+.risk-summary .limit { color: var(--muted); font-size: 12.5px; }
+.small-btn { padding: 3px 10px; font-size: 12.5px; }
 .risk .lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
 .risk input[type=range] { flex: 1; min-width: 120px; }
 .risk-read { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; min-width: 250px; }
@@ -222,22 +228,11 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
   </div>
   <div class="controls">
     <div class="wrap">
-      <div class="risk">
-        <span class="lbl">Risk level</span>
-        <div class="risk-track">
-          <input type="range" id="risk" min="1" max="10" step="1" value="2" aria-label="Risk level, 1 to 10">
-          <div class="ticks" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>
-        </div>
-        <div class="risk-read"><span class="lvl" id="riskNum">2</span><span class="name" id="riskName">…</span><span class="limit" id="riskLimit"></span></div>
-      </div>
-      <div class="riskopts">
-        <label class="check" title="How the stress loss is measured">Measure
-          <select id="riskModel" aria-label="How the stress loss is measured">
-            <option value="worst_case">Worst case: every holding at its worst drop</option>
-            <option value="scenarios">Past crashes replayed (less safe: broke its limit in backtests)</option>
-          </select></label>
-        <label class="check" title="Aim for this expected growth a year at the least risk; blank for the most growth your level allows">Growth target
-          <input type="number" id="targetGrowth" min="0" max="50" step="0.5" placeholder="none" aria-label="Growth target, percent a year"> %</label>
+      <div class="risk-summary">
+        <span class="lbl">Risk</span>
+        <span class="lvl" id="riskNum">2</span><span class="name" id="riskName">…</span>
+        <span class="limit" id="riskLimit"></span><span class="limit" id="riskExtra"></span>
+        <button class="ghost small-btn" id="riskEdit" title="Risk level, stress measure and growth target are set in Settings">Change</button>
       </div>
       <div class="toggles">
         <label class="check" title="Which part of the IRA this plan is for; each has its own settings">Sleeve
@@ -420,7 +415,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     </section>
 
     <section class="tab" id="settings">
-      <div class="page-head"><div><h2>Settings</h2><p>Your holdings, recurring buys and what to scan. Saved to the JSON files next to the app.</p></div></div>
+      <div class="page-head"><div><h2>Settings</h2><p>Your holdings, recurring buys, risk and goals, and what to scan. Holdings and risk settings are kept in portfolio.sqlite3; recurring buys and the scan list in their files next to the app.</p></div></div>
       <div class="grid">
         <div class="card">
           <h3>Holdings</h3>
@@ -434,9 +429,9 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <div class="row"><button class="ghost" id="addBuy">Add ticker</button><button id="saveSchedule">Save buys</button></div>
           <p class="muted">The optimizer keeps your daily total but moves it to the funds that are under target.</p>
         </div>
-        <div class="card">
+        <div class="card" id="riskCard">
           <h3>Risk and goals</h3>
-          <p class="muted">Each sleeve keeps its own settings. The same choices sit in the bar at the top for the sleeve shown there.</p>
+          <p class="muted">Each sleeve keeps its own settings. The bar at the top shows them for the sleeve in view; change them here.</p>
           <div class="settings-grid">
             <label>Sleeve<select id="setSleeve"><option value="investing">Investing</option><option value="trading">Trading</option></select></label>
             <label>Risk level<select id="setLevel"></select></label>
@@ -511,30 +506,23 @@ const levelInfo = n => levels[n - 1] || {level: n, name: "", loss_limit: null};
 const capText = l => l == null ? "no cap" : (l * 100).toFixed(1).replace(/\.0$/, "") + "%";
 function showRisk(n) {
   const r = levelInfo(n);
-  $("risk").value = n; $("riskNum").textContent = n; $("riskName").textContent = r.name;
+  $("riskNum").textContent = n; $("riskName").textContent = r.name;
   $("riskLimit").textContent = r.loss_limit == null ? "no stress-loss cap" : `max stress loss ${capText(r.loss_limit)}`;
   $("btLimit").textContent = n;
   if (levels.length) drawRiskTable();
 }
-async function saveRisk(extra = {}) {
-  riskLevel = +$("risk").value;
-  try { await api("/api/risk", {sleeve: $("sleeve").value, level: riskLevel, ...extra}); } catch (e) { showError(e.message); }
-  if ($("setSleeve").value === $("sleeve").value) loadRiskSettings();
-  refresh();
-}
+
 function showRiskOptions(r) {
-  $("riskModel").value = r.model || "worst_case";
-  $("targetGrowth").value = r.target_growth == null ? "" : +(r.target_growth * 100).toFixed(2);
+  $("riskExtra").textContent = `· ${r.model === "scenarios" ? "past crashes replayed" : "worst case"} · ` +
+    (r.target_growth == null ? "no growth target" : `growth target ${(r.target_growth * 100).toFixed(1)}%`);
 }
-$("riskModel").onchange = () => saveRisk({model: $("riskModel").value});
-$("targetGrowth").onchange = () => {
-  const v = $("targetGrowth").value.trim();
-  saveRisk({target_growth: v === "" || +v === 0 ? null : +v / 100});
+$("riskEdit").onclick = () => {
+  $("setSleeve").value = $("sleeve").value; loadRiskSettings();
+  showTab("settings"); $("riskCard").scrollIntoView({behavior: "smooth", block: "start"});
 };
-$("risk").oninput = () => { showRisk(+$("risk").value); clearTimeout(timer); timer = setTimeout(saveRisk, 400); };
 function drawRiskTable() {
   $("riskTable").innerHTML = "<tr><th>Level</th><th class='name'>Name</th><th>Stress-loss cap</th></tr>" +
-    levels.map(r => `<tr class="${r.level === +$("risk").value ? "chosen" : ""}"><td><strong>${r.level}</strong></td><td class="name">${esc(r.name)}</td><td>${capText(r.loss_limit)}</td></tr>`).join("");
+    levels.map(r => `<tr class="${r.level === riskLevel ? "chosen" : ""}"><td><strong>${r.level}</strong></td><td class="name">${esc(r.name)}</td><td>${capText(r.loss_limit)}</td></tr>`).join("");
 }
 document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => showTab(b.dataset.goto));
 
@@ -1105,6 +1093,7 @@ $("saveRiskSettings").onclick = async () => {
     $("setSaved").textContent = "Saved for " + sleeve + ".";
     if (sleeve === $("sleeve").value) {   // the bar at the top shows this sleeve: bring it in line
       const st = await api("/api/state?sleeve=" + sleeve); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk); refresh();
+      pollTracker();
     }
   } catch (e) { showError(e.message); }
 };
@@ -1112,6 +1101,7 @@ $("saveRiskSettings").onclick = async () => {
 $("sleeve").onchange = async () => {
   store.set("sleeve", $("sleeve").value);
   try { const st = await api("/api/state?sleeve=" + $("sleeve").value); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk); } catch (e) { showError(e.message); }
+  $("setSleeve").value = $("sleeve").value; loadRiskSettings();
   refresh();
 };
 $("useAi").onchange = () => { store.set("useAi", $("useAi").checked); refresh(); };
