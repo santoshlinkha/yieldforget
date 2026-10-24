@@ -257,3 +257,17 @@ def test_recommendations_never_short_stay_within_settled_cash_and_limits(tmp_pat
     ideas.decide(con, out["id"], "AAA", "accepted")
     with pytest.raises(ValueError):
         ideas.decide(con, out["id"], "AAA", "maybe")
+
+
+def test_the_brier_skill_interval_runs_low_to_high_and_brackets_a_real_improvement():
+    from tradingagents.stocks.evaluate import event_scores
+
+    rng = np.random.default_rng(0)
+    dates = pd.bdate_range("2015-01-01", periods=60)
+    idx = pd.MultiIndex.from_product([dates, [f"T{i}" for i in range(40)]], names=["date", "ticker"])
+    p = rng.uniform(0.05, 0.95, len(idx))
+    y = (rng.uniform(size=len(idx)) < p).astype(float)       # the forecast is the true probability
+    frame = pd.DataFrame({"y": y, "p": p, "base": y.mean()}, index=idx)
+    s = event_scores(frame, "y", "p", "base")
+    lo, hi = s["skill_ci"]
+    assert lo < hi and lo > 0 and s["skill"] > 0

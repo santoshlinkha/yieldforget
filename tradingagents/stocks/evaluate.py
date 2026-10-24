@@ -55,8 +55,9 @@ def event_scores(frame: pd.DataFrame, target: str, prob: str, base: str, extra: 
     lo, hi = block_bootstrap(per_date.to_numpy())
     out = {"rows": int(len(f)), "dates": int(per_date.size), "base_rate": float(y.mean()),
            "brier": brier, "brier_null": null, "skill": 1 - brier / null if null else float("nan"),
-           "skill_ci": [1 - (null - hi) / null if null else None, 1 - (null - lo) / null if null else None]
-           if np.isfinite(lo) else [None, None],
+           # per_date is the null's error minus the model's, so its interval scaled by the null is the skill's
+           # (low first). The pooled skill and this per-date interval can differ slightly.
+           "skill_ci": [lo / null, hi / null] if null and np.isfinite(lo) else [None, None],
            "log_loss": log_loss(y, p), "log_loss_null": log_loss(y, q),
            "auc": float(roc_auc_score(y, p)) if 0 < y.sum() < len(y) else None}
     bins = np.clip((p * 10).astype(int), 0, 9)

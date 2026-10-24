@@ -182,6 +182,8 @@ def summarize(h, pred, data, fit_log):
         for m, s in sc.items():
             d = dict(s.__dict__)
             d["p_value_holm"] = adj[m]
+            # Dates on which the model told stocks apart at all (a constant forecast has no rank).
+            d["ranked_dates"] = int(_ic_by_date(part[["label"]].assign(mean=part[f"{m}:mean"]), "mean").size)
             r["returns"][m] = d
         rel = _ic_by_date(part[["label_rel"]].rename(columns={"label_rel": "label"}).assign(mean=part["relative:mean"]),
                           "mean")
