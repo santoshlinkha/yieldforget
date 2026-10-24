@@ -285,4 +285,79 @@ CREATE TABLE forecasts (
     PRIMARY KEY (run_id, ticker)
 );
 """ + _guards("forecast_runs") + _guards("forecasts"),
+    4: """
+-- Stock research: one batch, all its stocks on one information cutoff.
+CREATE TABLE stock_runs (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    info_cutoff TEXT NOT NULL,            -- the last close the inputs include
+    earliest_execution TEXT NOT NULL,     -- the next session: nothing can trade at the cutoff's own close
+    requested_json TEXT NOT NULL,         -- tickers asked for, and where they came from
+    rejected_json TEXT NOT NULL,          -- tickers turned away, with reasons
+    universe_size INTEGER NOT NULL,
+    horizons_json TEXT NOT NULL,
+    code_version TEXT NOT NULL,
+    feature_schema TEXT NOT NULL,
+    thresholds_version TEXT NOT NULL,
+    thresholds_json TEXT NOT NULL,
+    models_json TEXT NOT NULL,            -- per horizon and target: model, artifact hash, backing trial
+    provenance_json TEXT NOT NULL,        -- prices through, filings and economic vintages used, news collected
+    config_json TEXT NOT NULL,
+    costs_json TEXT NOT NULL,             -- compute time, device, and any paid AI calls
+    seconds REAL NOT NULL
+);
+CREATE TABLE stock_forecasts (
+    run_id TEXT NOT NULL REFERENCES stock_runs(id),
+    ticker TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    status TEXT NOT NULL,                 -- ok | abstain
+    reasons_json TEXT NOT NULL,           -- data quality and evidence: why to trust it less, or not at all
+    payload_json TEXT NOT NULL,           -- every forecast figure
+    PRIMARY KEY (run_id, ticker, horizon)
+);
+-- Headlines as collected: publication and first-seen times, duplicates linked, never rewritten.
+CREATE TABLE stock_news (
+    id TEXT PRIMARY KEY,                  -- hash of the normalized headline and source
+    ticker TEXT NOT NULL,
+    title TEXT NOT NULL,
+    publisher TEXT,
+    url TEXT,
+    published_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    duplicate_of TEXT,
+    kind TEXT NOT NULL,                   -- fact | opinion | unclear
+    events_json TEXT NOT NULL,
+    sentiment REAL,                       -- positive minus negative, -1 to 1; NULL when not scored
+    sentiment_model TEXT
+);
+CREATE INDEX stock_news_ticker ON stock_news (ticker, published_at);
+-- Reviewable stock recommendations, and what was decided about them: separate records.
+CREATE TABLE stock_ideas (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES stock_runs(id),
+    created_at TEXT NOT NULL,
+    sleeve TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    payload_json TEXT NOT NULL
+);
+CREATE TABLE stock_idea_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    idea_id TEXT NOT NULL REFERENCES stock_ideas(id),
+    ticker TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    decision TEXT NOT NULL,               -- accepted | rejected | deferred
+    note TEXT
+);
+-- What happened, recorded once each forecast's horizon has passed.
+CREATE TABLE stock_outcomes (
+    run_id TEXT NOT NULL REFERENCES stock_runs(id),
+    ticker TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    matured_on TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    realized_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, ticker, horizon)
+);
+""" + "".join(_guards(t) for t in ("stock_runs", "stock_forecasts", "stock_news", "stock_ideas",
+                                   "stock_idea_decisions", "stock_outcomes")),
 }

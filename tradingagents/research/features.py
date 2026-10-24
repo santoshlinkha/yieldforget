@@ -41,6 +41,9 @@ PRICE_FEATURES = ["mom_1m", "mom_3m", "mom_6m", "mom_12_1", "rev_1w", "vol_1m", 
                   "beta_1y", "dist_52w_high", "gap_ma200", "dd_1y", "range_1m", "log_dollar_vol",
                   "volume_trend", "amihud"]
 MARKET_FEATURES = ["vix", "vix_slope", "tnx_chg_3m", "irx", "spy_mom_3m", "spy_vol_1m"]
+# Economic levels (``tradingagents.stocks.macro``): like market features, the same for every asset on a date.
+MACRO_FEATURES = ["cpi_yoy", "unrate_chg_3m", "payrolls_yoy", "nfci", "curve_10y2y", "credit_spread",
+                  "credit_chg_3m", "fed_funds"]
 ANALYST_FEATURES = ["target_upside", "n_target_firms", "net_upgrades_90d", "net_target_raises_90d"]
 EARNINGS_FEATURES = ["last_surprise", "surprise_4q", "sessions_since_report"]
 

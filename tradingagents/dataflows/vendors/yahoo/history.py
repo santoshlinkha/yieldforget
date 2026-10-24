@@ -214,6 +214,23 @@ def financials(symbol: str, cache_dir=None) -> dict:
     return store.snapshot(symbol, "financials-v3", fetch, ttl=HISTORY_TTL) if store else fetch()
 
 
+def actions(symbol: str, cache_dir=None) -> dict:
+    """Dividends (split-adjusted, per share) and splits only, as ``[date, value]`` pairs oldest
+    first: one light request per stock, refetched weekly. ``corporate_actions`` adds share counts."""
+    from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+
+    def fetch():
+        frame = yf_retry(lambda: _ticker(symbol).actions)
+        if frame is None or not len(frame):
+            return {"dividends": [], "splits": []}
+        pts = lambda col: [[str(i)[:10], float(v)] for i, v in frame[col].items() if v and v == v]  # noqa: E731
+        return {"dividends": pts("Dividends") if "Dividends" in frame else [],
+                "splits": pts("Stock Splits") if "Stock Splits" in frame else []}
+
+    store = local_store.store(cache_dir)
+    return store.snapshot(symbol, "actions", fetch, ttl=HISTORY_TTL) if store else fetch()
+
+
 def corporate_actions(symbol: str, cache_dir=None) -> dict:
     """Every dividend (split-adjusted, per share), every split, and the shares-outstanding history
     (as reported: not adjusted for splits), as ``[date, value]`` pairs oldest first; refetched weekly."""

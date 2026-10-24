@@ -126,6 +126,7 @@ class App:
         self.ai, self.backtest, self.tracker, self.explain, self.forecast = Job(), Job(), Job(), Job(), Job()
         self.moat_jobs: dict[str, Job] = {}
         self.daily = Job()   # the daily Chronos-2 record, apart from the runs started on the page
+        self.stocks = Job()  # a stock research batch
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -469,6 +470,74 @@ class App:
             r["name"] = describe(r["ticker"])
         return {**out, "horizon": horizon, "universe": universe,
                 "info_cutoff": runs[0]["info_cutoff"] if runs else None}
+
+    # --- stock research (API only: no page yet) ---
+
+    def start_stocks(self, body: dict) -> bool:
+        """A stock batch in the background: tickers pasted, from a CSV's text, the watchlist, holdings."""
+        from tradingagents.stocks.data import gather
+        from tradingagents.stocks.pipeline import BatchConfig, Progress, run_batch
+
+        names, sources = gather(self.store, body.get("tickers", ""), body.get("csv", ""),
+                                bool(body.get("watchlist")), bool(body.get("holdings")))
+        if not names:
+            raise ValueError("no tickers: paste some, send a CSV, or use the watchlist or holdings")
+        horizons = tuple(int(h) for h in body.get("horizons") or (5, 20, 60))
+        config = BatchConfig(horizons=horizons, news=body.get("news", True),
+                             device=self.store.get("global", "compute_backend"))
+
+        def work(job):
+            progress = Progress(lambda stage: setattr(job, "progress", stage))
+            job.log = progress.tickers       # per-stock status, read while it runs
+            return run_batch(self.store.con, self.cache_dir, names, sources, config, progress)
+
+        return self.stocks.start(work)
+
+    def stock_run(self, run_id: str | None) -> dict:
+        from tradingagents.stocks.pipeline import load_run
+
+        runs = [dict(r) for r in self.store.con.execute(
+            "SELECT id, created_at, info_cutoff, requested_json, seconds FROM stock_runs ORDER BY created_at DESC LIMIT 30")]
+        for r in runs:
+            r["requested"] = json.loads(r.pop("requested_json"))["tickers"]
+        return {"run": load_run(self.store.con, run_id), "runs": runs, "job": self.stocks.state()}
+
+    def stock_outcomes(self) -> dict:
+        from tradingagents.stocks.ideas import prospective
+        from tradingagents.stocks.outcomes import resolve, scorecard
+
+        recorded = resolve(self.store.con, self.cache_dir)
+        return {"recorded_now": recorded, "scorecard": scorecard(self.store.con),
+                "prospective": prospective(self.store.con, self.cache_dir)}
+
+    def stock_news_ai(self, body: dict) -> dict:
+        """The paid AI reading of a shortlist's news (asked for explicitly; budgeted; cached)."""
+        from datetime import UTC, datetime
+
+        from tradingagents.stocks.llm import read_news
+        from tradingagents.stocks.news import summary
+        from tradingagents.stocks.pipeline import load_run
+
+        run = load_run(self.store.con, body.get("run"))
+        if run is None:
+            raise ValueError("no stock run yet")
+        limit = int(self.store.get("global", "stock_rules")["llm_shortlist"])
+        ranked = sorted({f["ticker"]: abs((f.get("forecast") or {}).get("net") or 0) for f in run["forecasts"]
+                         if f["horizon"] == 20}.items(), key=lambda kv: -kv[1])
+        wanted = [t.upper() for t in body.get("tickers") or []] or [t for t, _ in ranked]
+        g = self.store.settings("global")
+        out = {}
+        for t in wanted[:limit]:
+            f = next((x for x in run["forecasts"] if x["ticker"] == t and x["horizon"] == 20), None)
+            if not f or not f.get("forecast"):
+                continue
+            fc = f["forecast"]
+            news = summary(self.store.con, t, datetime.now(UTC), days=14)
+            numbers = (f"20-session expected return above cash {fc['mean']:+.3%} (net of cost {fc['net']:+.3%}), "
+                       f"5-95% {fc['q05']:+.2%} to {fc['q95']:+.2%}, P(large loss) {fc['p_large_loss']:.0%}")
+            out[t] = read_news(t, f.get("name") or t, run["info_cutoff"], news["items"], numbers, self.config,
+                               gateway=self.gateway(), allow_paid=True, fallbacks=tuple(g["ai_fallbacks"]))
+        return {"shortlist": wanted[:limit], "readings": out}
 
     def live_records(self) -> list[dict]:
         """Every ETF model and horizon with saved runs, scored on what happened after each run."""
@@ -963,6 +1032,10 @@ def make_handler(app: App):
                     self._json(app.ai_usage())
                 elif url.path == "/api/forecasts/combined":
                     self._json(app.combined_forecasts(int(query.get("horizon") or 20), query.get("universe") or "etf"))
+                elif url.path == "/api/stocks":
+                    self._json(app.stock_run(query.get("run")))
+                elif url.path == "/api/stocks/outcomes":
+                    self._json(app.stock_outcomes())
                 elif url.path == "/api/forecasts/live":
                     self._json({"records": app.live_records(), "daily": app.daily.state()})
                 elif url.path == "/api/forecasts":
@@ -1070,6 +1143,24 @@ def make_handler(app: App):
                     self._json({"ok": True})
                 elif self.path == "/api/market/explain":
                     self._started(app.start_explain(), "The market explanation")
+                elif self.path == "/api/stocks/run":
+                    self._started(app.start_stocks(body), "A stock batch")
+                elif self.path == "/api/stocks/ideas":
+                    from tradingagents.stocks.ideas import make
+
+                    self._json(make(app.store.con, app.store, app.cache_dir, body.get("run"), int(body.get("horizon") or 20)))
+                elif self.path == "/api/stocks/decide":
+                    from tradingagents.stocks.ideas import decide
+
+                    decide(app.store.con, body["idea"], body["ticker"].upper(), body["decision"], body.get("note"))
+                    self._json({"recorded": True})
+                elif self.path == "/api/stocks/watchlist":
+                    from tradingagents.stocks.data import parse_tickers
+
+                    app.store.set("global", "stock_watchlist", parse_tickers(" ".join(body.get("tickers") or [])))
+                    self._json({"watchlist": app.store.get("global", "stock_watchlist")})
+                elif self.path == "/api/stocks/news-ai":
+                    self._json(app.stock_news_ai(body))
                 elif self.path == "/api/moat/sources":
                     self._started(app.start_moat_sources(body["symbol"]), "The moat reading")
                 elif self.path == "/api/tracker/start":

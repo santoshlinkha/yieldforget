@@ -31,7 +31,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .features import MARKET_FEATURES
+from .features import MACRO_FEATURES, MARKET_FEATURES
 
 TRADING_DAYS = 252
 
@@ -114,12 +114,12 @@ class Momentum(Forecaster):
 
 
 class Design:
-    """Features as a matrix: missing as 0, market levels standardized on training rows only."""
+    """Features as a matrix: missing as 0, market and economic levels standardized on training rows only."""
 
     def fit(self, train, features):
         self.features = list(features)
         x = train[self.features].astype(float)
-        self.levels = [f for f in self.features if f in MARKET_FEATURES]
+        self.levels = [f for f in self.features if f in MARKET_FEATURES or f in MACRO_FEATURES]
         self.mu = x[self.levels].mean().fillna(0.0)
         self.sd = x[self.levels].std().replace(0, 1.0).fillna(1.0)
         return self

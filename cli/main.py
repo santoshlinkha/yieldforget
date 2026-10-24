@@ -506,5 +506,156 @@ def book_ai(portfolio: str = PORTFOLIO_OPT):
                       "app (Settings > AI) or with POST /api/settings.[/yellow]")
 
 
+stocks_app = typer.Typer(help="Stock research: multi-ticker forecasts, recommendations and their record.",
+                         no_args_is_help=True)
+app.add_typer(stocks_app, name="stocks")
+
+
+def _stock_cache():
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+
+    load_dotenv(".env")
+    return Path(DEFAULT_CONFIG["data_cache_dir"]) / "optimizer"
+
+
+@stocks_app.command("run")
+@_book_errors
+def stocks_run(tickers: list[str] = typer.Argument(None, help="Tickers; also --csv, --watchlist, --holdings"),
+               csv: str = typer.Option(None, "--csv", help="A CSV with a ticker or symbol column"),
+               watchlist: bool = typer.Option(False, "--watchlist"), holdings: bool = typer.Option(False, "--holdings"),
+               horizons: str = typer.Option("5,20,60", help="Trading sessions, comma separated"),
+               news: bool = typer.Option(True, "--news/--no-news"), device: str = typer.Option("auto"),
+               portfolio: str = PORTFOLIO_OPT):
+    """Forecast the stocks at the latest close and save the run (local models; no paid calls)."""
+    from pathlib import Path
+
+    from tradingagents.stocks.data import gather
+    from tradingagents.stocks.pipeline import BatchConfig, Progress, run_batch
+
+    store = _book_store(portfolio)
+    names, sources = gather(store, " ".join(tickers or []), Path(csv).read_text(encoding="utf-8") if csv else "",
+                            watchlist, holdings)
+    if not names:
+        raise ValueError("no tickers: pass some, or --csv, --watchlist or --holdings")
+    config = BatchConfig(horizons=tuple(int(h) for h in horizons.split(",")), news=news, device=device)
+    out = run_batch(store.con, _stock_cache(), names, sources, config,
+                    Progress(lambda stage: console.print(f"[dim]{stage}[/dim]")))
+    console.print(f"Run {out['run_id'][:8]}: data to {out['info_cutoff']}, earliest execution "
+                  f"{out['earliest_execution']}, {out['seconds']:.0f} s.")
+    for t, why in out["rejected"].items():
+        console.print(f"[yellow]{t}: {why}[/yellow]")
+    stocks_show(run=out["run_id"], horizon=None, portfolio=portfolio)
+
+
+@stocks_app.command("show")
+@_book_errors
+def stocks_show(run: str = typer.Option(None, help="Run id or its start (default: the latest)"),
+                horizon: int = typer.Option(None, help="One horizon only"), portfolio: str = PORTFOLIO_OPT):
+    """A saved run's forecasts, one row per stock and horizon."""
+    from rich.table import Table
+
+    from tradingagents.stocks.pipeline import load_run
+
+    store = _book_store(portfolio)
+    if run:
+        run = next((x["id"] for x in store.con.execute("SELECT id FROM stock_runs") if x["id"].startswith(run)), run)
+    r = load_run(store.con, run)
+    if r is None:
+        raise ValueError("no stock run found")
+    table = Table(title=f"Run {r['id'][:8]} - data to {r['info_cutoff']} - thresholds {r['thresholds_version']}")
+    for c in ("Ticker", "h", "Net exp.", "5-95%", "P(gain)", "Up/Down/Side", "Break up/down", "Large loss",
+              "DD 5%", "News", "Evidence", "Notes"):
+        table.add_column(c)
+
+    def pct(x):
+        return "-" if x is None else f"{x * 100:+.1f}%"
+
+    for f in r["forecasts"]:
+        if horizon and f["horizon"] != horizon:
+            continue
+        fc = f.get("forecast") or {}
+        if f["status"] != "ok" or not fc:
+            table.add_row(f["ticker"], str(f["horizon"]), "abstain", "", "", "", "", "", "", "", "",
+                          "; ".join(f["reasons"])[:60])
+            continue
+        n = f.get("news") or {}
+        table.add_row(f["ticker"], str(f["horizon"]), pct(fc.get("net")), f"{pct(fc.get('q05'))} to {pct(fc.get('q95'))}",
+                      f"{fc.get('p_gain', 0):.0%}",
+                      f"{fc.get('trend_up', 0):.0%}/{fc.get('trend_down', 0):.0%}/{fc.get('trend_sideways', 0):.0%}",
+                      f"{fc.get('p_up_break', 0):.0%}/{fc.get('p_down_break', 0):.0%}", f"{fc.get('p_large_loss', 0):.0%}",
+                      pct(fc.get("dd_q05")),
+                      "-" if n.get("sentiment") is None else f"{n['sentiment']:+.2f} ({n['articles']})",
+                      (f.get("evidence_status") or {}).get("return", "?"), "; ".join(f["reasons"])[:60])
+    console.print(table)
+
+
+@stocks_app.command("watchlist")
+@_book_errors
+def stocks_watchlist(add: list[str] = typer.Option(None, "--add"), remove: list[str] = typer.Option(None, "--remove"),
+                     portfolio: str = PORTFOLIO_OPT):
+    """Show, add to or remove from the saved stock watchlist."""
+    from tradingagents.stocks.data import parse_tickers
+
+    store = _book_store(portfolio)
+    current = list(store.get("global", "stock_watchlist") or [])
+    for t in parse_tickers(" ".join(add or [])):
+        if t not in current:
+            current.append(t)
+    gone = set(parse_tickers(" ".join(remove or [])))
+    current = [t for t in current if t not in gone]
+    if add or remove:
+        store.set("global", "stock_watchlist", current)
+    console.print("Watchlist: " + (", ".join(current) or "(empty)"))
+
+
+@stocks_app.command("ideas")
+@_book_errors
+def stocks_ideas(horizon: int = 20, run: str = typer.Option(None), portfolio: str = PORTFOLIO_OPT):
+    """Reviewable stock recommendations from the latest run, within the Trading sleeve's rules."""
+    from tradingagents.stocks.ideas import make
+
+    store = _book_store(portfolio)
+    out = make(store.con, store, _stock_cache(), run, horizon)
+    console.print(f"Idea {out['id'][:8]} for {out['sleeve']}: ${out['settled_cash']:.2f} settled of "
+                  f"${out['sleeve_value']:.2f}; earliest execution {out['earliest_execution']}, hold until {out['hold_until']}.")
+    for line in out["lines"]:
+        order = line.get("order")
+        console.print(f"  {line['ticker']:6} {line['action']}"
+                      + (f": buy ${order['dollars']:.2f} ({order['shares']} sh)" if order else ""))
+    console.print(f"[dim]{out['note']}[/dim]")
+
+
+@stocks_app.command("decide")
+@_book_errors
+def stocks_decide(idea: str, ticker: str, decision: str, note: str = typer.Option(None), portfolio: str = PORTFOLIO_OPT):
+    """Record accepted, rejected or deferred for one stock of a recommendation (fills: book fill)."""
+    from tradingagents.stocks.ideas import decide
+
+    store = _book_store(portfolio)
+    ids = [r["id"] for r in store.con.execute("SELECT id FROM stock_ideas") if r["id"].startswith(idea)]
+    if len(ids) != 1:
+        raise ValueError(f"{idea} matches {len(ids)} recommendations")
+    decide(store.con, ids[0], ticker.upper(), decision, note)
+    console.print(f"Recorded {decision} for {ticker.upper()}.")
+
+
+@stocks_app.command("outcomes")
+@_book_errors
+def stocks_outcomes(portfolio: str = PORTFOLIO_OPT):
+    """Record what happened to matured forecasts; show the live scorecard and the Day-1 comparison."""
+    import json
+
+    from tradingagents.stocks.ideas import prospective
+    from tradingagents.stocks.outcomes import resolve, scorecard
+
+    store = _book_store(portfolio)
+    n = resolve(store.con, _stock_cache())
+    console.print(f"{n} outcome(s) recorded.")
+    console.print(json.dumps({"scorecard": scorecard(store.con), "prospective": prospective(store.con, _stock_cache())},
+                             indent=1, default=str))
+
+
 if __name__ == "__main__":
     app()

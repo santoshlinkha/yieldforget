@@ -37,6 +37,10 @@ GLOBAL_DEFAULTS = {
     "ai_fallbacks": [],       # other providers a failed paid call may move to; none by default
     "ai_estimates": {"rating": 0.30, "market_brief": 0.02},   # dollars reserved per job before it runs
     "compute_backend": "auto",
+    # Stock research: the saved watchlist, and the limits stock recommendations respect.
+    "stock_watchlist": [],
+    "stock_rules": {"sleeve": "trading", "max_position_share": 0.25, "max_names": 5, "min_order": 1.0,
+                    "max_large_loss_prob": 0.15, "llm_shortlist": 5},
 }
 LEGACY_FILES = ("my_portfolio.json", "my_buys.json", "my_risk.json", "my_universe.json", "paper_tracker.json")
 
