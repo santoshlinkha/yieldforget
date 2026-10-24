@@ -248,4 +248,41 @@ CREATE TABLE research_trials (
     seconds REAL NOT NULL
 );
 """ + _guards("research_trials"),
+    3: """
+-- A forecast run: one model, one horizon, one information cutoff, and its saved model files.
+CREATE TABLE forecast_runs (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    info_cutoff TEXT NOT NULL,
+    universe TEXT NOT NULL,
+    feature_schema TEXT NOT NULL,
+    train_start TEXT NOT NULL,
+    train_end TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    calibration_json TEXT NOT NULL,     -- the walk-forward trial it is backed by, and its scores
+    backend TEXT NOT NULL,
+    seconds REAL NOT NULL,
+    peak_memory_mb REAL,
+    code_version TEXT NOT NULL,
+    artifact_path TEXT NOT NULL,
+    artifact_sha256 TEXT NOT NULL
+);
+CREATE TABLE forecasts (
+    run_id TEXT NOT NULL REFERENCES forecast_runs(id),
+    ticker TEXT NOT NULL,
+    mean REAL NOT NULL,
+    median REAL NOT NULL,
+    q05 REAL NOT NULL,
+    q95 REAL NOT NULL,
+    p_gain REAL NOT NULL,
+    sigma REAL NOT NULL,
+    estimation_sd REAL,
+    cash_h REAL NOT NULL,
+    flags_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, ticker)
+);
+""" + _guards("forecast_runs") + _guards("forecasts"),
 }

@@ -202,6 +202,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <button role="tab" data-tab="plan">Allocation</button>
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="backtest">Backtest</button>
+        <button role="tab" data-tab="forecasts">Forecasts</button>
         <button role="tab" data-tab="settings">Settings</button>
       </nav>
       <div class="status" id="subtitle">Loading…</div>
@@ -360,6 +361,30 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div id="btVerdict"></div>
         <div id="btChart"></div>
         <div class="table-wrap"><table id="btTable"></table></div>
+      </div>
+    </section>
+
+    <section class="tab" id="forecasts">
+      <div class="page-head"><div><h2>Forecast models</h2><p>Return forecasts made on this machine from Yahoo prices: no paid AI. A forecast is a log return <b>above cash</b> over its horizon in trading sessions, not a yearly rate, with a 5-95% range and the chance of a gain. These are model estimates, not outcomes; the evidence for each model is its walk-forward record below.</p></div></div>
+      <div class="card">
+        <div class="row" style="margin-top:0">
+          <div style="width:140px"><label for="fcHorizon">Horizon</label><select id="fcHorizon"><option value="5">5 sessions</option><option value="20" selected>20 sessions</option><option value="60">60 sessions</option></select></div>
+          <div style="width:180px"><label for="fcModel">Model</label><select id="fcModel"><option value="elastic_net">Elastic Net</option><option value="momentum">Momentum</option><option value="xgb">XGBoost</option><option value="xgb_rank">XGBoost ranking</option><option value="xgb_quantile">XGBoost quantiles</option></select></div>
+          <button id="fcRun">Run forecast</button>
+          <label class="check" title="Feed the Investing plan from the latest forecast run instead of the volatility rule"><input type="checkbox" id="fcUse"> Use forecasts in the Investing plan</label>
+          <span class="muted" id="fcStatus"></span>
+        </div>
+        <div id="fcRunInfo"></div>
+        <div class="table-wrap" style="max-height:520px;overflow:auto"><table id="fcTable"></table></div>
+      </div>
+      <div class="card">
+        <h3>Model comparison (walk-forward, out of sample)</h3>
+        <p class="muted">Each row was refitted every year on data available then, and scored on the years after. <b>IC</b>: how well the forecast ranked assets on each date (0 is chance). <b>R²</b>: whether its sizes beat "no return above cash" (negative is worse). <b>Calibration</b>: 1 if sizes are right, near 0 if far too confident. <b>Coverage</b>: share of outcomes inside the 5-95% range (target 90%). <b>Net top fifth</b>: per period, after 10 bp a side. <b>p (Holm)</b>: chance the IC is luck, after counting every model tried. Feature importance is not causation.</p>
+        <div class="table-wrap"><table id="fcTrials"></table></div>
+      </div>
+      <div class="card">
+        <h3>Compute</h3>
+        <div id="fcHardware" class="muted">…</div>
       </div>
     </section>
 
@@ -598,6 +623,56 @@ function renderBacktest(r) {
     }).join("");
   $("btVerdict").innerHTML = "";
 }
+
+// --- forecasts ---
+const lpct = (x, d = 2) => x == null ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%`;
+let fcSort = {key: "mean", dir: -1}, lastFc = null;
+function renderForecasts(d) {
+  lastFc = d;
+  const r = d.run;
+  $("fcUse").checked = d.settings.investing.return_model === "forecast";
+  if (!r) { $("fcRunInfo").innerHTML = '<p class="muted">No forecast run yet.</p>'; $("fcTable").innerHTML = ""; }
+  else {
+    const c = r.calibration || {};
+    $("fcRunInfo").innerHTML = `<p class="muted"><b>${esc(r.model)}</b>, ${r.horizon} sessions, information cutoff ${esc(r.info_cutoff)} · trained ${esc(r.train_start)} to ${esc(r.train_end)} · ${esc(r.backend)}, ${r.seconds.toFixed(1)} s, peak ${r.peak_memory_mb ? r.peak_memory_mb.toFixed(0) + " MB" : "–"} · ` +
+      (c.trial ? `backed by trial ${c.trial}: IC ${c.mean_ic.toFixed(3)} (95% ${c.ic_ci[0].toFixed(3)} to ${c.ic_ci[1].toFixed(3)}), calibration ${c.calibration.toFixed(2)}, coverage ${pct(c.coverage_90, 0)}` : "<b>no walk-forward trial backs it</b>: the plan gives it no weight") + `</p>`;
+    const rows = [...r.forecasts].sort((a, b) => fcSort.dir * ((a[fcSort.key] ?? 0) - (b[fcSort.key] ?? 0)));
+    const head = [["ticker", "Ticker"], ["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
+    $("fcTable").innerHTML = "<tr>" + head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${fcSort.key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
+      rows.map(f => `<tr><td><b>${esc(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join("");
+    $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+      fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderForecasts(lastFc); });
+  }
+  const t = d.trials.filter(x => x.name.startsWith("forecast_study"));
+  $("fcTrials").innerHTML = "<tr><th>Universe</th><th>Horizon</th><th>Model</th><th>IC (95%)</th><th>R²</th><th>Calibration</th><th>Coverage</th><th>Brier vs null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
+    t.flatMap(x => Object.values(x.scores).map(m => `<tr><td>${esc(x.universe)}${x.universe === "sp500" ? " (survivorship-biased)" : ""}</td><td>${x.horizon}</td><td>${esc(m.name)}</td><td>${m.mean_ic == null || isNaN(m.mean_ic) ? "–" : m.mean_ic.toFixed(3) + ` (${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration == null || isNaN(m.calibration) ? "–" : m.calibration.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(4)} / ${m.brier_null.toFixed(4)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`)).join("");
+  const j = d.job;
+  $("fcStatus").textContent = j.running ? j.progress : j.error ? "Failed: " + j.error : "";
+  $("fcRun").disabled = j.running;
+}
+async function loadForecasts() {
+  try { const d = await api("/api/forecasts?horizon=" + $("fcHorizon").value); renderForecasts(d); if (d.job.running) setTimeout(loadForecasts, 3000); }
+  catch (e) { $("fcRunInfo").innerHTML = `<p class="note">${esc(e.message)}</p>`; }
+}
+async function loadHardware() {
+  try {
+    const h = await api("/api/hardware");
+    const g = h.gpus[0];
+    $("fcHardware").innerHTML = `${esc(h.os)} · ${esc(h.cpu)}, ${h.cores} threads, ${h.ram_gb} GB RAM · ` +
+      (g ? `${esc(g.name)}, ${g.vram_mb} MB VRAM (${g.vram_used_mb} MB in use), driver ${esc(g.driver)}, compute ${esc(g.compute_capability)}` : "no NVIDIA GPU") +
+      ` · XGBoost ${esc(h.frameworks.xgboost || "not installed")}${h.xgboost_cuda_build ? " (CUDA build)" : ""}, scikit-learn ${esc(h.frameworks.sklearn || "–")}, PyTorch ${esc(h.frameworks.torch || "not installed")}.` +
+      ` Boosted trees use the GPU only for jobs of 200,000 rows or more (auto); everything else runs on the CPU.`;
+  } catch (e) { $("fcHardware").textContent = e.message; }
+}
+$("fcRun").onclick = async () => {
+  try { await api("/api/forecasts/run", {horizon: +$("fcHorizon").value, model: $("fcModel").value}); loadForecasts(); }
+  catch (e) { showError(e.message); }
+};
+$("fcHorizon").onchange = loadForecasts;
+$("fcUse").onchange = async () => {
+  try { await api("/api/risk", {sleeve: "investing", return_model: $("fcUse").checked ? "forecast" : "vol_prior", forecast_horizon: +$("fcHorizon").value}); refresh(); }
+  catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }
+};
 
 async function pollBacktest() {
   const b = await api("/api/backtest");
@@ -922,7 +997,7 @@ $("runAi").onclick = async () => {
     levels = state.risk.levels; riskLevel = state.risk.level; showRisk(riskLevel); showRiskOptions(state.risk); drawEditors();
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); pollBacktest(); refresh(); loadMarket();
+  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadHardware();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (t.running) return;

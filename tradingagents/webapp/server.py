@@ -111,7 +111,7 @@ class App:
         self.store = Store(portfolio_path.parent)
         self.owner = f"web-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.lock = threading.Lock()   # one writer at a time on the shared connection
-        self.ai, self.backtest, self.tracker, self.explain = Job(), Job(), Job(), Job()
+        self.ai, self.backtest, self.tracker, self.explain, self.forecast = Job(), Job(), Job(), Job(), Job()
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -147,6 +147,16 @@ class App:
             settings.max_budget_share = float(body["max_budget_share"])
         if "loss_limit" in body:   # a one-off override from the command line, never saved
             settings.loss_limit = None if body["loss_limit"] is None else float(body["loss_limit"])
+        if s["return_model"] == "forecast":
+            from tradingagents.research.engine import expected_returns, latest_run
+
+            run = latest_run(self.store.con, horizon=s["forecast_horizon"])
+            if run is None:
+                raise ValueError(f"The {self.sleeve(body)} sleeve is set to use forecasts, but no forecast run exists "
+                                 f"for {s['forecast_horizon']} sessions. Run one under Forecasts first.")
+            run["calibration"] = json.loads(run["calibration_json"])
+            settings.return_model, settings.forecast_horizon, settings.forecast_run = "forecast", run["horizon"], run["id"]
+            settings.forecast_mu = expected_returns(run, [f["ticker"] for f in run["forecasts"]])
         return settings
 
     def gateway(self) -> Gateway:
@@ -283,6 +293,54 @@ class App:
             return {"as_of": overview["as_of"]}
 
         return self.explain.start(work)
+
+    # --- forecasts (local numerical work; no paid model is called) ---
+
+    def start_forecast(self, body: dict) -> bool:
+        from tradingagents.research.engine import run_forecast
+
+        horizon = int(body.get("horizon") or 20)
+        if horizon not in (5, 20, 60):
+            raise ValueError("the forecast horizon is 5, 20 or 60 sessions")
+        model = body.get("model") or "elastic_net"
+        context, _ = self.store.portfolio("combined", _today())
+        held = [p.ticker.upper() for p in context.positions]
+        tickers = [t for t in dict.fromkeys([*ETFS, *read_config(self.universe_path)["extra"], *held])
+                   if t not in ("SGOV", "BIL")]
+        device = self.store.get("global", "compute_backend")
+
+        def work(job):
+            job.progress = f"training {model} on the ETF universe, {horizon}-session horizon"
+            out = run_forecast(self.store.con, self.cache_dir, tickers, horizon=horizon, model=model,
+                               universe="etf", device_setting=device)
+            return {k: v for k, v in out.items() if k != "forecasts"}
+
+        return self.forecast.start(work)
+
+    def forecasts(self, query: dict) -> dict:
+        from tradingagents.research.engine import latest_run, load_run
+
+        con = self.store.con
+        runs = [dict(r) for r in con.execute(
+            "SELECT id, created_at, model, horizon, info_cutoff, universe, backend, seconds, peak_memory_mb,"
+            " train_start, train_end, calibration_json FROM forecast_runs ORDER BY created_at DESC LIMIT 30")]
+        for r in runs:
+            r["calibration"] = json.loads(r.pop("calibration_json"))
+        chosen = load_run(con, query["run"]) if query.get("run") else latest_run(con, int(query.get("horizon") or 0) or None)
+        if chosen:
+            chosen["calibration"] = json.loads(chosen.pop("calibration_json"))
+            chosen["config"] = json.loads(chosen.pop("config_json"))
+            for f in chosen["forecasts"]:
+                f["flags"] = json.loads(f.pop("flags_json"))
+                f["name"] = describe(f["ticker"])
+        trials = [dict(r) for r in con.execute("SELECT id, created_at, name, universe, horizon, first_test, last_test,"
+                                               " scores_json, by_period_json, seconds FROM research_trials ORDER BY id")]
+        for t in trials:
+            t["scores"] = json.loads(t.pop("scores_json"))
+            t["by_period"] = json.loads(t.pop("by_period_json"))
+        return {"runs": runs, "run": chosen, "trials": trials, "job": self.forecast.state(),
+                "settings": {s: {k: self.store.get(s, k) for k in ("return_model", "forecast_horizon")}
+                             for s in SLEEVES}}
 
     # --- research ---
 
@@ -486,6 +544,11 @@ def make_handler(app: App):
                     self._json(rec)
                 elif url.path == "/api/ai":
                     self._json(app.ai_usage())
+                elif url.path == "/api/forecasts":
+                    self._json(app.forecasts(query))
+                elif url.path == "/api/hardware":
+                    from tradingagents.research.compute import hardware
+                    self._json(hardware())
                 elif url.path == "/api/ratings":
                     self._json({**app.ai.state(), "ratings": app.ratings, "date": app.ratings_date})
                 elif url.path == "/api/backtest":
@@ -530,6 +593,8 @@ def make_handler(app: App):
                     self._started(app.start_ai(body.get("analysts")), "Rating")
                 elif self.path == "/api/backtest":
                     self._started(app.start_backtest(body), "A backtest")
+                elif self.path == "/api/forecasts/run":
+                    self._started(app.start_forecast(body), "A forecast run")
                 elif self.path == "/api/portfolio":
                     wanted = {p["ticker"].upper(): float(p["quantity"]) for p in body.get("positions", [])}
                     with app.lock:
@@ -551,6 +616,14 @@ def make_handler(app: App):
                             if body["model"] not in RISK_MODELS:
                                 raise ValueError(f"risk model must be one of {', '.join(RISK_MODELS)}")
                             app.store.set(sleeve, "risk_model", body["model"])
+                        if body.get("return_model"):
+                            if body["return_model"] not in ("vol_prior", "forecast"):
+                                raise ValueError("return model must be vol_prior or forecast")
+                            app.store.set(sleeve, "return_model", body["return_model"])
+                        if body.get("forecast_horizon"):
+                            if int(body["forecast_horizon"]) not in (5, 20, 60):
+                                raise ValueError("the forecast horizon is 5, 20 or 60 sessions")
+                            app.store.set(sleeve, "forecast_horizon", int(body["forecast_horizon"]))
                         if "target_growth" in body:
                             target = body["target_growth"]
                             if target is not None and not -0.5 < float(target) < 1.0:

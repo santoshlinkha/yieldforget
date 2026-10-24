@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 TRADING_DAYS = 252
+EWMA_LAMBDA = 0.94
 
 PRICE_FEATURES = ["mom_1m", "mom_3m", "mom_6m", "mom_12_1", "rev_1w", "vol_1m", "vol_3m", "downvol_3m",
                   "beta_1y", "dist_52w_high", "gap_ma200", "dd_1y", "range_1m", "log_dollar_vol",
@@ -44,8 +45,8 @@ ANALYST_FEATURES = ["target_upside", "n_target_firms", "net_upgrades_90d", "net_
 EARNINGS_FEATURES = ["last_surprise", "surprise_4q", "sessions_since_report"]
 
 
-def decision_dates(index: pd.DatetimeIndex, start=None, every: str = "month") -> pd.DatetimeIndex:
-    """The last session of each month (or every ``every`` sessions when an int) in ``index``."""
+def decision_dates(index: pd.DatetimeIndex, start=None, every: str | int = "month") -> pd.DatetimeIndex:
+    """The last session of each month, or every ``every`` sessions when an int, in ``index``."""
     index = index[index >= pd.Timestamp(start)] if start is not None else index
     if isinstance(every, int):
         return index[::every]
@@ -55,9 +56,9 @@ def decision_dates(index: pd.DatetimeIndex, start=None, every: str = "month") ->
 
 def _rank(frame: pd.DataFrame) -> pd.DataFrame:
     """Each row ranked into [-0.5, 0.5]; missing stays missing."""
-    ranks = frame.rank(axis=1, pct=True)
-    counts = frame.notna().sum(axis=1)
-    return (ranks - 0.5).where(counts.values[:, None] > 1, np.nan)
+    ranks = frame.rank(axis=1, pct=True) - 0.5
+    ranks[frame.notna().sum(axis=1) <= 1] = np.nan   # one asset alone has no rank
+    return ranks
 
 
 def price_features(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, volume: pd.DataFrame,
@@ -176,6 +177,15 @@ def build_panel(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, volu
     panel = pd.concat(frames, axis=1)
     raw_vol = pf["vol_3m"].loc[dates].stack(future_stack=True).rename("raw_vol_3m")
     panel = panel.join(raw_vol)
+    # Daily EWMA volatility (RiskMetrics, lambda 0.94) known at each date: the scale of the
+    # forecast distribution. Close-to-close returns, not intraday realized volatility.
+    daily = np.log(close[tickers]).diff()
+    ewma = daily.pow(2).ewm(alpha=1 - EWMA_LAMBDA, min_periods=60).mean().pow(0.5)
+    panel = panel.join(ewma.loc[dates].stack(future_stack=True).rename("ewma_vol_daily"))
+    # What cash earned over the last month, scaled to the horizon: the hurdle for "a gain".
+    cash_log = np.log(close[cash]).diff()
+    cash_h = (cash_log.rolling(21, min_periods=10).mean() * horizon).reindex(dates).fillna(0.0)
+    panel["cash_h"] = cash_h.reindex(panel.index.get_level_values(0)).to_numpy()
     for extra, names in ((analyst, ANALYST_FEATURES), (earnings, EARNINGS_FEATURES)):
         if not extra:
             continue

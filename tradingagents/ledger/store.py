@@ -23,9 +23,10 @@ from .db import DEFAULT_NAME, connect, now_utc, transaction
 
 # Settings each sleeve has, with their defaults. Values are JSON.
 SLEEVE_DEFAULTS = {
-    "investing": {"risk_level": 2, "risk_model": "worst_case", "target_growth": None, "daily_contribution": 27.61},
+    "investing": {"risk_level": 2, "risk_model": "worst_case", "target_growth": None, "daily_contribution": 27.61,
+                  "return_model": "vol_prior", "forecast_horizon": 20},
     "trading": {"risk_level": 2, "risk_model": "worst_case", "target_growth": None, "daily_contribution": 0.0,
-                "initial_allocation": 1000.0},
+                "initial_allocation": 1000.0, "return_model": "vol_prior", "forecast_horizon": 20},
 }
 GLOBAL_DEFAULTS = {
     "ai_budget": {"daily_usd": 1.0, "monthly_usd": 10.0, "daily_requests": 200, "monthly_requests": 2000},

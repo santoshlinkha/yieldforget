@@ -35,6 +35,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -154,9 +155,19 @@ class MarketStore:
 
     def _write(self, ticker: str, frame: pd.DataFrame, full: bool, now: datetime):
         path = self._file(ticker)
-        tmp = path.with_suffix(".tmp")
+        # Several processes may update one ticker at once: each writes its own file, and the
+        # rename is retried while Windows has the target open; the last writer wins, and all
+        # of them wrote the same sessions.
+        tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
         frame.to_pickle(tmp)
-        tmp.replace(path)
+        for attempt in range(20):
+            try:
+                tmp.replace(path)
+                break
+            except PermissionError:
+                time.sleep(0.05 * (attempt + 1))
+        else:
+            tmp.unlink(missing_ok=True)
         now = _stamp(now)
         first = frame.index[0].date().isoformat() if len(frame) else None
         last = frame.index[-1].date().isoformat() if len(frame) else None

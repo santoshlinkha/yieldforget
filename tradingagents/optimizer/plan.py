@@ -81,6 +81,12 @@ class OptimizerSettings:
     target_growth: float | None = None
     # Market references whose past falls are the crash scenarios, and how deep a fall counts.
     scenario_references: dict = field(default_factory=lambda: dict(REFERENCES))
+    # Where expected returns come from: "vol_prior" (the shrunk-Sharpe rule) or "forecast"
+    # (a saved forecast run; see tradingagents.research.engine.expected_returns).
+    return_model: str = "vol_prior"
+    forecast_mu: dict = field(default_factory=dict)     # ticker -> log return above cash over the horizon
+    forecast_horizon: int = 20                           # sessions
+    forecast_run: str | None = None                      # the run the forecasts came from
 
     def __post_init__(self):
         if self.risk_model not in RISK_MODELS:
@@ -156,6 +162,10 @@ class Plan:
     worst_scenario: tuple[str | None, str | None] = (None, None)   # (current, target)
     scenarios: list[str] = field(default_factory=list)
     goal: GrowthTarget | None = None
+    # With forecasts: expected log return above cash of the mixes over the forecast horizon,
+    # in the forecast's own units (not annualized), and which funds had no forecast.
+    horizon_return: tuple[float, float] | None = None
+    unforecast: list[str] = field(default_factory=list)
 
 
 def load_schedule(path: str | Path) -> dict[str, float]:
@@ -206,6 +216,26 @@ def history_drawdown(closes: pd.DataFrame, weights: dict[str, float], cash_ticke
         daily = daily + frame[t] * weights[t]
     curve = (1 + daily).cumprod()
     return max_drawdown(curve), frame.index[0].strftime("%Y-%m-%d") if len(frame) else "n/a"
+
+
+def forecast_excess(stats: AssetStats, settings: OptimizerSettings, held: set[str]) -> tuple[np.ndarray, list[str]]:
+    """Expected growth above cash from saved forecasts, in the solver's yearly units.
+
+    The solver weighs return against variance per year, so a forecast over H sessions is
+    scaled by 252 / H here, together with nothing else: it is a change of units for the
+    solver, not a yearly promise, and the plan reports the forecast's own horizon. A fund
+    with no forecast is not bought (a large negative return), and one you hold is
+    given none (zero above cash), so only its risk speaks.
+    """
+    scale = TRADING_DAYS / settings.forecast_horizon
+    out, missing = [], []
+    for t in stats.tickers:
+        if t in settings.forecast_mu:
+            out.append(settings.forecast_mu[t] * scale)
+        else:
+            missing.append(t)
+            out.append(0.0 if t in held else -1.0)
+    return np.array(out), missing
 
 
 def growth_excess(stats: AssetStats, settings: OptimizerSettings,
@@ -445,7 +475,11 @@ def build_plan(portfolio: PortfolioContext, schedule: dict[str, float], settings
         raise ValueError("the portfolio has no value to allocate")
 
     current = np.array([values[t] / total for t in stats.tickers])
-    excess = growth_excess(stats, settings, ratings)
+    unforecast: list[str] = []
+    if settings.return_model == "forecast":
+        excess, unforecast = forecast_excess(stats, settings, set(quantities))
+    else:
+        excess = growth_excess(stats, settings, ratings)
     scen = scenario_model(stats, closes, scenarios, proxies) if scenarios else None
     worst = worst_case_model(stats)
     model = scen if settings.risk_model == "scenarios" and scen is not None else worst
@@ -507,6 +541,10 @@ def build_plan(portfolio: PortfolioContext, schedule: dict[str, float], settings
         worst_scenario=(scen.binding(current), scen.binding(target)) if scen else (None, None),
         scenarios=[s.name for s in scenarios],
         goal=goal,
+        horizon_return=((float(excess @ current) * settings.forecast_horizon / TRADING_DAYS,
+                         float(excess @ target) * settings.forecast_horizon / TRADING_DAYS)
+                        if settings.return_model == "forecast" else None),
+        unforecast=unforecast,
     )
     plan.rows += screened
     for level_limit in (settings.frontier if summary else ()):

@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from .data import TRADING_DAYS, compute_stats, max_drawdown
-from .plan import OptimizerSettings, growth_excess, plan_weights, scan_list, stress_models
+from .plan import OptimizerSettings, forecast_excess, growth_excess, plan_weights, scan_list, stress_models
 
 
 # What the strategy is shown against. A fund that did not exist yet holds cash (BIL)
@@ -138,9 +138,14 @@ def _held_drop(returns: pd.DataFrame, cash: pd.Series, day: pd.Timestamp, mix: d
 
 
 def rebalance_plan(closes: pd.DataFrame, candidates: list[str], settings: OptimizerSettings,
-                   days: list[pd.Timestamp], progress: Callable[[int, int], None] | None = None
+                   days: list[pd.Timestamp], progress: Callable[[int, int], None] | None = None,
+                   mu_for: Callable[[pd.Timestamp], dict[str, float]] | None = None
                    ) -> tuple[list[tuple[pd.Timestamp, dict[str, float]]], list[Rebalance]]:
-    """The optimizer's mix at each of ``days``, from prices up to that day's close only."""
+    """The optimizer's mix at each of ``days``, from prices up to that day's close only.
+
+    ``mu_for(day)``, when given, supplies forecast returns made with data up to ``day``
+    (the walk-forward's own out-of-sample predictions), for ``return_model="forecast"``.
+    """
     cash_ticker = settings.cash_proxy
     schedule, history = [], []
     for n, day in enumerate(days, 1):
@@ -156,7 +161,11 @@ def rebalance_plan(closes: pd.DataFrame, candidates: list[str], settings: Optimi
         stats = compute_stats(past, [cash_ticker, *usable], cash_ticker, settings.lookback_years,
                               settings.short_history_years, settings.short_history_floor, proxies)
         model, _ = stress_models(stats, settings, past, proxies)
-        excess = growth_excess(stats, settings)
+        if mu_for is not None:
+            settings.forecast_mu = mu_for(day)
+            excess, _ = forecast_excess(stats, settings, set())
+        else:
+            excess = growth_excess(stats, settings)
         weights, limit, _ = plan_weights(stats, settings, excess, model)
         mix = {t: float(w) for t, w in zip(stats.tickers, weights, strict=True) if w > 1e-4}
         schedule.append((day, mix))
