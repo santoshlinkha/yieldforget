@@ -18,6 +18,7 @@ changes it, and a missed day is caught up on the next update.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -174,8 +175,20 @@ def update_ledger(ledger: dict, schedule: dict[str, float], settings: OptimizerS
     return ledger
 
 
+def _retry(fn, attempts: int = 20):
+    """Windows refuses to open a file another process (antivirus, an editor, a save in
+    progress) holds for a moment; try again briefly instead of failing the page."""
+    for n in range(attempts):
+        try:
+            return fn()
+        except PermissionError:
+            if n == attempts - 1:
+                raise
+            time.sleep(0.05 * (n + 1))
+
+
 def read_ledger(path: Path) -> dict | None:
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    return _retry(lambda: json.loads(path.read_text(encoding="utf-8"))) if path.exists() else None
 
 
 def archive_ledger(path: Path) -> Path | None:
@@ -195,4 +208,4 @@ def archive_ledger(path: Path) -> Path | None:
 def write_ledger(path: Path, ledger: dict):
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(ledger, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    _retry(lambda: tmp.replace(path))

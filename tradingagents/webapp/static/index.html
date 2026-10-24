@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>Portfolio Optimizer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -84,6 +85,13 @@ main { padding: 24px 0 64px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .card-head h3, .card > h3 { margin: 0; }
 h3 { font-size: 14px; font-weight: 600; margin: 0 0 12px; letter-spacing: -.005em; }
+.small { font-size: 12px; }
+.change-list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.settings-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.settings-grid select, .settings-grid input { font: inherit; font-size: 14px; font-weight: 400; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+a.tk { color: inherit; font-weight: 600; text-decoration: none; }
+a.tk:hover { color: var(--accent); text-decoration: underline; }
 h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 16px 0 8px; }
 .muted { color: var(--muted); font-size: 13px; }
 .small { font-size: 12px; }
@@ -117,6 +125,10 @@ th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: upp
 tbody tr:hover td, table tr:hover td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
 td.name, th.name { text-align: left; }
 td.name { color: var(--muted); white-space: normal; min-width: 150px; }
+/* Day by day fits its card: the orders column wraps instead of scrolling sideways. */
+#trDays td.reason { min-width: 0; max-width: none; overflow-wrap: anywhere; }
+#trDays th, #trDays td { padding-left: 6px; padding-right: 6px; }
+.days-wrap { overflow: visible; }
 td.reason { white-space: normal; text-align: left; color: var(--muted); font-size: 12.5px; min-width: 280px; max-width: 460px; }
 tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .tag { font-size: 10.5px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; margin-left: 6px; font-weight: 600; letter-spacing: .02em; }
@@ -228,6 +240,8 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <input type="number" id="targetGrowth" min="0" max="50" step="0.5" placeholder="none" aria-label="Growth target, percent a year"> %</label>
       </div>
       <div class="toggles">
+        <label class="check" title="Which part of the IRA this plan is for; each has its own settings">Sleeve
+          <select id="sleeve" aria-label="Sleeve"><option value="investing">Investing</option><option value="trading">Trading</option></select></label>
         <label class="check"><input type="checkbox" id="scan" checked> Scan <span id="scanCount">funds</span></label>
         <label class="check"><input type="checkbox" id="useAi"> AI ratings</label>
       </div>
@@ -248,7 +262,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <div class="card-head"><h3 id="ordersTitle">Today's orders</h3></div>
           <ul class="orders" id="orders"></ul>
           <div id="tomorrowBox" hidden>
-            <h4>Next trading day, once today's sales settle</h4>
+            <h4>The session after, once these sales settle</h4>
             <ul class="orders" id="tomorrow"></ul>
           </div>
           <p class="muted" id="settle"></p>
@@ -263,6 +277,22 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
             <h3>Growth vs. risk level</h3>
             <p class="muted">The best mix at each level, 1 to 10. Ring: your level. Cross: your portfolio now.</p>
             <div id="chart"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Auto-invest</h3><span class="muted" id="aiBudget"></span></div>
+            <p class="muted">Recurring investments to set in the Robinhood app so new money follows this plan's mix. Nothing here changes your account.</p>
+            <div class="table-wrap"><table id="autoTable"></table></div>
+            <div id="autoChanges"></div>
+            <div id="autoNotes" class="muted small"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Account</h3><button class="ghost" data-goto="settings">Holdings →</button></div>
+            <div class="table-wrap"><table id="sleeveTable"></table></div>
+            <p class="muted small">Sleeves are bookkeeping inside one IRA; the broker's rules apply to the whole account.</p>
+          </div>
+          <div class="card">
+            <h3>Data freshness</h3>
+            <div id="freshness" class="muted"></div>
           </div>
         </div>
       </div>
@@ -324,7 +354,8 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div class="split wide">
           <div class="card">
             <h3>Day by day</h3>
-            <div class="table-wrap" style="max-height:460px;overflow:auto"><table id="trDays"></table></div>
+            <div class="days-wrap"><table id="trDays"></table></div>
+            <div class="row" id="trDaysMore" style="display:none"><button class="ghost" id="trDaysToggle"></button></div>
           </div>
           <div class="card">
             <h3>Paper holdings, followed the plan</h3>
@@ -404,6 +435,18 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <p class="muted">The optimizer keeps your daily total but moves it to the funds that are under target.</p>
         </div>
         <div class="card">
+          <h3>Risk and goals</h3>
+          <p class="muted">Each sleeve keeps its own settings. The same choices sit in the bar at the top for the sleeve shown there.</p>
+          <div class="settings-grid">
+            <label>Sleeve<select id="setSleeve"><option value="investing">Investing</option><option value="trading">Trading</option></select></label>
+            <label>Risk level<select id="setLevel"></select></label>
+            <label>How stress loss is measured<select id="setModel"><option value="worst_case">Worst case: every holding at its worst drop</option><option value="scenarios">Past crashes replayed (less safe)</option></select></label>
+            <label>Growth target, % a year<input type="number" id="setTarget" min="0" max="50" step="0.5" placeholder="none"></label>
+          </div>
+          <div class="row"><button id="saveRiskSettings">Save</button><span class="muted" id="setSaved"></span></div>
+          <p class="muted small" id="setExplain"></p>
+        </div>
+        <div class="card">
           <h3>Risk levels</h3>
           <div class="table-wrap"><table id="riskTable"></table></div>
           <p class="muted">Each level caps the <b>stress loss</b>, measured one of two ways. <b>Worst case</b>: what the whole portfolio would lose if every holding repeated its worst historical drop at once. <b>Past crashes</b>: the worst of the real crashes since 1998 (stocks, long bonds, gold, commodities) replayed on the mix, so holdings that did not fall together are not assumed to. In the 2008–2026 backtest it went past its limit by up to 1.5 times (docs/BACKTEST_RISK_MODELS.md), so worst case stays the default. Either way no single fund may use more than a quarter of the cap at its own worst drop. Level 10 has no cap; only the per-fund limits apply. A future crash can be deeper than any past one.</p>
@@ -434,6 +477,8 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
 const SERIES = ["--s1", "--s2", "--s3", "--s4"];
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+// A ticker that opens its own page (price, news, analysts, financials, reports) in a new tab.
+const tk = t => `<a class="tk" href="/ticker/${encodeURIComponent(t)}" target="_blank" rel="noopener" title="Everything about ${esc(t)}">${esc(t)}</a>`;
 const usd = x => (x < 0 ? "-" : "") + "$" + Math.abs(x).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const pct = (x, d = 1) => x == null ? "none" : (x * 100).toFixed(d) + "%";
 const store = {
@@ -473,7 +518,8 @@ function showRisk(n) {
 }
 async function saveRisk(extra = {}) {
   riskLevel = +$("risk").value;
-  try { await api("/api/risk", {level: riskLevel, ...extra}); } catch (e) { showError(e.message); }
+  try { await api("/api/risk", {sleeve: $("sleeve").value, level: riskLevel, ...extra}); } catch (e) { showError(e.message); }
+  if ($("setSleeve").value === $("sleeve").value) loadRiskSettings();
   refresh();
 }
 function showRiskOptions(r) {
@@ -500,9 +546,9 @@ let planSeq = 0;
 async function refresh() {
   const seq = ++planSeq;
   showError(""); busy(true);
-  $("subtitle").textContent = $("scan").checked ? "Scanning… the first scan of the day takes about a minute" : "Optimizing…";
+  $("subtitle").textContent = "Optimizing from saved prices…";
   try {
-    const r = await api("/api/plan", {risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
+    const r = await api("/api/plan", {sleeve: $("sleeve").value, risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
     if (seq !== planSeq) return;   // a newer request is on its way; this answer is stale
     lastPlan = r; render(r);
   } catch (e) { if (seq === planSeq) { showError(e.message); $("subtitle").textContent = "Could not optimize."; } }
@@ -529,8 +575,11 @@ function render(r) {
     kpi("Invested", pct(1 - p.cash.target), `rest in ${esc(p.cash.ticker)} · now ${pct(1 - p.cash.current)}`) +
     kpi("Daily buys", usd(p.daily_budget), p.days_to_target == null ? "paused: nothing under target" : `${Math.ceil(p.days_to_target)} trading days to target`);
 
-  $("ordersTitle").textContent = `Orders for ${r.date}`;
-  const orderItem = o => `<li><div class="order-head"><span class="side ${o.side}">${o.side.toUpperCase()}</span><span class="amt">${usd(o.amount)}</span><strong>${esc(o.ticker)}</strong></div><div class="why">${esc(o.why)}</div></li>`;
+  const sessionDay = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric"});
+  $("ordersTitle").textContent = r.orders_session
+    ? `Orders for ${sessionDay(r.orders_session)}${r.orders_session_is_today ? " (today)" : " (next trading session)"}`
+    : `Orders for ${r.date}`;
+  const orderItem = o => `<li><div class="order-head"><span class="side ${o.side}">${o.side.toUpperCase()}</span><span class="amt">${usd(o.amount)}</span><strong>${tk(o.ticker)}</strong></div><div class="why">${esc(o.why)}</div></li>`;
   const orders = [...s.orders].sort((a, b) => (a.side === "sell" ? 0 : 1) - (b.side === "sell" ? 0 : 1));
   $("orders").innerHTML = orders.length ? orders.map(orderItem).join("") : "<li>No orders today.</li>";
   $("tomorrowBox").hidden = !s.tomorrow.length;
@@ -540,20 +589,56 @@ function render(r) {
 
   renderChart(p);
 
+  // What the orders really do, per ticker, across this session and the next.
+  const placed = {};
+  [...s.orders, ...s.tomorrow].forEach(o => { placed[o.ticker] = (placed[o.ticker] || 0) + (o.side === "buy" ? o.amount : -o.amount); });
+  const band = Math.max(1, p.settings.rebalance_band * p.total);
+  const tradeCell = x => {
+    if (x.ticker in placed) { const v = placed[x.ticker]; return `<td class="${v > 0 ? "pos" : "neg"}">${(v > 0 ? "+" : "−") + usd(Math.abs(v))}</td>`; }
+    if (Math.abs(x.trade) < 0.01) return "<td>–</td>";
+    return `<td class="muted" title="Under the ${usd(band)} rebalance band, so no order is placed">skip (${(x.trade > 0 ? "+" : "−") + usd(Math.abs(x.trade))})</td>`;
+  };
   const maxT = Math.max(...p.rows.map(x => x.target), p.cash.target, 1e-9);
   const weightBar = w => `<span class="bar-cell">${pct(w)}<i style="width:${Math.round(48 * w / maxT)}px"></i></span>`;
   const shown = [...p.rows].filter(x => x.value > 0 || x.target > 1e-4).sort((a, b) => b.target - a.target || b.value - a.value);
-  const mixRow = x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td><strong>${esc(x.ticker)}</strong>${x.held ? "" : '<span class="tag">NEW</span>'}</td><td class="name">${esc(x.name)}</td>
+  const mixRow = x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td><strong>${x.ticker === p.cash.ticker && x.name === "cash" ? esc(x.ticker) : tk(x.ticker)}</strong>${x.held ? "" : '<span class="tag">NEW</span>'}</td><td class="name">${esc(x.name)}</td>
       <td>${pct(x.current)}</td><td>${weightBar(x.target)}</td>
-      <td class="${x.trade > 0 ? "pos" : "neg"}">${Math.abs(x.trade) < 0.01 ? "–" : (x.trade > 0 ? "+" : "−") + usd(Math.abs(x.trade))}</td>
+      ${tradeCell(x)}
       <td>${x.daily_buy ? usd(x.daily_buy) : "–"}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${pct(x.expected)}</td>
       <td class="reason">${esc(x.reason)}${x.rating ? ` <span class="tag">AI ${esc(x.rating)}</span>` : ""}</td></tr>`;
   $("mix").innerHTML = "<tr><th>Ticker</th><th class='name'>Fund</th><th>Now</th><th>Target</th><th>Trade</th><th>Daily</th><th>Worst drop</th><th>Growth</th><th class='name'>Why</th></tr>" +
     shown.map(mixRow).join("") + mixRow({...p.cash, name: "cash", held: true, worst_loss: 0});
-  $("mixNotes").textContent = p.notes.join(" ") + (p.rows.some(x => x.floored) ? " * assumed, not observed." : "");
+  $("mixNotes").textContent = `Trade: the orders placed (this session and the next). Trades under ${usd(band)} (${pct(p.settings.rebalance_band)} of the portfolio) are skipped, so those funds stay slightly off target. ` +
+    p.notes.join(" ") + (p.rows.some(x => x.floored) ? " * assumed, not observed." : "");
+  renderOverviewExtras(r);
 
   scanRows = [...p.rows].sort((a, b) => b.target - a.target || b.score - a.score);
   renderScan();
+}
+
+function renderOverviewExtras(r) {
+  const a = r.auto_invest;
+  if (a) {
+    $("aiBudget").textContent = `${usd(a.budget_per_day)} per trading day`;
+    $("autoTable").innerHTML = "<tr><th>Ticker</th><th>Amount</th><th>How often</th><th>Share</th></tr>" +
+      a.schedule.map(x => `<tr><td>${tk(x.ticker)} <span class="muted">${esc(x.name || "")}</span></td><td>${usd(x.amount)}</td><td>${esc(x.frequency)}</td><td>${pct(x.weight, 0)}</td></tr>`).join("");
+    const verb = {cancel: "Cancel", add: "Add", change: "Change"};
+    $("autoChanges").innerHTML = a.changes.length ? `<h4>Changes from your current recurring buys</h4><ul class="change-list">` +
+      a.changes.map(c => `<li><b>${verb[c.action]}</b> ${esc(c.ticker)}` + (c.action === "cancel" ? ` (now ${usd(c.now_per_day)} a day)` :
+        `: ${usd(c.amount)} ${esc(c.frequency)}` + (c.now_per_day ? ` (now ${usd(c.now_per_day)} a day)` : "")) + `</li>`).join("") + "</ul>" : "<p class='muted'>Your recurring buys already match.</p>";
+    $("autoNotes").innerHTML = a.notes.map(n => `<p>${esc(n)}</p>`).join("");
+  } else {
+    $("aiBudget").textContent = "";
+    $("autoTable").innerHTML = ""; $("autoChanges").innerHTML = "<p class='muted'>Recurring contributions go to the Investing sleeve.</p>"; $("autoNotes").innerHTML = "";
+  }
+  const sl = r.sleeves || {};
+  $("sleeveTable").innerHTML = "<tr><th>Sleeve</th><th>Value</th><th>Settled cash</th><th>Unsettled</th><th>Funds</th></tr>" +
+    ["investing", "trading", "combined"].filter(k => sl[k]).map(k => `<tr class="${k === r.sleeve ? "chosen" : ""}"><td>${k === "combined" ? "<b>Whole IRA</b>" : k[0].toUpperCase() + k.slice(1)}</td><td>${usd(sl[k].equity)}</td><td>${usd(sl[k].cash.settled)}</td><td>${usd(sl[k].cash.unsettled)}</td><td>${sl[k].positions}</td></tr>`).join("");
+  const f = r.freshness || {};
+  const when = t => t ? new Date(t).toLocaleString(undefined, {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : "never";
+  $("freshness").innerHTML = `<p>Prices: closes through <b>${esc(f.prices_through || "–")}</b> (checked ${when(f.prices_checked)}). Only completed sessions are used.</p>` +
+    `<p>This plan: <b>preview</b>, not saved. Last official recommendation: ${f.last_official ? `${esc(f.last_official.id.slice(0, 8))} for ${esc(f.last_official.session)} (${esc(f.last_official.status)})` : "none yet"}.</p>` +
+    `<p>Last forecast run: ${f.last_forecast ? `${esc(f.last_forecast.model)}, ${f.last_forecast.horizon} sessions, data to ${esc(f.last_forecast.info_cutoff)}` : "none"}. Last recorded trade or transfer: ${when(f.last_event)}.</p>`;
 }
 
 let scanRows = [];
@@ -562,7 +647,7 @@ function renderScan() {
   const rows = q ? scanRows.filter(x => (x.ticker + " " + x.name).toLowerCase().includes(q)) : scanRows;
   const shown = rows.slice(0, 300);
   $("scanTable").innerHTML = `<tr><th>#</th><th>Ticker</th><th class='name'>Name</th><th>Growth</th><th>Worst drop</th><th>Score</th><th>Target</th><th class='name'>Why</th></tr>` +
-    shown.map(x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td class="muted">${scanRows.indexOf(x) + 1}</td><td><strong>${esc(x.ticker)}</strong>${x.held ? '<span class="tag">HELD</span>' : ""}</td><td class="name">${esc(x.name)}</td>
+    shown.map(x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td class="muted">${scanRows.indexOf(x) + 1}</td><td><strong>${tk(x.ticker)}</strong>${x.held ? '<span class="tag">HELD</span>' : ""}</td><td class="name">${esc(x.name)}</td>
       <td>${pct(x.expected)}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.score.toFixed(2)}</td>
       <td>${x.target > 1e-4 ? pct(x.target) : "–"}</td><td class="reason">${esc(x.reason)}</td></tr>`).join("") +
     (rows.length > shown.length ? `<tr><td colspan="8" class="muted">${rows.length - shown.length} more; type in the filter to find one.</td></tr>` : "");
@@ -639,7 +724,7 @@ function renderForecasts(d) {
     const rows = [...r.forecasts].sort((a, b) => fcSort.dir * ((a[fcSort.key] ?? 0) - (b[fcSort.key] ?? 0)));
     const head = [["ticker", "Ticker"], ["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
     $("fcTable").innerHTML = "<tr>" + head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${fcSort.key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
-      rows.map(f => `<tr><td><b>${esc(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join("");
+      rows.map(f => `<tr><td><b>${tk(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join("");
     $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
       fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderForecasts(lastFc); });
   }
@@ -798,7 +883,7 @@ function renderMarket(m) {
 
   const sp = o.sp500;
   $("mkBreadth").textContent = sp.count ? `${Math.round(sp.up_1m * 100)}% of the ${sp.count} members rose over the last month; ${Math.round(sp.above_50 * 100)}% trade above their 50-day average and ${Math.round(sp.above_200 * 100)}% above their 200-day average. When the index falls but most members hold up, the drop is concentrated in a few large companies.` : "S&P 500 member prices not loaded yet.";
-  const mover = x => `<li><strong>${esc(x.ticker)}</strong> <span class="${x.change >= 0 ? "pos" : "neg"}">${signed(x.change, "price")}</span> <span class="muted">${esc(x.name.replace(/ \(.*\)$/, ""))}</span></li>`;
+  const mover = x => `<li><strong>${tk(x.ticker)}</strong> <span class="${x.change >= 0 ? "pos" : "neg"}">${signed(x.change, "price")}</span> <span class="muted">${esc(x.name.replace(/ \(.*\)$/, ""))}</span></li>`;
   $("mkLeaders").innerHTML = sp.leaders_1m.map(mover).join("");
   $("mkLaggards").innerHTML = sp.laggards_1m.map(mover).join("");
   renderBrief(m.brief, m.explain);
@@ -855,7 +940,7 @@ $("mkExplain").onclick = async () => {
 };
 
 // --- performance: the paper record since day one ---
-let trRange = store.get("trRange", "ALL"), lastTracker = null;
+let trRange = store.get("trRange", "ALL"), lastTracker = null, trAllDays = false;
 const RANGE_LABEL = {"1M": "1 month", "3M": "3 months", "YTD": "year to date", "1Y": "1 year", "ALL": "since day one"};
 function rangeFrom(H, range) {
   if (range === "ALL" || H.length < 2) return 0;
@@ -909,16 +994,21 @@ function renderTracker(t) {
     kpi("Plan vs. kept", `<span class="${diff >= 0 ? "pos" : "neg"}">${susd(diff)}</span>`, diff >= 0 ? "following the plan is ahead" : "keeping as is is ahead") +
     kpi("Record", `${H.length} day${H.length > 1 ? "s" : ""}`, `${lvl} · last ${last.date}${L.backfilled ? " · replayed start" : ""}`);
   renderTrackerChart(V, L);
-  const fmtOrders = os => os.length ? os.map(o => `${o[0] === "buy" ? "+" : "−"}${esc(o[1])} ${usd(o[2])}`).join(", ") : "–";
+  const fmtOrders = os => os.length ? os.map(o => `<span style="white-space:nowrap">${o[0] === "buy" ? "+" : "−"}${esc(o[1])} ${usd(o[2])}</span>`).join(", ") : "–";
+  const DAYS_SHOWN = 20;
+  const newestFirst = [...H].reverse();
+  $("trDaysMore").style.display = newestFirst.length <= DAYS_SHOWN ? "none" : "";
+  $("trDaysToggle").textContent = trAllDays ? "Show the latest 20 days" : `Show all ${newestFirst.length} days`;
+  $("trDaysToggle").onclick = () => { trAllDays = !trAllDays; renderTracker(lastTracker); };
   $("trDays").innerHTML = "<tr><th>Date</th><th>Plan</th><th>Kept</th><th>Diff</th><th>Cap</th><th>Invested</th><th class='name'>Plan's orders</th></tr>" +
-    [...H].reverse().map(h => `<tr><td>${h.date}</td><td>${usd(h.plan)}</td><td>${usd(h.hold)}</td>
+    newestFirst.slice(0, trAllDays ? undefined : DAYS_SHOWN).map(h => `<tr><td>${h.date}</td><td>${usd(h.plan)}</td><td>${usd(h.hold)}</td>
       <td class="${h.plan >= h.hold ? "pos" : "neg"}">${susd(h.plan - h.hold)}</td>
       <td>${capText(capOf(h, L))}</td><td>${h.invested == null ? "–" : pct(h.invested, 0)}</td>
       <td class="reason">${fmtOrders(h.orders.plan)}</td></tr>`).join("");
   const rows = (L.holdings?.plan || []);
   const settledCash = L.books.plan.settled + L.books.plan.unsettled;
   $("trHoldings").innerHTML = "<tr><th>Ticker</th><th class='name'>Name</th><th>Shares</th><th>Value</th></tr>" +
-    rows.map(r => `<tr><td><strong>${esc(r[0])}</strong></td><td class="name">${esc(r[3])}</td><td>${r[1].toFixed(4)}</td><td>${usd(r[2])}</td></tr>`).join("") +
+    rows.map(r => `<tr><td><strong>${tk(r[0])}</strong></td><td class="name">${esc(r[3])}</td><td>${r[1].toFixed(4)}</td><td>${usd(r[2])}</td></tr>`).join("") +
     (settledCash >= 0.01 ? `<tr><td>Cash</td><td class="name">settled and settling</td><td></td><td>${usd(settledCash)}</td></tr>` : "");
 }
 function renderTrackerChart(H, L) {
@@ -940,7 +1030,13 @@ function renderTrackerChart(H, L) {
     <div class="legend"><span style="--c: var(--s1)">Followed the plan</span><span style="--c: var(--s2)">Kept as is</span>${marks ? '<span style="--c: var(--s3)">Risk level changed</span>' : ""}</div>`;
 }
 async function pollTracker() {
-  const t = await api("/api/tracker");
+  let t;
+  try { t = await api("/api/tracker"); }
+  catch (e) {   // keep what is shown, say why, and try again shortly
+    $("trStatus").textContent = "Could not read the record: " + e.message + " Retrying…";
+    setTimeout(pollTracker, 3000);
+    return null;   // unknown, which is not the same as "no record"
+  }
   renderTracker(t);
   if (t.running) setTimeout(pollTracker, 1500);
   return t;
@@ -955,7 +1051,7 @@ $("trStartBtn").onclick = async () => {
 $("saveRec").onclick = async () => {
   showError(""); $("saveRec").disabled = true; $("saveMsg").innerHTML = '<p class="muted">Saving…</p>';
   try {
-    const r = await api("/api/recommendations/save", {risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
+    const r = await api("/api/recommendations/save", {sleeve: $("sleeve").value, risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
     const s = r.saved;
     $("saveMsg").innerHTML = `<div class="ok"><b>Saved</b> official recommendation ${esc(s.id.slice(0, 8))} for the ${esc(s.session)} session; orders may fill from ${esc(s.earliest_execution)}.` +
       (s.supersedes ? ` It replaces ${esc(s.supersedes.slice(0, 8))}.` : "") + ` Saving is not trading: record fills when you place them.</div>`;
@@ -969,6 +1065,44 @@ $("trReset").onclick = async () => {
   try { await api("/api/tracker/reset", {}); pollTracker(); } catch (e) { showError(e.message); }
 };
 
+async function loadRiskSettings() {
+  try {
+    const st = await api("/api/state?sleeve=" + $("setSleeve").value);
+    const r = st.risk;
+    $("setLevel").innerHTML = r.levels.map(l => `<option value="${l.level}">${l.level}: ${esc(l.name)} (${capText(l.loss_limit)})</option>`).join("");
+    $("setLevel").value = r.level;
+    $("setModel").value = r.model || "worst_case";
+    $("setTarget").value = r.target_growth == null ? "" : +(r.target_growth * 100).toFixed(2);
+    explainRiskSettings();
+  } catch (e) { showError(e.message); }
+}
+function explainRiskSettings() {
+  const l = levelInfo(+$("setLevel").value), t = $("setTarget").value.trim();
+  $("setExplain").textContent = (l.loss_limit == null ? "No stress-loss cap: only the per-fund limits apply. "
+    : `The plan may lose at most ${capText(l.loss_limit)} of the sleeve in the stress test. `) +
+    (t && +t > 0 ? `It aims for ${(+t).toFixed(1)}% a year expected growth at the least risk that reaches it, never past that cap; expected growth is an estimate, and backtests realized less.`
+      : "With no growth target it takes the most expected growth the cap allows.");
+}
+$("setSleeve").onchange = loadRiskSettings;
+$("setLevel").onchange = explainRiskSettings;
+$("setTarget").oninput = explainRiskSettings;
+$("saveRiskSettings").onclick = async () => {
+  const sleeve = $("setSleeve").value, t = $("setTarget").value.trim();
+  try {
+    await api("/api/risk", {sleeve, level: +$("setLevel").value, model: $("setModel").value,
+                            target_growth: t === "" || +t === 0 ? null : +t / 100});
+    $("setSaved").textContent = "Saved for " + sleeve + ".";
+    if (sleeve === $("sleeve").value) {   // the bar at the top shows this sleeve: bring it in line
+      const st = await api("/api/state?sleeve=" + sleeve); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk); refresh();
+    }
+  } catch (e) { showError(e.message); }
+};
+
+$("sleeve").onchange = async () => {
+  store.set("sleeve", $("sleeve").value);
+  try { const st = await api("/api/state?sleeve=" + $("sleeve").value); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk); } catch (e) { showError(e.message); }
+  refresh();
+};
 $("useAi").onchange = () => { store.set("useAi", $("useAi").checked); refresh(); };
 $("scan").onchange = () => { store.set("scan", $("scan").checked); refresh(); };
 
@@ -990,6 +1124,7 @@ $("runAi").onclick = async () => {
 (async () => {
   $("useAi").checked = store.get("useAi", false);
   $("scan").checked = store.get("scan", true);
+  $("sleeve").value = store.get("sleeve", "investing");
   const linked = location.hash.slice(1);
   showTab(document.getElementById(linked)?.classList.contains("tab") ? linked : store.get("tab", "today"));
   if (linked) history.replaceState(null, "", location.pathname);
@@ -997,12 +1132,15 @@ $("runAi").onclick = async () => {
   try {
     state = await api("/api/state");
     levels = state.risk.levels; riskLevel = state.risk.level; showRisk(riskLevel); showRiskOptions(state.risk); drawEditors();
+    if ($("sleeve").value !== "investing") {   // the remembered sleeve has its own risk settings
+      const st = await api("/api/state?sleeve=" + $("sleeve").value); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk);
+    }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadHardware();
+  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadHardware(); loadRiskSettings();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
-    if (t.running) return;
+    if (!t || t.running) return;   // a record that could not be read is never started over
     api(t.ledger ? "/api/tracker/update" : "/api/tracker/start", {}).then(pollTracker).catch(() => {});
   });
 })();

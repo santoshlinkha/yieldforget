@@ -5,6 +5,7 @@ Prices and holdings are labelled synthetic fixtures; no network and no model is 
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -128,3 +129,33 @@ def test_a_paid_job_is_refused_without_prices_and_says_why(server):
             break
     assert _ai_rows(tmp_path) == 0
     assert any("switched off" in line or "no price" in line for line in state["log"])
+
+
+def test_a_ticker_page_answers_even_when_its_sources_fail(server):
+    base, _, _ = server
+    status, out = _call(base, "/api/ticker?symbol=AAA")
+    assert status == 200 and out["symbol"] == "AAA"
+    # Prices come from the stubbed feed; Yahoo's other sources are unreachable in tests.
+    assert "error" in out["news"] and "error" in out["analysts"]
+    assert out["mine"]["quantity"]["investing"] == 10
+    assert _call(base, "/api/ticker?symbol=../etc")[0] == 400
+    assert _call(base, "/api/report?path=C:/Windows/win.ini")[0] == 400
+
+
+def test_the_same_plan_is_not_computed_twice(server):
+    base, _, handler = server
+    t0 = time.time()
+    _call(base, "/api/plan", {"scan": False})
+    first = time.time() - t0
+    t0 = time.time()
+    _call(base, "/api/plan", {"scan": False})
+    assert time.time() - t0 < max(first / 2, 0.05)
+
+
+def test_an_existing_paper_record_is_never_started_over_by_accident(server):
+    base, tmp_path, _ = server
+    (tmp_path / "paper_tracker.json").write_text(json.dumps({"start": "2026-10-22", "history": [], "books": {},
+                                                             "last_day": None, "loss_limit": 0.05}))
+    status, out = _call(base, "/api/tracker/start", {})
+    assert status == 400 and "already exists" in out["error"]
+    assert json.loads((tmp_path / "paper_tracker.json").read_text())["start"] == "2026-10-22"

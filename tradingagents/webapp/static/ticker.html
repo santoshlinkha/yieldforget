@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<title>Ticker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #64748b; --faint: #94a3b8;
+  --border: #e5e7eb; --brand-bg: #0b1220; --brand-text: #e2e8f0; --brand-muted: #8391a7;
+  --accent: #2563eb; --buy: #059669; --sell: #dc2626; --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d;
+  --chart-grid: #eef0f3; --s1: #2563eb; --s2: #94a3b8;
+  --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06); --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
+    --border: #1f2937; --brand-bg: #060a13; --accent: #60a5fa; --buy: #34d399; --sell: #f87171;
+    --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --chart-grid: #1c2433; --s1: #60a5fa; --s2: #64748b; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
+  --border: #1f2937; --brand-bg: #060a13; --accent: #60a5fa; --buy: #34d399; --sell: #f87171;
+  --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --chart-grid: #1c2433; --s1: #60a5fa; --s2: #64748b; --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+table, .num { font-variant-numeric: tabular-nums; }
+.appbar { background: var(--brand-bg); color: var(--brand-text); }
+.appbar .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
+.appbar a { color: var(--brand-muted); text-decoration: none; font-size: 13px; }
+.appbar a:hover { color: var(--brand-text); }
+.title { padding: 22px 0 6px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.title h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
+.title .name { color: var(--muted); font-size: 15px; }
+.title .px { font-size: 22px; font-weight: 600; margin-left: auto; }
+.grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .title .px { margin-left: 0; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; margin-bottom: 16px; min-width: 0; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.muted { color: var(--muted); } .small { font-size: 12px; }
+.pos { color: var(--buy); } .neg { color: var(--sell); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.stat .v { font-size: 16px; font-weight: 600; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: right; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+th:first-child, td:first-child, th.l, td.l { text-align: left; }
+.news { list-style: none; margin: 0; padding: 0; }
+.news li { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.news li:last-child { border-bottom: 0; }
+.news a { color: var(--text); font-weight: 600; text-decoration: none; }
+.news a:hover { color: var(--accent); }
+.news .meta { font-size: 12px; color: var(--muted); }
+.news .sum { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.note { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.tabs button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.tabs button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; background: var(--c); margin-right: 6px; vertical-align: middle; }
+svg text { fill: var(--muted); font-size: 11px; }
+.report { white-space: pre-wrap; font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 520px; overflow: auto; }
+details summary { cursor: pointer; }
+.up { color: var(--buy); font-weight: 600; } .down { color: var(--sell); font-weight: 600; }
+</style>
+</head>
+<body>
+<header class="appbar"><div class="wrap"><a href="/">← Portfolio Optimizer</a><span class="muted small" id="asof"></span></div></header>
+<main class="wrap">
+  <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span></div>
+  <p class="muted small" id="desc"></p>
+  <div id="err"></div>
+  <div class="grid">
+    <div>
+      <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div id="chart" style="margin-top:12px"></div></div>
+      <div class="card"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
+      <div class="card"><h2>Financial statements</h2><div id="fin"></div></div>
+      <div class="card"><h2>Earnings</h2><div class="table-wrap"><table id="earn"></table></div></div>
+    </div>
+    <div>
+      <div class="card"><h2>In your account</h2><div id="mine"></div></div>
+      <div class="card"><h2>Forecasts</h2><div id="fc"></div></div>
+      <div class="card"><h2>Analysts</h2><div id="analysts"></div></div>
+      <div class="card"><h2>About</h2><div id="about"></div></div>
+      <div class="card"><h2>Saved analysis reports</h2><div id="reports"></div></div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const pct = (x, d = 1) => x == null ? "–" : (x * 100).toFixed(d) + "%";
+const spct = (x, d = 1) => x == null ? "–" : `<span class="${x >= 0 ? "pos" : "neg"}">${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%</span>`;
+const money = (x, d = 2) => x == null ? "–" : "$" + Number(x).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
+const big = x => x == null ? "–" : Math.abs(x) >= 1e12 ? (x / 1e12).toFixed(2) + "T" : Math.abs(x) >= 1e9 ? (x / 1e9).toFixed(2) + "B" : Math.abs(x) >= 1e6 ? (x / 1e6).toFixed(1) + "M" : Number(x).toLocaleString();
+const failed = s => s && s.error ? `<p class="muted">Not available: ${esc(s.error)}</p>` : null;
+const symbol = decodeURIComponent(location.pathname.split("/").pop()).toUpperCase();
+
+function chart(c) {
+  const W = 760, H = 240, L = 54, R = 10, T = 10, B = 26, n = c.dates.length;
+  const norm = arr => arr.map(v => v / arr[0]);
+  const a = norm(c.close), b = norm(c.spy.map((v, i) => v ?? c.spy.find(x => x != null)));
+  const vals = [...a, ...b].filter(Number.isFinite);
+  const lo = Math.log(Math.min(...vals) * 0.95), hi = Math.log(Math.max(...vals) * 1.05);
+  const sx = i => L + i / (n - 1) * (W - L - R), sy = v => H - B - (Math.log(v) - lo) / (hi - lo || 1) * (H - T - B);
+  const line = (arr, col, w) => `<path d="${arr.map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join("")}" fill="none" stroke="var(${col})" stroke-width="${w}"/>`;
+  let g = "";
+  [0.5, 0.75, 1, 1.5, 2, 3, 5, 10, 20].filter(v => Math.log(v) >= lo && Math.log(v) <= hi).forEach(v => {
+    g += `<line x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}" stroke="var(--chart-grid)"/><text x="${L - 6}" y="${sy(v) + 4}" text-anchor="end">${money(v * c.close[0], c.close[0] < 10 ? 2 : 0)}</text>`;
+  });
+  let last = "";
+  c.dates.forEach((d, i) => { const y = d.slice(0, 4); if (y !== last && i > 0) { if (+y % 2 === 0) g += `<text x="${sx(i)}" y="${H - 6}" text-anchor="middle">${y}</text>`; } last = y; });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(symbol)} price against SPY">${g}${line(b, "--s2", 1.25)}${line(a, "--s1", 2)}</svg>
+    <div class="legend"><span style="--c: var(--s1)">${esc(symbol)}</span><span style="--c: var(--s2)">SPY, scaled to the same start</span></div>`;
+}
+
+function statementTable(st, which) {
+  const part = st[which];
+  if (!part) return "<p class='muted'>None.</p>";
+  return `<div class="table-wrap"><table><tr><th class="l">Line</th>${part.periods.map(p => `<th>${esc(p)}</th>`).join("")}</tr>` +
+    Object.entries(part.rows).map(([k, vals]) => `<tr><td class="l">${esc(k)}</td>${vals.map(v => `<td>${k.includes("EPS") ? (v == null ? "–" : v.toFixed(2)) : big(v)}</td>`).join("")}</tr>`).join("") + "</table></div>";
+}
+
+async function load() {
+  document.title = symbol;
+  $("sym").textContent = symbol;
+  let d;
+  try {
+    const res = await fetch("/api/ticker?symbol=" + encodeURIComponent(symbol));
+    d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.statusText);
+  } catch (e) { $("err").innerHTML = `<div class="note">${esc(e.message)}</div>`; return; }
+  const prof = d.profile && !d.profile.error ? d.profile : {};
+  $("nm").textContent = prof.longName || prof.shortName || d.name || "";
+  const p = d.price;
+  if (p && !p.error) {
+    $("px").innerHTML = `${money(p.last)} ${spct(p.returns["1d"], 2)}`;
+    $("asof").textContent = `Prices to the close of ${p.as_of}; history from ${p.first}`;
+    const r = p.returns;
+    $("stats").innerHTML = [["1 week", spct(r["1w"])], ["1 month", spct(r["1m"])], ["3 months", spct(r["3m"])], ["1 year", spct(r["1y"])],
+      ["3 years", spct(r["3y"])], ["5 years", spct(r["5y"])], ["52-wk high", money(p.high_52w)], ["52-wk low", money(p.low_52w)],
+      ["Volatility 3m", pct(p.vol_3m)], ["Worst drop ever", pct(p.max_drawdown)], ["Avg volume 1m", big(p.volume_1m)]]
+      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+    $("chart").innerHTML = chart(p.chart);
+  } else $("stats").innerHTML = failed(p) || "";
+
+  $("news").innerHTML = failed(d.news) || (d.news.length ? d.news.map(a => `<li><a href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}</a>
+    <div class="meta">${a.pub_date ? new Date(a.pub_date).toLocaleString(undefined, {year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : "undated"} · ${esc(a.publisher)}</div>
+    ${a.summary ? `<div class="sum">${esc(a.summary.slice(0, 280))}${a.summary.length > 280 ? "…" : ""}</div>` : ""}</li>`).join("") : "<li class='muted'>No news found.</li>");
+
+  const f = d.financials;
+  if (f && f.note) $("fin").innerHTML = `<p class="muted">${esc(f.note)}</p>`;
+  else if (failed(f)) $("fin").innerHTML = failed(f);
+  else {
+    let kind = "income", freq = "annual";
+    const draw = () => {
+      $("fin").innerHTML = `<div class="tabs">${[["income", "Income"], ["balance", "Balance sheet"], ["cashflow", "Cash flow"]].map(([k, l]) => `<button data-k="${k}" aria-pressed="${k === kind}">${l}</button>`).join("")}
+        <span style="width:12px"></span>${["annual", "quarterly"].map(q => `<button data-q="${q}" aria-pressed="${q === freq}">${q}</button>`).join("")}</div>` +
+        statementTable(f[kind] || {}, freq) + `<p class="muted small">Yahoo's figures as of today; past periods may have been restated since first reported.</p>`;
+      $("fin").querySelectorAll("button[data-k]").forEach(b => b.onclick = () => { kind = b.dataset.k; draw(); });
+      $("fin").querySelectorAll("button[data-q]").forEach(b => b.onclick = () => { freq = b.dataset.q; draw(); });
+    };
+    draw();
+  }
+
+  const e = d.earnings;
+  $("earn").innerHTML = failed(e) ? `<tr><td>${failed(e)}</td></tr>` : (e.length ? "<tr><th class='l'>Report date</th><th>EPS estimate</th><th>Reported</th><th>Surprise</th></tr>" +
+    e.map(x => `<tr><td class="l">${esc(x.date)}</td><td>${x.estimate == null ? "–" : x.estimate.toFixed(2)}</td><td>${x.reported == null ? "upcoming" : x.reported.toFixed(2)}</td><td>${x.surprise_pct == null ? "–" : `<span class="${x.surprise_pct >= 0 ? "pos" : "neg"}">${x.surprise_pct.toFixed(1)}%</span>`}</td></tr>`).join("") : "<tr><td class='muted'>No earnings: funds do not report them.</td></tr>");
+
+  const m = d.mine;
+  if (failed(m)) $("mine").innerHTML = failed(m);
+  else {
+    const q = m.quantity, rows = Object.entries(q);
+    let h = rows.length ? `<p>${rows.filter(([k]) => k !== "combined").map(([k, v]) => `${k[0].toUpperCase() + k.slice(1)}: <b>${(+v).toFixed(6).replace(/\.?0+$/, "")}</b> shares`).join(" · ")}` +
+      (p && !p.error && q.combined ? ` · worth ${money(q.combined * p.last)}` : "") + "</p>" : "<p class='muted'>Not held.</p>";
+    if (m.plan) h += `<p>Latest plan: now ${pct(m.plan.current)}, target <b>${pct(m.plan.target)}</b>${Math.abs(m.plan.trade) >= 0.01 ? `, ${m.plan.trade > 0 ? "buy" : "sell"} ${money(Math.abs(m.plan.trade))}` : ""}.</p><p class="muted small">${esc(m.plan.reason)}</p>`;
+    if (m.official.length) h += `<details><summary class="small">In ${m.official.length} official recommendation(s)</summary><table>${m.official.map(o => `<tr><td class="l">${esc(o.session)}</td><td>${pct(o.target)}</td><td>${esc(o.status)}</td></tr>`).join("")}</table></details>`;
+    $("mine").innerHTML = h;
+  }
+
+  const fc = d.forecast;
+  $("fc").innerHTML = failed(fc) || (fc.length ? `<table><tr><th class="l">Horizon</th><th>Mean</th><th>5–95%</th><th>P(gain)</th></tr>` +
+    fc.map(x => `<tr><td class="l">${x.horizon} sessions <span class="muted small">${esc(x.model)}</span></td><td>${spct(x.mean, 2)}</td><td>${spct(x.q05)} to ${spct(x.q95)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") +
+    `</table><p class="muted small">Log return above cash over the horizon, from data to ${esc(fc[0].info_cutoff)}. Model estimates, not outcomes; see the Forecasts tab for their record.</p>` : "<p class='muted'>Not in any forecast run.</p>");
+
+  const an = d.analysts;
+  if (failed(an)) $("analysts").innerHTML = failed(an);
+  else {
+    const cur = an.current || {}, pt = cur.price_targets || {}, rec = (cur.recommendations || [])[0];
+    let h = "";
+    if (pt.mean) h += `<p>Price target: mean <b>${money(pt.mean)}</b> (low ${money(pt.low)}, high ${money(pt.high)})` + (p && !p.error ? `, ${spct(pt.mean / p.last - 1)} from here` : "") + "</p>";
+    if (rec) h += `<p class="small">This month: ${rec.strongBuy} strong buy · ${rec.buy} buy · ${rec.hold} hold · ${rec.sell} sell · ${rec.strongSell} strong sell</p>`;
+    if (prof.recommendationKey) h += `<p class="small muted">Consensus: ${esc(prof.recommendationKey.replace("_", " "))} (${prof.numberOfAnalystOpinions || "?"} analysts)</p>`;
+    h += an.actions.length ? `<details ${h ? "" : "open"}><summary class="small">Rating changes, newest first (${an.actions_total} on record)</summary><table>` +
+      an.actions.map(x => `<tr><td class="l small">${esc(x.date)}</td><td class="l small">${esc(x.Firm)}</td><td class="l small"><span class="${x.Action === "up" ? "up" : x.Action === "down" ? "down" : ""}">${esc(x.ToGrade)}</span>${x.FromGrade && x.FromGrade !== x.ToGrade ? ` <span class="muted">from ${esc(x.FromGrade)}</span>` : ""}</td><td class="small">${x.currentPriceTarget ? money(x.currentPriceTarget, 0) : ""}</td></tr>`).join("") + "</table></details>" : "";
+    $("analysts").innerHTML = h || "<p class='muted'>No analyst coverage (funds usually have none).</p>";
+  }
+
+  const facts = [["Type", prof.quoteType], ["Sector", prof.sector], ["Industry", prof.industry], ["Category", prof.category], ["Fund family", prof.fundFamily],
+    ["Market cap", prof.marketCap && big(prof.marketCap)], ["Fund assets", prof.totalAssets && big(prof.totalAssets)], ["Expense ratio", prof.netExpenseRatio != null ? prof.netExpenseRatio.toFixed(2) + "%" : null],
+    ["Yield", prof.yield != null ? pct(prof.yield, 2) : prof.dividendYield != null ? prof.dividendYield.toFixed(2) + "%" : null], ["P/E", prof.trailingPE && prof.trailingPE.toFixed(1)],
+    ["Forward P/E", prof.forwardPE && prof.forwardPE.toFixed(1)], ["Beta", (prof.beta ?? prof.beta3Year) && (prof.beta ?? prof.beta3Year).toFixed(2)], ["Short % of float", prof.shortPercentOfFloat != null ? pct(prof.shortPercentOfFloat) : null]]
+    .filter(([, v]) => v != null && v !== "");
+  $("about").innerHTML = (failed(d.profile) || "") + (facts.length ? `<table>${facts.map(([k, v]) => `<tr><td class="l muted">${k}</td><td>${esc(v)}</td></tr>`).join("")}</table>` : "") +
+    (prof.longBusinessSummary ? `<details><summary class="small">Description</summary><p class="small">${esc(prof.longBusinessSummary)}</p></details>` : "");
+  $("desc").textContent = prof.category || prof.industry || "";
+
+  const rp = d.reports;
+  if (failed(rp)) $("reports").innerHTML = failed(rp);
+  else {
+    let h = rp.ratings.length ? `<p class="small">AI ratings on record: ${rp.ratings.map(r => `${esc(r.date)} <b>${esc(r.rating)}</b>`).join(" · ")}</p>` : "";
+    h += rp.runs.length ? rp.runs.map(run => `<details><summary>${esc(run.date)}: ${run.files.length} report(s)</summary>` +
+      run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}">${esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
+      : "<p class='muted'>No saved TradingAgents analysis for this ticker. Run one with the analyze command or the AI ratings button (paid, budgeted).</p>";
+    $("reports").innerHTML = h;
+    $("reports").querySelectorAll("a[data-path]").forEach(a => a.onclick = async ev => {
+      ev.preventDefault();
+      const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
+      $("reportView").innerHTML = `<div class="report">${esc(await res.text())}</div>`;
+    });
+  }
+}
+load();
+</script>
+</body>
+</html>

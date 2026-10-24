@@ -68,6 +68,21 @@ def _articles(key: str, fetch) -> list[dict]:
     return market_store.articles(key, parsed) if market_store is not None else parsed()
 
 
+def _ticker_news(canonical: str, limit: int) -> list:
+    """A ticker's articles from Yahoo. Its ticker-news call has come back empty for every
+    ticker since late 2026, so Yahoo's search news for the symbol fills in, keeping
+    the articles Yahoo tags with the ticker when it tags any."""
+    news = yf_retry(lambda: yf.Ticker(canonical).get_news(count=limit)) or []
+    if news:
+        return news
+    try:
+        found = yf_retry(lambda: yf.Search(query=canonical, news_count=limit, enable_fuzzy_query=False).news) or []
+    except Exception:  # the fallback failing leaves what the ticker feed gave: nothing
+        return news
+    tagged = [a for a in found if canonical in (a.get("relatedTickers") or [])]
+    return tagged or found
+
+
 def get_news_yfinance(
     ticker: str,
     start_date: str,
@@ -90,8 +105,7 @@ def get_news_yfinance(
     # returns no news. Keep the user's ticker in the report header.
     canonical = normalize_symbol(ticker)
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
-    news = _articles(f"ticker:{canonical}:{article_limit}",
-                     lambda: yf_retry(lambda: yf.Ticker(canonical).get_news(count=article_limit)))
+    news = _articles(f"ticker:{canonical}:{article_limit}", lambda: _ticker_news(canonical, article_limit))
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -216,3 +230,12 @@ def get_market_headlines(as_of_date: str, queries: list[str], look_back_days: in
             found.append(data)
     found.sort(key=lambda d: d["pub_date"] or datetime.min.replace(tzinfo=UTC), reverse=True)
     return [{**d, "pub_date": d["pub_date"].isoformat() if d["pub_date"] else None} for d in found[:limit]]
+
+
+def ticker_articles(ticker: str, limit: int = 30) -> list[dict]:
+    """A ticker's news as records (title, publisher, link, pub_date, summary), newest first,
+    including every article the local store has kept for it from earlier fetches."""
+    canonical = normalize_symbol(ticker)
+    articles = _articles(f"ticker:{canonical}:{limit}", lambda: _ticker_news(canonical, limit))
+    articles = sorted(articles, key=lambda d: d["pub_date"] or datetime.min.replace(tzinfo=UTC), reverse=True)
+    return [{**d, "pub_date": d["pub_date"].isoformat() if d["pub_date"] else None} for d in articles]

@@ -283,7 +283,8 @@ class MarketStore:
                                      (uid, a.get("title"), a.get("publisher"), a.get("link"), pub, a.get("summary"), now))
                     self.con.execute("INSERT OR IGNORE INTO news_keys SELECT ?, id FROM news_articles WHERE uid = ?",
                                      (key, uid))
-                self.con.execute("INSERT OR REPLACE INTO fetch_log VALUES (?, ?)", (key, now))
+                if fresh:   # an empty answer is not remembered: the source is asked again next time
+                    self.con.execute("INSERT OR REPLACE INTO fetch_log VALUES (?, ?)", (key, now))
                 self.con.execute("COMMIT")
             except BaseException:
                 self.con.execute("ROLLBACK")
@@ -328,10 +329,33 @@ def store(folder: str | Path | None = None) -> MarketStore | None:
     if not enabled():
         return None
     if folder is None:
+        # One store for everything: the optimizer's cache folder, where prices are kept too.
         from tradingagents.dataflows.config import get_config
-        folder = get_config()["data_cache_dir"]
+        folder = Path(get_config()["data_cache_dir"]) / "optimizer"
     key = str(Path(folder).resolve())
     with _stores_lock:
         if key not in _stores:
             _stores[key] = MarketStore(folder)
         return _stores[key]
+
+
+def cached_call(kind: str, ttl: timedelta | None = None):
+    """Keep a data tool's result, so the same request is not downloaded again.
+
+    The result is saved under ``kind`` and the call's exact arguments: once per
+    session by default, or reused for ``ttl`` when given (for sources that publish
+    during the day, such as FRED). A call that fails is not saved. With the store
+    off, the tool runs as it always did.
+    """
+    import functools
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            market_store = store()
+            if market_store is None:
+                return fn(*args, **kwargs)
+            key = json.dumps([fn.__name__, args, kwargs], sort_keys=True, default=str)
+            return market_store.snapshot(key, kind, lambda: fn(*args, **kwargs), ttl=ttl)
+        return inner
+    return wrap

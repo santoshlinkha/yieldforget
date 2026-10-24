@@ -2,6 +2,7 @@ from typing import Annotated
 
 import yfinance as yf
 
+from tradingagents.dataflows import local_store
 from tradingagents.dataflows.date_window import (
     withhold_live_profile,
     withhold_undated_statements,
@@ -17,6 +18,7 @@ from tradingagents.dataflows.vendors.yahoo.common import (
 )
 
 
+@local_store.cached_call("yahoo_tool")
 def get_fundamentals(
     ticker: Annotated[str, "ticker symbol of the company"],
     as_of_date: Annotated[str, "analysis date in YYYY-MM-DD format"] = None
@@ -101,6 +103,7 @@ def _statement(ticker, freq, as_of_date, title, quarterly_attr, annual_attr) -> 
     return f"# {title} data for {canonical} ({freq})\n" + data.to_csv()
 
 
+@local_store.cached_call("yahoo_tool")
 def get_balance_sheet(
     ticker: Annotated[str, "ticker symbol of the company"],
     freq: Annotated[str, "frequency of data: 'annual' or 'quarterly'"] = "quarterly",
@@ -110,6 +113,7 @@ def get_balance_sheet(
     return _statement(ticker, freq, as_of_date, "Balance Sheet", "quarterly_balance_sheet", "balance_sheet")
 
 
+@local_store.cached_call("yahoo_tool")
 def get_cashflow(
     ticker: Annotated[str, "ticker symbol of the company"],
     freq: Annotated[str, "frequency of data: 'annual' or 'quarterly'"] = "quarterly",
@@ -119,6 +123,7 @@ def get_cashflow(
     return _statement(ticker, freq, as_of_date, "Cash Flow", "quarterly_cashflow", "cashflow")
 
 
+@local_store.cached_call("yahoo_tool")
 def get_income_statement(
     ticker: Annotated[str, "ticker symbol of the company"],
     freq: Annotated[str, "frequency of data: 'annual' or 'quarterly'"] = "quarterly",
@@ -128,6 +133,7 @@ def get_income_statement(
     return _statement(ticker, freq, as_of_date, "Income Statement", "quarterly_income_stmt", "income_stmt")
 
 
+@local_store.cached_call("yahoo_tool")
 def get_insider_transactions(
     ticker: Annotated[str, "ticker symbol of the company"],
     as_of_date: Annotated[str | None, "analysis date, yyyy-mm-dd"] = None,

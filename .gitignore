@@ -229,3 +229,6 @@ p.out
 /data/
 *.sqlite3
 *.sqlite3-*
+
+# Official recommendation reports (personal)
+/recommendations/

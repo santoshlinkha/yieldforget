@@ -107,3 +107,33 @@ def test_snapshots_are_kept_per_session_and_histories_reused(tmp_path):
     store.snapshot("AAA", "upgrades", fetch, ttl=timedelta(days=7))
     store.snapshot("AAA", "upgrades", fetch, ttl=timedelta(days=7))
     assert len(asked) == 3
+
+
+def test_a_data_tool_is_called_once_for_the_same_request(tmp_path, monkeypatch):
+    from tradingagents.dataflows import local_store
+
+    market_store = MarketStore(tmp_path)
+    monkeypatch.setattr(local_store, "store", lambda folder=None: market_store)
+    calls = []
+
+    @local_store.cached_call("yahoo_tool")
+    def fundamentals(ticker, as_of_date=None):
+        calls.append(ticker)
+        return f"report for {ticker} at {as_of_date}"
+
+    assert fundamentals("AAA", as_of_date="2026-10-20") == "report for AAA at 2026-10-20"
+    assert fundamentals("AAA", as_of_date="2026-10-20") == "report for AAA at 2026-10-20"
+    fundamentals("AAA", as_of_date="2026-10-21")   # a different request is asked
+    assert calls == ["AAA", "AAA"]
+
+
+def test_an_empty_news_answer_is_asked_again(tmp_path):
+    store, asked = MarketStore(tmp_path), []
+
+    def empty():
+        asked.append(1)
+        return []
+
+    store.articles("ticker:AAA:30", empty)
+    store.articles("ticker:AAA:30", empty)
+    assert len(asked) == 2

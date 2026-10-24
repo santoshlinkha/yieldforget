@@ -430,3 +430,25 @@ def test_walk_forward_backtest_with_scenarios_and_a_target_reports_its_promise()
     assert all(r.limit is None or r.predicted <= r.limit + 1e-6 for r in result.history)
     assert all(r.limit is None or r.limit <= 0.20 + 1e-9 for r in result.history)
     assert result.turnover > 0 and "held for a year" in render_backtest(result)
+
+
+def test_auto_invest_follows_the_target_mix_and_keeps_the_budget():
+    from tradingagents.optimizer.auto_invest import recommend
+
+    plan = build_plan(_book(), {"AAA": 20.0}, _settings(loss_limit=0.10), closes=_closes())
+    rec = recommend(plan, 20.0, {"AAA": 20.0})
+    assert sum(r.per_day for r in rec.schedule) == pytest.approx(20.0, abs=0.01)
+    # Each order is at least $1, at Robinhood's slowest pace that keeps the share.
+    assert all(r.amount >= 1.0 - 1e-9 for r in rec.schedule)
+    weights = {r.ticker: r.target for r in plan.rows if r.target > 1e-4} | {plan.cash.ticker: plan.cash.target}
+    for r in rec.schedule:
+        assert r.per_day / 20.0 == pytest.approx(weights[r.ticker] / sum(weights.values()), rel=0.05)
+    assert any(c["ticker"] == "AAA" for c in rec.changes) or "AAA" in {r.ticker for r in rec.schedule}
+
+
+def test_a_small_share_is_bought_less_often_not_dropped():
+    from tradingagents.optimizer.auto_invest import _frequency
+
+    assert _frequency(5.0, 1.0) == ("every market day", 5.0)
+    assert _frequency(0.30, 1.0) == ("every week", 1.5)
+    assert _frequency(0.06, 1.0) == ("every month", 1.26)

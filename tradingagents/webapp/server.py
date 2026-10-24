@@ -127,6 +127,8 @@ class App:
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
+        self.last_rows: dict[str, dict] = {}
+        self._memo: dict[str, tuple[str, object]] = {}   # what was computed, and from which inputs
 
     def read_json(self, path: Path, default):
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
@@ -185,8 +187,33 @@ class App:
         return fetch_closes([*owned, *universe, *proxies, settings.cash_proxy, *settings.scenario_references],
                             required=owned, cache_dir=self.cache_dir)
 
+    def _inputs(self, *parts) -> str:
+        """A fingerprint of everything a computed page section depends on: the stored prices,
+        the books, the settings and the files it reads. Same fingerprint, same answer."""
+        market_store = local_store.store(self.cache_dir)
+        last_event = self.store.con.execute("SELECT MAX(id) FROM events").fetchone()[0]
+        voids = self.store.con.execute("SELECT COUNT(*) FROM event_voids").fetchone()[0]
+        files = [f.stat().st_mtime if f.exists() else 0 for f in (self.schedule_path, self.universe_path)]
+        settings = {sl: self.store.settings(sl) for sl in SLEEVES}
+        return json.dumps([market_store.bars_checked_at() if market_store else None, last_event, voids, files,
+                           settings, self.ratings_date, _today(), *parts], sort_keys=True, default=str)
+
+    def _remember(self, name: str, inputs: str, make):
+        hit = self._memo.get(name)
+        if hit and hit[0] == inputs:
+            return hit[1]
+        value = make()
+        self._memo[name] = (inputs, value)
+        return value
+
     def compute(self, body: dict, ratings: dict | None = None) -> dict:
-        """The sleeve's plan and orders, and everything needed to save them; nothing is stored."""
+        """The sleeve's plan and orders, and everything needed to save them; nothing is stored.
+        Computed again only when an input changed (see ``_inputs``)."""
+        key = self._inputs(body, ratings, self.ratings if body.get("use_ai") else None)
+        return self._remember(f"plan:{json.dumps(body, sort_keys=True, default=str)}", key,
+                              lambda: self._compute(body, ratings))
+
+    def _compute(self, body: dict, ratings: dict | None = None) -> dict:
         sleeve = self.sleeve(body)
         context, cash = self.store.portfolio(sleeve, _today())
         if not context.positions and cash.total <= 0:
@@ -202,6 +229,7 @@ class App:
         closes = self._closes(context, schedule, universe, settings)
         plan = build_plan(context, schedule, settings, ratings=ratings, universe=universe, closes=closes)
         self.last_targets = [r.ticker for r in plan.rows if r.target > 1e-4]
+        self.last_rows = {r.ticker: asdict(r) for r in [*plan.rows, plan.cash]}
         # Buys may spend only settled cash not already reserved (T+1, cash account).
         suggestion = daily_orders(plan, settled_cash=max(cash.available, 0.0))
         return {"sleeve": sleeve, "plan": plan, "suggestion": suggestion, "settings": settings, "closes": closes,
@@ -221,7 +249,8 @@ class App:
                 suggestion=suggestion, settings=settings, closes=c["closes"], universe=c["universe"],
                 info_cutoff=c["closes"].index[-1].date().isoformat(), market_data_at=fetched,
                 ai={"ratings": c["ratings"] or {}, "ratings_date": self.ratings_date}, price_tickers=tickers)
-        folder = Path(self.config["results_dir"]) / "optimizer"
+        # Next to the records it belongs to, so a second set of books never mixes its reports in.
+        folder = self.store.folder / "recommendations"
         folder.mkdir(parents=True, exist_ok=True)
         report = folder / f"{rec['session']}_{sleeve}_{rec['id'][:8]}.md"
         report.write_text(f"Official recommendation {rec['id']} for {rec['session']} ({sleeve}); "
@@ -242,7 +271,38 @@ class App:
                "info_cutoff": c["closes"].index[-1].date().isoformat()}
         if save:
             out["saved"] = self.save_official(c)
+        out.update(self.overview_extras(c))
         return out
+
+    def overview_extras(self, c: dict) -> dict:
+        """What the overview shows beside the plan: the session its orders are for, recurring
+        investments, the account by sleeve, and how fresh each input is."""
+        import pytz
+
+        from tradingagents.optimizer.auto_invest import recommend
+
+        now = datetime.now(pytz.utc)
+        session = recommendations.session_for(now)
+        extras = {"orders_session": session, "orders_session_is_today": session == _today()}
+        if c["sleeve"] == "investing":
+            current = load_schedule(self.schedule_path) if self.schedule_path.exists() else {}
+            budget = sum(current.values()) or float(self.store.get("investing", "daily_contribution"))
+            extras["auto_invest"] = asdict(recommend(c["plan"], budget, current))
+        books = self.books()
+        extras["sleeves"] = {k: {"equity": v["equity"], "cash": v["cash"], "positions": len(v["positions"])}
+                             for k, v in books["sleeves"].items()}
+        last_rec = next(iter(recommendations.history(self.store.con, self.store.ledger.account_id, limit=1)), None)
+        run = self.store.con.execute("SELECT created_at, model, horizon, info_cutoff FROM forecast_runs"
+                                     " ORDER BY created_at DESC LIMIT 1").fetchone()
+        market_store = local_store.store(self.cache_dir)
+        extras["freshness"] = {
+            "prices_through": c["closes"].index[-1].date().isoformat(),
+            "prices_checked": market_store.bars_checked_at() if market_store else None,
+            "last_official": {k: last_rec[k] for k in ("id", "session", "published_at", "status")} if last_rec else None,
+            "last_forecast": dict(run) if run else None,
+            "last_event": books["events"][0]["recorded_at"] if books["events"] else None,
+        }
+        return extras
 
     # --- the books ---
 
@@ -353,6 +413,139 @@ class App:
         return {"runs": runs, "run": chosen, "trials": trials, "job": self.forecast.state(),
                 "settings": {s: {k: self.store.get(s, k) for k in ("return_model", "forecast_horizon")}
                              for s in SLEEVES}}
+
+    # --- one ticker, everything known about it ---
+
+    def report_roots(self) -> list[Path]:
+        return [Path(self.config["results_dir"]).resolve(), (self.portfolio_path.parent / "results").resolve()]
+
+    def ticker(self, symbol: str) -> dict:
+        """Everything about one instrument, section by section; a section that fails says why
+        and the rest still show. Each source is cached by the local store, so opening the
+        page again costs little."""
+        import numpy as np
+
+        from tradingagents.dataflows.vendors.yahoo import history as yh
+        from tradingagents.dataflows.vendors.yahoo.news import ticker_articles
+        from tradingagents.research.prices import bars
+
+        symbol = symbol.strip().upper()
+        if not symbol or len(symbol) > 15 or not all(c.isalnum() or c in ".-^=" for c in symbol):
+            raise ValueError(f"not a ticker: {symbol!r}")
+        out: dict = {"symbol": symbol, "name": describe(symbol)}
+
+        def section(name, fn):
+            try:
+                out[name] = fn()
+            except Exception as exc:  # one source down must not blank the page
+                logger.info("ticker %s %s failed: %s", symbol, name, exc)
+                out[name] = {"error": str(exc)[:300]}
+
+        def price():
+            b = bars([symbol, "SPY"], self.cache_dir)
+            close = b["Close"][symbol].dropna()
+            if close.empty:
+                raise ValueError("Yahoo has no prices for it")
+            spy = b["Close"]["SPY"].reindex(close.index).ffill()
+            r = np.log(close).diff()
+            def ret(n):
+                return float(close.iloc[-1] / close.iloc[-1 - n] - 1) if len(close) > n else None
+            year = close.iloc[-252:]
+            weekly = close.iloc[::5] if len(close) < 2600 else close.iloc[-2600::5]
+            return {"last": float(close.iloc[-1]), "as_of": str(close.index[-1].date()),
+                    "first": str(close.index[0].date()),
+                    "returns": {"1d": ret(1), "1w": ret(5), "1m": ret(21), "3m": ret(63), "1y": ret(252),
+                                "3y": ret(756), "5y": ret(1260)},
+                    "high_52w": float(year.max()), "low_52w": float(year.min()),
+                    "vol_3m": float(r.iloc[-63:].std() * np.sqrt(252)),
+                    "max_drawdown": float(1 - (close / close.cummax()).min()),
+                    "volume_1m": float(b["Volume"][symbol].dropna().iloc[-21:].mean())
+                    if b["Volume"][symbol].notna().any() else None,
+                    "chart": {"dates": [d.strftime("%Y-%m-%d") for d in weekly.index],
+                              "close": [round(float(v), 4) for v in weekly],
+                              "spy": [round(float(v), 4) for v in spy.loc[weekly.index]]}}
+
+        def mine():
+            today = _today()
+            held = {}
+            for sl in (*SLEEVES, "combined"):
+                q = self.store.ledger.state(sl, today).positions.get(symbol)
+                if q:
+                    held[sl] = q
+            history = [{"session": r["session"], "status": r["status"], "target": r["targets"].get(symbol)}
+                       for r in recommendations.history(self.store.con, self.store.ledger.account_id)
+                       if symbol in r["targets"]]
+            row = self.last_rows.get(symbol)
+            return {"quantity": held, "plan": row and {k: row[k] for k in ("current", "target", "trade", "worst_loss",
+                                                                             "expected", "reason", "daily_buy")},
+                    "official": history}
+
+        def forecast():
+            from tradingagents.research.engine import latest_run
+            out_f = []
+            for h in (5, 20, 60):
+                run = latest_run(self.store.con, horizon=h)
+                f = run and next((x for x in run["forecasts"] if x["ticker"] == symbol), None)
+                if f:
+                    out_f.append({"horizon": h, "model": run["model"], "info_cutoff": run["info_cutoff"],
+                                  **{k: f[k] for k in ("mean", "median", "q05", "q95", "p_gain", "estimation_sd")}})
+            return out_f
+
+        def analysts():
+            actions = yh.upgrades(symbol, self.cache_dir)
+            recent = actions.iloc[::-1].head(40) if len(actions) else actions
+            return {"current": yh.current_analysts(symbol, self.cache_dir),
+                    "actions": [{"date": str(i)[:10], **{k: (None if isinstance(v, float) and v != v else v)
+                                                         for k, v in row.items()}}
+                                for i, row in recent.iterrows()],
+                    "actions_total": int(len(actions))}
+
+        def earnings():
+            e = yh.earnings(symbol, self.cache_dir)
+            if not len(e):
+                return []
+            rows = e.iloc[::-1].head(16)
+            return [{"date": str(i)[:10], "estimate": r.get("EPS Estimate"), "reported": r.get("Reported EPS"),
+                     "surprise_pct": r.get("Surprise(%)")} for i, r in rows.iterrows()]
+
+        def reports():
+            found = []
+            for root in self.report_roots():
+                folder = root / symbol
+                if not folder.is_dir():
+                    continue
+                for day in sorted(folder.iterdir(), reverse=True):
+                    rep = day / "reports"
+                    if rep.is_dir():
+                        found.append({"date": day.name, "files": [{"name": f.stem.replace("_", " "),
+                                                                   "path": str(f.resolve())}
+                                                                  for f in sorted(rep.glob("*.md"))]})
+            from tradingagents.memory import TradingMemoryLog
+            ratings = [{"date": e["date"], "rating": e["rating"]} for e in TradingMemoryLog(self.config).load_entries()
+                       if e.get("ticker", "").upper() == symbol]
+            return {"runs": found, "ratings": ratings}
+
+        section("price", price)
+        section("profile", lambda: yh.profile(symbol, self.cache_dir))
+        section("mine", mine)
+        section("forecast", forecast)
+        section("news", lambda: ticker_articles(symbol))
+        section("analysts", analysts)
+        section("earnings", earnings)
+        quote_type = (out.get("profile") or {}).get("quoteType") if isinstance(out.get("profile"), dict) else None
+        if quote_type == "ETF":
+            out["financials"] = {"note": "Funds have no company financial statements."}
+        else:
+            section("financials", lambda: yh.financials(symbol, self.cache_dir))
+        section("reports", reports)
+        return out
+
+    def report(self, path: str) -> str:
+        """A saved analysis report, only from the report folders."""
+        target = Path(path).resolve()
+        if target.suffix != ".md" or not any(root in target.parents for root in self.report_roots()):
+            raise ValueError("not a saved report")
+        return target.read_text(encoding="utf-8")
 
     # --- research ---
 
@@ -466,10 +659,15 @@ class App:
 
     def market(self) -> dict:
         """Recent moves from closing prices, and today's saved explanation if there is one."""
-        sp500 = get_sp500_members(self.cache_dir)
-        themes = [t for group in THEME_GROUPS.values() for t in group]
-        closes = fetch_closes([*market_tickers(), *sp500, *themes], required=["SPY"], cache_dir=self.cache_dir)
-        overview = market_overview(closes, sp500)
+        def build():
+            sp500 = get_sp500_members(self.cache_dir)
+            themes = [t for group in THEME_GROUPS.values() for t in group]
+            closes = fetch_closes([*market_tickers(), *sp500, *themes], required=["SPY"], cache_dir=self.cache_dir)
+            return market_overview(closes, sp500)
+
+        market_store = local_store.store(self.cache_dir)
+        overview = self._remember("market", json.dumps([market_store.bars_checked_at() if market_store else None,
+                                                        _today()]), build)
         path = Path(self.config["results_dir"]) / "market" / f"brief_{overview['as_of']}.json"
         brief = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         return {"overview": overview, "brief": brief, "explain": self.explain.state()}
@@ -538,6 +736,14 @@ def make_handler(app: App):
             try:
                 if url.path in ("/", "/index.html"):
                     self._send(HTTPStatus.OK, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+                elif url.path in ("/favicon.svg", "/favicon.ico"):
+                    self._send(HTTPStatus.OK, (STATIC / "favicon.svg").read_bytes(), "image/svg+xml")
+                elif url.path.startswith("/ticker/"):
+                    self._send(HTTPStatus.OK, (STATIC / "ticker.html").read_bytes(), "text/html; charset=utf-8")
+                elif url.path == "/api/ticker":
+                    self._json(app.ticker(query.get("symbol", "")))
+                elif url.path == "/api/report":
+                    self._send(HTTPStatus.OK, app.report(query.get("path", "")).encode(), "text/plain; charset=utf-8")
                 elif url.path == "/api/state":
                     context, _ = app.store.portfolio("combined", _today())
                     config = read_config(app.universe_path)
@@ -656,6 +862,10 @@ def make_handler(app: App):
                 elif self.path == "/api/market/explain":
                     self._started(app.start_explain(), "The market explanation")
                 elif self.path == "/api/tracker/start":
+                    # Starting archives nothing by itself, but a page that failed to read the record
+                    # must not replace it: an existing record is only replaced after "Start over".
+                    if read_ledger(app.tracker_path) is not None:
+                        raise ValueError("a paper record already exists; use Start over to begin a new one")
                     self._started(app.start_tracker(body), "The tracker")
                 elif self.path == "/api/tracker/update":
                     if read_ledger(app.tracker_path) is None:

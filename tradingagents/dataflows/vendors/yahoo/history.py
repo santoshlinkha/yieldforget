@@ -146,3 +146,84 @@ def collect_today(symbols, cache_dir=None, options: bool = True, progress=None) 
                 logger.info("snapshot %s %s failed: %s", symbol, kind, exc)
                 counts["failed"] += 1
     return counts
+
+
+PROFILE_KEYS = ("longName", "shortName", "quoteType", "sector", "industry", "category", "fundFamily", "exchange",
+                "currency", "marketCap", "totalAssets", "netExpenseRatio", "annualReportExpenseRatio", "yield",
+                "dividendYield", "trailingPE", "forwardPE", "priceToBook", "beta", "beta3Year",
+                "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "fiftyDayAverage", "twoHundredDayAverage",
+                "averageVolume", "sharesOutstanding", "shortPercentOfFloat", "trailingEps", "forwardEps",
+                "targetMeanPrice", "targetMedianPrice", "targetHighPrice", "targetLowPrice", "recommendationKey",
+                "recommendationMean", "numberOfAnalystOpinions", "longBusinessSummary", "website",
+                "fundInceptionDate", "firstTradeDateMilliseconds")
+
+
+def profile(symbol: str, cache_dir=None) -> dict:
+    """What Yahoo says about the instrument today (company or fund), saved once per session."""
+    from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+
+    def fetch():
+        info = yf_retry(lambda: _ticker(symbol).info) or {}
+        return json_safe({k: info.get(k) for k in PROFILE_KEYS if info.get(k) is not None})
+
+    store = local_store.store(cache_dir)
+    return store.snapshot(symbol, "profile", fetch) if store else fetch()
+
+
+STATEMENT_ROWS = {
+    "income": ("Total Revenue", "Gross Profit", "Operating Income", "Net Income", "Diluted EPS", "EBITDA"),
+    "balance": ("Total Assets", "Total Liabilities Net Minority Interest", "Stockholders Equity",
+                "Cash And Cash Equivalents", "Total Debt", "Ordinary Shares Number"),
+    "cashflow": ("Operating Cash Flow", "Capital Expenditure", "Free Cash Flow", "Repurchase Of Capital Stock",
+                 "Cash Dividends Paid"),
+}
+
+
+def financials(symbol: str, cache_dir=None) -> dict:
+    """Annual and quarterly income statement, balance sheet and cash flow (key lines), refetched weekly.
+
+    These are Yahoo's figures as of today: a period's numbers may have been restated since
+    they were first reported. For what was on file at a past date, the SEC EDGAR vendor serves
+    each figure at its filing date.
+    """
+    from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+
+    def table(frame, rows):
+        if frame is None or len(frame) == 0:
+            return None
+        keep = [r for r in rows if r in frame.index]
+        sub = frame.loc[keep]
+        return {"periods": [str(c)[:10] for c in sub.columns],
+                "rows": {r: [None if v != v else float(v) for v in sub.loc[r].tolist()] for r in keep}}
+
+    def fetch():
+        t = _ticker(symbol)
+        out = {}
+        for kind, rows in STATEMENT_ROWS.items():
+            annual = {"income": "income_stmt", "balance": "balance_sheet", "cashflow": "cashflow"}[kind]
+            out[kind] = {"annual": table(yf_retry(lambda a=annual: getattr(t, a)), rows),
+                         "quarterly": table(yf_retry(lambda a=annual: getattr(t, "quarterly_" + a)), rows)}
+        return json_safe(out)
+
+    store = local_store.store(cache_dir)
+    return store.snapshot(symbol, "financials", fetch, ttl=HISTORY_TTL) if store else fetch()
+
+
+def current_analysts(symbol: str, cache_dir=None) -> dict:
+    """Today's consensus price target and recommendation counts, saved once per session."""
+    from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+
+    store = local_store.store(cache_dir)
+
+    def get(kind, fn):
+        def fetch():
+            return json_safe(yf_retry(lambda: fn(_ticker(symbol))))
+        try:
+            return store.snapshot(symbol, kind, fetch) if store else fetch()
+        except Exception as exc:  # an ETF has none of this
+            logger.info("%s %s unavailable: %s", symbol, kind, exc)
+            return None
+
+    return {"price_targets": get("price_targets", lambda t: t.analyst_price_targets or {}),
+            "recommendations": get("recommendations", lambda t: _records(t.recommendations_summary)),
+            "eps_trend": get("eps_trend", lambda t: _records(t.eps_trend))}

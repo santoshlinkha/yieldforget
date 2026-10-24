@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 
 import pytz
 
+from tradingagents.dataflows import local_store
 from tradingagents.dataflows.errors import VendorNotConfiguredError
 from tradingagents.dataflows.net import get_scrubbed
 
@@ -153,6 +154,8 @@ def _request(path: str, params: dict) -> dict:
     return response.json()
 
 
+# FRED publishes during the day (8:30 am for many series), so a saved answer is reused for six hours.
+@local_store.cached_call("fred", ttl=timedelta(hours=6))
 def get_macro_data(
     indicator: str,
     as_of_date: str,
