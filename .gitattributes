@@ -1,0 +1,6 @@
+
+# Binary files: never convert line endings
+*.pdf binary
+*.png binary
+*.pkl binary
+*.sqlite3 binary
