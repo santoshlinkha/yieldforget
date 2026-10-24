@@ -194,6 +194,9 @@ svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
 .tile .sub { color: var(--muted); font-size: 11.5px; }
 .tile svg { display: block; margin-top: 6px; }
 td.heat { font-variant-numeric: tabular-nums; }
+/* Seven columns in a half-width panel: names wrap, numbers stay on one line. */
+#mkTable td:first-child { white-space: normal; min-width: 96px; }
+#mkTable td.heat, #mkTable th { white-space: nowrap; }
 tr.grp td { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding-top: 14px; border-bottom: 0; background: none !important; }
 .bars { display: grid; grid-template-columns: minmax(110px, auto) 1fr 64px; gap: 7px 10px; align-items: center; font-size: 13px; }
 .bars .track { position: relative; height: 10px; }
@@ -319,11 +322,11 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         </div>
         <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
       </div>
-      <div class="split">
+      <div class="split wide">
         <div class="card">
           <h3>Returns</h3>
           <p class="muted">Yields and the VIX change in points; everything else in percent.</p>
-          <div class="table-wrap"><table id="mkTable"></table></div>
+          <div class="table-wrap"><table id="mkTable" class="compact"></table></div>
         </div>
         <div>
           <div class="card"><h3>Sectors, last month</h3><div class="bars" id="mkSectors"></div></div>
