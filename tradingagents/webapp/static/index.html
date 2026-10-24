@@ -45,12 +45,13 @@ header { position: sticky; top: 0; z-index: 10; }
 .brand .mark svg { width: 16px; height: 16px; }
 .brand h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
 .brand .acct { color: var(--brand-muted); font-size: 12px; font-weight: 500; }
-nav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; height: 100%; min-width: 0; flex: 0 1 auto; }
+/* Every tab stays visible: the status text beside them gives way first. */
+nav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; height: 100%; min-width: 0; flex: 0 0 auto; }
 nav button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--brand-muted);
   padding: 0 12px; height: 100%; font-weight: 500; font-size: 13.5px; white-space: nowrap; }
 nav button:hover { color: var(--brand-text); }
 nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
-.appbar .status { margin-left: auto; color: var(--brand-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.appbar .status { margin-left: auto; color: var(--brand-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; text-align: right; }
 
 .controls { background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); }
 .controls .wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; }
@@ -80,6 +81,7 @@ nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
 .riskopts input { width: 64px; }
 @media (max-width: 760px) {
   .appbar .wrap { gap: 12px; } .brand .acct, .appbar .status { display: none; }
+  nav { flex: 1 1 auto; }   /* a phone cannot fit every tab: they scroll sideways */
   .risk { flex-wrap: wrap; flex-basis: 100%; } .risk-read { min-width: 0; flex-wrap: wrap; }
   .kpis { grid-template-columns: 1fr 1fr; } .kpi .value { font-size: 20px; }
   .card { padding: 14px; } .movers { grid-template-columns: 1fr; }
@@ -237,7 +239,6 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <button role="tab" data-tab="tracker">Performance</button>
         <button role="tab" data-tab="plan">Allocation</button>
         <button role="tab" data-tab="scanTab">Screener</button>
-        <button role="tab" data-tab="backtest">Backtest</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
         <button role="tab" data-tab="settings">Settings</button>
       </nav>
@@ -398,20 +399,6 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
       </div>
     </section>
 
-    <section class="tab" id="backtest">
-      <div class="page-head"><div><h2>Backtest</h2><p>What your sleeve's value today would have become following the strategy month by month (using only prices known at each date, at your risk level), against holding VTI, SPY or SGOV instead. A simulation of the past, not your record; AI ratings are left out.</p></div></div>
-      <div class="card">
-        <div class="row" style="margin-top:0">
-          <div style="width:180px"><label for="btStart">Start</label><input type="date" id="btStart" value="2012-01-03" min="2008-01-02"></div>
-          <button id="runBt">Run backtest at level <span id="btLimit">2</span></button>
-          <span class="muted" id="btStatus"></span>
-        </div>
-        <div id="btVerdict"></div>
-        <div id="btChart"></div>
-        <div class="table-wrap"><table id="btTable"></table></div>
-      </div>
-    </section>
-
     <section class="tab" id="forecasts">
       <div class="page-head"><div><h2>Forecast models</h2><p>Return forecasts made on this machine from Yahoo prices: no paid AI. A forecast is a log return <b>above cash</b> over its horizon in trading sessions, not a yearly rate, with a 5-95% range and the chance of a gain. These are model estimates, not outcomes; the evidence for each model is its walk-forward record below.</p></div></div>
       <div class="card">
@@ -544,7 +531,6 @@ function showRisk(n) {
   const r = levelInfo(n);
   $("riskNum").textContent = n; $("riskName").textContent = r.name;
   $("riskLimit").textContent = r.loss_limit == null ? "no stress-loss cap" : `max stress loss ${capText(r.loss_limit)}`;
-  $("btLimit").textContent = n;
   if (levels.length) drawRiskTable();
 }
 
@@ -760,34 +746,6 @@ function renderChart(p) {
   </svg>`;
 }
 
-function renderBacktest(r) {
-  // The strategy first, then the benchmarks; every line starts from the same capital.
-  const capital = r.capital || 1;
-  const names = ["Optimizer", "VTI", "SPY", "SGOV"].filter(n => r.curves[n]);
-  const label = n => n === "Optimizer" ? "Strategy" : n === "SGOV" && r.sgov_start ? `SGOV (T-bills before ${r.sgov_start.slice(0, 4)})` : n;
-  const value = (n, i) => r.curves[n][i] / r.curves[n][0] * capital;
-  const W = 720, H = 300, L = 62, R = 16, T = 12, B = 32, n = r.dates.length;
-  const vals = names.flatMap(k => r.curves[k].map((_, i) => value(k, i)));
-  const lo = Math.log(Math.min(...vals) * 0.95), hi = Math.log(Math.max(...vals) * 1.05);
-  const sx = i => L + (i / (n - 1)) * (W - L - R), sy = v => H - B - ((Math.log(v) - lo) / (hi - lo || 1)) * (H - T - B);
-  const yTicks = [0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12].map(m => m * capital).filter(v => Math.log(v) >= lo && Math.log(v) <= hi);
-  const years = []; let lastY = "";
-  r.dates.forEach((d, i) => { const y = d.slice(0, 4); if (y !== lastY && +y % 2 === 0) years.push(i); lastY = y; });
-  const money = v => v >= 1000 ? "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k" : "$" + v.toFixed(0);
-  const grid = axes(W, H, L, R, T, B, sx, sy, years, yTicks, i => r.dates[i].slice(0, 4), money);
-  const lines = names.map((k, j) => `<path d="${r.curves[k].map((_, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(value(k, i)).toFixed(1)}`).join("")}" fill="none" stroke="var(${SERIES[j % 4]})" stroke-width="${j ? 1.5 : 2.75}"><title>${esc(label(k))}</title></path>`).join("");
-  const last = k => value(k, n - 1);
-  $("btChart").innerHTML = `<p class="muted">${usd(capital)} on ${r.start}, to ${r.end}.</p>
-    <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Value of the strategy against VTI, SPY and SGOV, log scale">${grid}${lines}</svg>
-    <div class="legend">${names.map((k, j) => `<span style="--c: var(${SERIES[j % 4]})">${esc(label(k))}: ${usd(last(k))}</span>`).join("")}</div>`;
-  $("btTable").innerHTML = "<tr><th>Held instead</th><th>Value at the end</th><th>Strategy minus it</th></tr>" +
-    names.filter(k => k !== "Optimizer").map(k => {
-      const d = last("Optimizer") - last(k);
-      return `<tr><td>${esc(label(k))}</td><td>${usd(last(k))}</td><td class="${d >= 0 ? "pos" : "neg"}">${d >= 0 ? "+" : "−"}${usd(Math.abs(d))}</td></tr>`;
-    }).join("");
-  $("btVerdict").innerHTML = "";
-}
-
 // --- forecasts ---
 const lpct = (x, d = 2) => x == null ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%`;
 let fcSort = {key: "mean", dir: -1}, lastFc = null, fcView = null, fcWasRunning = false;
@@ -913,19 +871,6 @@ $("fcUse").onchange = async () => {
     refresh(); loadForecasts();
   }
   catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }
-};
-
-async function pollBacktest() {
-  const b = await api("/api/backtest");
-  $("runBt").disabled = b.running;
-  $("btStatus").textContent = b.running ? `Running: ${b.progress}…` : "";
-  if (b.error) showError("Backtest failed: " + b.error);
-  if (b.result) renderBacktest(b.result);
-  if (b.running) setTimeout(pollBacktest, 1500);
-}
-$("runBt").onclick = async () => {
-  try { await api("/api/backtest", {risk_level: riskLevel, start: $("btStart").value}); pollBacktest(); }
-  catch (e) { showError(e.message); }
 };
 
 // --- settings editors ---
@@ -1298,7 +1243,8 @@ $("runAi").onclick = async () => {
   if (["investing", "trading"].includes(linkedSleeve)) store.set("sleeve", linkedSleeve);
   $("sleeve").value = store.get("sleeve", "investing");
   const linked = location.hash.slice(1);
-  showTab(document.getElementById(linked)?.classList.contains("tab") ? linked : store.get("tab", "today"));
+  const isTab = id => document.getElementById(id)?.classList.contains("tab");
+  showTab(isTab(linked) ? linked : isTab(store.get("tab", "today")) ? store.get("tab", "today") : "today");
   if (linked) history.replaceState(null, "", location.pathname);
   window.scrollTo(0, 0);
   try {
@@ -1309,7 +1255,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over
