@@ -174,10 +174,10 @@ def profile(symbol: str, cache_dir=None) -> dict:
 
 
 STATEMENT_ROWS = {
-    "income": ("Total Revenue", "Gross Profit", "Operating Income", "Pretax Income", "Tax Provision", "Net Income",
-               "Diluted EPS", "EBITDA"),
-    "balance": ("Total Assets", "Total Liabilities Net Minority Interest", "Stockholders Equity",
-                "Cash And Cash Equivalents", "Total Debt", "Ordinary Shares Number"),
+    "income": ("Total Revenue", "Gross Profit", "Operating Income", "Interest Expense", "Pretax Income", "Tax Provision",
+               "Net Income", "Diluted EPS", "EBITDA"),
+    "balance": ("Total Assets", "Current Assets", "Total Liabilities Net Minority Interest", "Current Liabilities",
+                "Stockholders Equity", "Cash And Cash Equivalents", "Total Debt", "Ordinary Shares Number"),
     "cashflow": ("Operating Cash Flow", "Capital Expenditure", "Free Cash Flow", "Repurchase Of Capital Stock",
                  "Cash Dividends Paid"),
 }
@@ -211,7 +211,7 @@ def financials(symbol: str, cache_dir=None) -> dict:
 
     store = local_store.store(cache_dir)
     # Saved under a new kind whenever STATEMENT_ROWS grows, so the added lines are fetched once.
-    return store.snapshot(symbol, "financials-v2", fetch, ttl=HISTORY_TTL) if store else fetch()
+    return store.snapshot(symbol, "financials-v3", fetch, ttl=HISTORY_TTL) if store else fetch()
 
 
 def corporate_actions(symbol: str, cache_dir=None) -> dict:

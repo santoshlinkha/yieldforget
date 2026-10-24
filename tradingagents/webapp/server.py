@@ -124,6 +124,8 @@ class App:
         self.owner = f"web-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.lock = threading.Lock()   # one writer at a time on the shared connection
         self.ai, self.backtest, self.tracker, self.explain, self.forecast = Job(), Job(), Job(), Job(), Job()
+        self.moat_jobs: dict[str, Job] = {}
+        self.daily = Job()   # the daily Chronos-2 record, apart from the runs started on the page
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -422,6 +424,55 @@ class App:
 
         return self.forecast.start(work)
 
+    def start_daily_record(self) -> bool:
+        """Chronos-2's forecasts for the latest close, at 20 and 60 sessions, once per trading day.
+
+        Chronos-2 may have seen past prices in pretraining, so its walk-forward scores could be
+        flattered; forecasts saved from now on are scored only on prices that came after them.
+        Skipped quietly when Chronos-2 is not installed.
+        """
+        from tradingagents.research.engine import CHRONOS, run_forecast
+
+        try:
+            import chronos  # noqa: F401
+        except ImportError:
+            return False
+        cutoff = local_store.last_final_session().isoformat()
+        con = self.store.con
+        due = [h for h in (20, 60) if not con.execute(
+            "SELECT 1 FROM forecast_runs WHERE model = ? AND horizon = ? AND universe = 'etf' AND info_cutoff >= ?",
+            (CHRONOS, h, cutoff)).fetchone()]
+        if not due:
+            return False
+        context, _ = self.store.portfolio("combined", _today())
+        held = [p.ticker.upper() for p in context.positions]
+        tickers = [t for t in dict.fromkeys([*ETFS, *read_config(self.universe_path)["extra"], *held])
+                   if t not in ("SGOV", "BIL")]
+
+        def work(job):
+            done = []
+            for h in due:
+                job.progress = f"recording Chronos-2's {h}-session forecasts"
+                done.append(run_forecast(con, self.cache_dir, tickers, horizon=h, model=CHRONOS, universe="etf",
+                                         device_setting=self.store.get("global", "compute_backend"))["run_id"])
+            return {"runs": done}
+
+        return self.daily.start(work)
+
+    def live_records(self) -> list[dict]:
+        """Every ETF model and horizon with saved runs, scored on what happened after each run."""
+        from tradingagents.research.engine import live_record
+
+        con = self.store.con
+        pairs = con.execute("SELECT model, horizon, COUNT(DISTINCT info_cutoff) AS n FROM forecast_runs"
+                            " WHERE universe = 'etf' GROUP BY model, horizon ORDER BY horizon, model").fetchall()
+        market_store = local_store.store(self.cache_dir)
+        key = json.dumps([market_store.bars_checked_at() if market_store else None,
+                          con.execute("SELECT COUNT(*) FROM forecast_runs").fetchone()[0]])
+        return self._remember("live_records", key, lambda: [
+            {k: v for k, v in live_record(con, self.cache_dir, r["model"], r["horizon"]).items() if k != "dates"}
+            for r in pairs])
+
     def forecasts(self, query: dict) -> dict:
         from tradingagents.research.engine import latest_run, load_run
 
@@ -615,8 +666,67 @@ class App:
                 from tradingagents.research.moat import moat
                 profile = out.get("profile") if isinstance(out.get("profile"), dict) else {}
                 section("moat", lambda: moat(out["financials"], profile.get("sector"), profile.get("industry")))
+
+                def quality():
+                    from tradingagents.research.quality import checklist
+
+                    closes = bars([symbol], self.cache_dir)["Close"][symbol]
+                    dividends = (out.get("corporate") or {}) if isinstance(out.get("corporate"), dict) else {}
+                    dividends = [[p["date"], p["amount"]] for p in (dividends.get("dividends") or {}).get("payments", [])]
+                    financial = str((out.get("moat") or {}).get("basis", "")).startswith("bank")
+                    analysts = (out.get("analysts") or {}).get("current") if isinstance(out.get("analysts"), dict) else None
+                    return checklist(out["financials"], profile, closes, dividends, analysts, financial)
+
+                section("quality", quality)
+                section("moat_sources", lambda: self.moat_sources(symbol))
         section("reports", reports)
         return out
+
+    # --- moat sources: one paid AI reading of the latest 10-K, saved per filing ---
+
+    def _moat_path(self, symbol: str, accession: str) -> Path:
+        return Path(self.config["results_dir"]) / "moat" / f"{symbol}_{accession}.json"
+
+    def moat_sources(self, symbol: str) -> dict:
+        """The saved reading for the company's newest saved filing, if any, and the job's state."""
+        folder = Path(self.config["results_dir"]) / "moat"
+        saved = sorted(folder.glob(f"{symbol}_*.json"), key=lambda f: f.stat().st_mtime) if folder.is_dir() else []
+        job = self.moat_jobs.get(symbol)
+        return {"saved": json.loads(saved[-1].read_text(encoding="utf-8")) if saved else None,
+                "job": job.state() if job else None}
+
+    def start_moat_sources(self, symbol: str) -> bool:
+        from tradingagents.dataflows.config import run_config
+        from tradingagents.dataflows.vendors.sec_edgar import business_section
+        from tradingagents.dataflows.vendors.yahoo import history as yh
+        from tradingagents.research.moat import moat
+        from tradingagents.research.moat_ai import moat_sources
+
+        symbol = symbol.upper()
+        job = self.moat_jobs.setdefault(symbol, Job())
+        g = self.store.settings("global")
+
+        def work(job):
+            job.progress = "reading the latest 10-K from SEC EDGAR"
+            with run_config(self.config):
+                filing = business_section(symbol)
+            if filing is None:
+                raise ValueError(f"{symbol} has no 10-K on SEC EDGAR (a fund or a foreign filer), so there is nothing to read")
+            path = self._moat_path(symbol, filing["accession"])
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+            profile = yh.profile(symbol, self.cache_dir)
+            checks = moat(yh.financials(symbol, self.cache_dir), profile.get("sector"), profile.get("industry"))
+            numbers = "\n".join(f"- {c['name']}: {c['value']} (needs {c['rule']}): "
+                                 f"{'pass' if c['passed'] else 'fail' if c['passed'] is False else 'no data'}"
+                                 for c in checks["checks"])
+            job.progress = "asking the AI to rate the moat's sources from the filing"
+            result = moat_sources(symbol, profile.get("longName") or symbol, filing, numbers, self.config,
+                                  gateway=self.gateway(), allow_paid=True, fallbacks=tuple(g["ai_fallbacks"]))
+            save_json(path, result)
+            return result
+
+        return job.start(work)
 
     def report(self, path: str) -> str:
         """A saved analysis report, only from the report folders."""
@@ -840,6 +950,8 @@ def make_handler(app: App):
                     self._json(rec)
                 elif url.path == "/api/ai":
                     self._json(app.ai_usage())
+                elif url.path == "/api/forecasts/live":
+                    self._json({"records": app.live_records(), "daily": app.daily.state()})
                 elif url.path == "/api/forecasts":
                     self._json(app.forecasts(query))
                 elif url.path == "/api/hardware":
@@ -855,6 +967,8 @@ def make_handler(app: App):
                     self._json(app.market())
                 elif url.path == "/api/market/explain":
                     self._json(app.explain.state())
+                elif url.path == "/api/moat/sources":
+                    self._json(app.moat_sources(query["symbol"].upper()))
                 else:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except (ValueError, KeyError) as exc:
@@ -943,6 +1057,8 @@ def make_handler(app: App):
                     self._json({"ok": True})
                 elif self.path == "/api/market/explain":
                     self._started(app.start_explain(), "The market explanation")
+                elif self.path == "/api/moat/sources":
+                    self._started(app.start_moat_sources(body["symbol"]), "The moat reading")
                 elif self.path == "/api/tracker/start":
                     # Starting archives nothing by itself, but a page that failed to read the record
                     # must not replace it: an existing record is only replaced after "Start over".
@@ -976,6 +1092,10 @@ def serve(portfolio_path: str, schedule_path: str, port: int = 8765, config: dic
         raise ValueError(f"portfolio file {portfolio} does not exist")
     universe = Path(universe_path).resolve() if universe_path else portfolio.parent / "my_universe.json"
     app = App(portfolio, schedule, universe, {**DEFAULT_CONFIG, **(config or {})})
+    try:
+        app.start_daily_record()
+    except Exception:  # the record is a bonus: the app starts without it
+        logger.exception("daily Chronos-2 record could not start")
     return _Server(("127.0.0.1", port), make_handler(app))
 
 

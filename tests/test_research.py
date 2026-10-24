@@ -247,3 +247,27 @@ def test_a_batch_comparison_lines_up_evidence_agreement_and_flat_runs():
     assert by["d"]["agreement"] is None                      # nothing else at 20 sessions
     assert not by["c"]["ranks"] and by["c"]["top"] == []
     assert [t["ticker"] for t in by["a"]["top"]] == ["X", "Y"] and by["a"]["mean_ic"] == 0.066
+
+
+def test_the_live_record_scores_a_run_only_once_its_horizon_has_passed(tmp_path, monkeypatch):
+    from tradingagents.ledger.db import connect
+    from tradingagents.research import engine
+
+    close, high, low, volume, market = _market(n_assets=8, years=4)
+    close = close.rename(columns={"CASH": "BIL"})
+    high, low, volume = (x.rename(columns={"CASH": "BIL"}) for x in (high, low, volume))
+    tickers = [c for c in close.columns if c != "BIL"]
+    con = connect(tmp_path / "p.sqlite3")
+    # A run made 30 sessions ago (its horizon of 20 has passed), and one made today (it has not).
+    cut = close.index[-31]
+    early = {n: s.loc[:cut] for n, s in market.items()}
+    monkeypatch.setattr(engine, "bars", _fake_bars(*(x.loc[:cut] for x in (close, high, low, volume)), early))
+    engine.run_forecast(con, tmp_path, tickers, horizon=20, model="elastic_net", device_setting="cpu", bags=0,
+                        artifact_dir=tmp_path / "models")
+    monkeypatch.setattr(engine, "bars", _fake_bars(close, high, low, volume, market))
+    engine.run_forecast(con, tmp_path, tickers, horizon=20, model="elastic_net", device_setting="cpu", bags=0,
+                        artifact_dir=tmp_path / "models")
+    rec = engine.live_record(con, tmp_path, "elastic_net", 20)
+    assert rec["made"] == 2 and rec["resolved"] == 1
+    assert rec["dates"][0]["date"] == str(cut.date()) and rec["dates"][0]["ended"] == str(close.index[-11].date())
+    assert -1 <= rec["mean_ic"] <= 1 and rec["dates"][0]["n"] == 8

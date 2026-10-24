@@ -415,7 +415,8 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div class="row fc-controls" style="margin-top:0">
           <div style="width:170px"><label for="fcUniverse">Trained on</label><select id="fcUniverse"><option value="etf" selected>ETFs (the plan's)</option><option value="stock">S&amp;P 500 stocks</option></select></div>
           <fieldset><legend>Horizons</legend><label class="check"><input type="checkbox" name="fcH" value="5"> 5 sessions</label><label class="check"><input type="checkbox" name="fcH" value="20" checked> 20 sessions</label><label class="check"><input type="checkbox" name="fcH" value="60"> 60 sessions</label></fieldset>
-          <fieldset><legend>Models</legend><label class="check"><input type="checkbox" name="fcM" value="elastic_net" checked> Elastic Net</label><label class="check"><input type="checkbox" name="fcM" value="momentum"> Momentum</label><label class="check"><input type="checkbox" name="fcM" value="xgb"> XGBoost</label><label class="check"><input type="checkbox" name="fcM" value="xgb_rank"> XGBoost ranking</label><label class="check"><input type="checkbox" name="fcM" value="xgb_quantile"> XGBoost quantiles</label></fieldset>
+          <fieldset><legend>Models</legend><label class="check"><input type="checkbox" name="fcM" value="elastic_net" checked> Elastic Net</label><label class="check"><input type="checkbox" name="fcM" value="momentum"> Momentum</label><label class="check"><input type="checkbox" name="fcM" value="xgb"> XGBoost</label><label class="check"><input type="checkbox" name="fcM" value="xgb_rank"> XGBoost ranking</label><label class="check"><input type="checkbox" name="fcM" value="xgb_quantile"> XGBoost quantiles</label><label class="check" title="Amazon's pretrained time-series model, run on this machine; nothing is fitted"><input type="checkbox" name="fcM" value="chronos2"> Chronos-2 (pretrained)</label></fieldset>
+          <label class="check" title="Also run each ticked model with Chronos-2's forecast as two extra inputs (ETFs only; about a minute more on the GPU)"><input type="checkbox" id="fcStack"> also with Chronos-2 inputs</label>
           <button id="fcRun">Run selected</button>
           <span class="muted" id="fcStatus"></span>
         </div>
@@ -428,6 +429,12 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div id="fcRunInfo"></div>
         <div class="table-wrap"><table id="fcTable"></table></div>
         <div class="row" id="fcMore" style="display:none"><button class="ghost" id="fcToggle"></button></div>
+      </div>
+      <div class="card">
+        <h3>Live record: forecasts scored after the fact</h3>
+        <p class="muted">Every saved ETF run, scored once its horizon has passed, on prices no model can have seen in training. This is the clean test for Chronos-2, which may have seen past prices in pretraining: the app records its forecasts at each new close when it starts. A handful of dates says little; the record means something after a few dozen.</p>
+        <div class="table-wrap"><table id="fcLive" class="compact"></table></div>
+        <p class="muted small" id="fcDaily"></p>
       </div>
       <div class="card">
         <h3>Model comparison (walk-forward, out of sample)</h3>
@@ -782,8 +789,25 @@ function renderBacktest(r) {
 const lpct = (x, d = 2) => x == null ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%`;
 let fcSort = {key: "mean", dir: -1}, lastFc = null, fcView = null, fcWasRunning = false;
 const fcChecked = name => [...document.querySelectorAll(`input[name=${name}]:checked`)].map(i => i.value);
+function fcModels() {
+  const picked = fcChecked("fcM");
+  return $("fcStack").checked ? [...picked, ...picked.filter(m => m !== "chronos2").map(m => m + "+chronos")] : picked;
+}
+async function loadLive() {
+  try {
+    const d = await api("/api/forecasts/live");
+    const rows = d.records.filter(r => r.made);
+    $("fcLive").innerHTML = "<tr><th class='l'>Model</th><th>Horizon</th><th>Since</th><th>Runs</th><th>Scored</th><th>IC</th><th>IC above 0</th><th>Top fifth vs all</th></tr>" +
+      (rows.length ? rows.map(r => `<tr><td class="l">${esc(r.model)}</td><td>${r.horizon}</td><td>${esc(r.first || "–")}</td><td>${r.made}</td><td>${r.resolved}</td>
+        <td>${r.mean_ic == null ? "<span class='muted'>waiting</span>" : r.mean_ic.toFixed(3)}</td><td>${r.hit == null ? "–" : pct(r.hit, 0)}</td><td>${lpct(r.top_minus_all)}</td></tr>`).join("")
+        : "<tr><td colspan='8' class='muted l'>No saved runs yet.</td></tr>");
+    const j = d.daily;
+    $("fcDaily").textContent = j.running ? `Daily Chronos-2 record: ${j.progress}…` : j.error ? `Daily Chronos-2 record failed: ${j.error}` : "";
+    if (j.running) setTimeout(loadLive, 5000);
+  } catch (e) { $("fcLive").innerHTML = `<tr><td class="l">${esc(e.message)}</td></tr>`; }
+}
 function fcRunLabel() {
-  const n = fcChecked("fcH").length * fcChecked("fcM").length;
+  const n = fcChecked("fcH").length * fcModels().length;
   $("fcRun").textContent = n > 1 ? `Run ${n} at once` : "Run forecast";
   if (!(lastFc && lastFc.job.running)) $("fcRun").disabled = n === 0;
 }
@@ -839,7 +863,7 @@ function renderForecasts(d) {
       fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderForecasts(lastFc); });
   }
   const latest = {};
-  d.trials.filter(x => /^(forecast|challenger)_study/.test(x.name)).forEach(x => { latest[`${x.name.replace(":rescore", "")}`] = x; });
+  d.trials.filter(x => /^(forecast|challenger|stacking)_study/.test(x.name)).forEach(x => { latest[`${x.name.replace(":rescore", "")}`] = x; });
   // Grouped by universe and horizon, so neither repeats on every row and the table fits its panel.
   const groups = {};
   Object.values(latest).forEach(x => { const k = `${x.universe}|${x.horizon}`; groups[k] = groups[k] || {universe: x.universe, horizon: x.horizon, scores: {}}; Object.assign(groups[k].scores, x.scores); });
@@ -851,7 +875,7 @@ function renderForecasts(d) {
       Object.values(g.scores).map(m => `<tr><td class="l">${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` <span class="muted">(${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})</span>`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(3)} / ${m.brier_null.toFixed(3)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`).join("")).join("");
   const j = d.job;
   $("fcStatus").textContent = j.running ? j.progress : j.error ? "Failed: " + j.error : "";
-  if (fcWasRunning && !j.running) fcView = null;   // a finished batch: show its newest run
+  if (fcWasRunning && !j.running) { fcView = null; loadLive(); }   // a finished batch: show its newest run
   fcWasRunning = j.running;
   $("fcRun").disabled = j.running;
   fcRunLabel();
@@ -872,12 +896,12 @@ async function loadHardware() {
 }
 $("fcRun").onclick = async () => {
   try {
-    await api("/api/forecasts/run", {horizons: fcChecked("fcH").map(Number), models: fcChecked("fcM"), universe: $("fcUniverse").value});
+    await api("/api/forecasts/run", {horizons: fcChecked("fcH").map(Number), models: fcModels(), universe: $("fcUniverse").value});
     fcWasRunning = true; loadForecasts();
   }
   catch (e) { showError(e.message); }
 };
-document.querySelectorAll("input[name=fcH], input[name=fcM]").forEach(i => i.onchange = fcRunLabel);
+document.querySelectorAll("input[name=fcH], input[name=fcM], #fcStack").forEach(i => i.onchange = fcRunLabel);
 $("fcUniverse").onchange = () => { fcView = null; loadForecasts(); };
 $("fcUse").onchange = async () => {
   try {
@@ -1282,7 +1306,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); pollBacktest(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over

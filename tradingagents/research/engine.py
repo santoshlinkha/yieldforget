@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from . import features as F
-from .compute import choose_device, run_on
+from .compute import choose_device, cuda_usable, run_on
 from .forecast import FEATURE_SCHEMA, Probabilistic, bagged_mean, forecasts_for
 from .models import XGB, ElasticNet, Momentum, TrainMean, VolPrior, Zero
 from .prices import MARKET, bars
@@ -49,7 +49,14 @@ def ranks(run: dict) -> bool:
     return len(means) < 2 or float(np.ptp(means)) >= 1e-9
 
 
+CHRONOS = "chronos2"          # Chronos-2 on its own: pretrained, nothing fitted
+STACKED = "+chronos"          # suffix: a model given Chronos-2's forecast as two more inputs
+
+
 def factory(name: str, device: str = "cpu"):
+    name = name.removesuffix(STACKED)
+    if name == CHRONOS:
+        return lambda: None   # built in run_forecast, which has the prices it needs
     table = {"zero": Zero, "train_mean": TrainMean, "vol_prior": VolPrior, "momentum": Momentum,
              "elastic_net": ElasticNet,
              "xgb": lambda: XGB(device=device, seed=SEED), "xgb_rank": lambda: XGB("rank", device=device, seed=SEED),
@@ -96,15 +103,37 @@ def run_forecast(con, cache_dir: Path, tickers: list[str], horizon: int = 20, mo
     dates = dates.union(pd.DatetimeIndex([cutoff]))
     panel = F.build_panel(close, high, low, volume, market, cash, dates, horizon=horizon)
     features = list(F.PRICE_FEATURES) + list(F.MARKET_FEATURES)
+    chronos_device = "cuda" if cuda_usable() else "cpu"
+    if model.endswith(STACKED):
+        # Chronos-2's forecast for every training row and today's: about a minute on the GPU for the
+        # ETFs; for 500 stocks it would be most of an hour, so stock runs do not offer it.
+        if universe != "etf":
+            raise ValueError("Chronos-2 inputs are offered for the ETF universe only: for 500 stocks they "
+                             "would take most of an hour per run")
+        from .foundation import FEATURES as CHRONOS_FEATURES
+        from .foundation import chronos_features
+
+        panel = panel.join(chronos_features(close[tickers], panel, horizon, chronos_device))
+        features += CHRONOS_FEATURES
+    if model == CHRONOS:
+        bags = 0   # nothing is fitted, so refits on resampled data would all be the same
     train = panel[(pd.to_datetime(panel["label_end"]) <= cutoff) & panel["label"].notna()].sort_index(level="date")
     rows = panel.xs(cutoff, level="date", drop_level=False)
     if rows.empty:
         raise ValueError(f"no ticker has a year of prices at {cutoff.date()}, so nothing can be forecast")
     device, why = choose_device(device_setting, len(train))
+    if model == CHRONOS and chronos_device == "cuda" and device_setting != "cpu":
+        device, why = "cuda", "Chronos-2 is a neural network: the GPU is much faster"
     artifact_dir = Path(artifact_dir or Path(cache_dir) / "forecast_models")
 
     def fit(dev):
-        make = factory(model, dev)
+        if model == CHRONOS:
+            from .foundation import Chronos2
+
+            def make():
+                return Chronos2(close[tickers], device=dev)
+        else:
+            make = factory(model, dev)
         prob = Probabilistic(make).fit(train, features, horizon)
         spread = bagged_mean(make, train, rows, features, horizon, bags=bags, seed=SEED) if bags else None
         return prob, spread
@@ -193,9 +222,55 @@ def compare_runs(runs: list[dict], top: int = 3) -> list[dict]:
     return sorted(rows, key=lambda x: (x["horizon"], x["model"]))
 
 
+def live_record(con, cache_dir: Path, model: str, horizon: int, universe: str = "etf", cash: str = "BIL") -> dict:
+    """A model's saved forecasts scored against what happened: one run per information cutoff
+    (the newest), counted once ``horizon`` sessions have closed since. Per date, the rank
+    correlation (IC) of forecast with outcome, the outcome being the log return above cash;
+    and the return of its top fifth above the average. This record cannot have been seen in
+    any training, Chronos-2's included."""
+    rows = con.execute("SELECT id, info_cutoff FROM forecast_runs WHERE model = ? AND horizon = ? AND universe = ?"
+                       " ORDER BY created_at", (model, horizon, universe)).fetchall()
+    by_cutoff = {r["info_cutoff"]: r["id"] for r in rows}
+    if not by_cutoff:
+        return {"model": model, "horizon": horizon, "made": 0, "resolved": 0, "dates": []}
+    runs = {c: load_run(con, rid) for c, rid in by_cutoff.items()}
+    tickers = sorted({f["ticker"] for r in runs.values() for f in r["forecasts"]})
+    close = bars([*tickers, cash], cache_dir)["Close"]
+    sessions = close.index
+    out = []
+    for cutoff, run in sorted(runs.items()):
+        at = sessions.searchsorted(pd.Timestamp(cutoff))
+        if at >= len(sessions) or sessions[at] != pd.Timestamp(cutoff) or at + horizon >= len(sessions):
+            continue
+        end = sessions[at + horizon]
+        start = sessions[at]
+        realized = np.log(close.loc[end] / close.loc[start])
+        above = realized.drop(cash) - (realized.get(cash, 0.0) if pd.notna(realized.get(cash)) else 0.0)
+        fc = pd.Series({f["ticker"]: f["mean"] for f in run["forecasts"]}).reindex(above.index).dropna()
+        got = above.reindex(fc.index).dropna()
+        fc = fc.reindex(got.index)
+        if len(got) < 5:
+            continue
+        top = fc.nlargest(max(1, len(fc) // 5)).index
+        out.append({"date": cutoff, "ended": str(end.date()), "ic": float(fc.corr(got, method="spearman")),
+                    "top_minus_all": float(got.loc[top].mean() - got.mean()), "n": int(len(got))})
+    ics = [d["ic"] for d in out if d["ic"] == d["ic"]]
+    return {"model": model, "horizon": horizon, "made": len(runs), "resolved": len(out),
+            "first": min(runs), "mean_ic": float(np.mean(ics)) if ics else None,
+            "hit": float(np.mean([i > 0 for i in ics])) if ics else None,
+            "top_minus_all": float(np.mean([d["top_minus_all"] for d in out])) if out else None,
+            "dates": out}
+
+
 def latest_run(con, horizon: int | None = None, model: str | None = None, universe: str = "etf") -> dict | None:
-    """The newest run of a universe: ETF runs by default, the ones the plan may use."""
+    """The newest run of a universe: ETF runs by default, the ones the plan may use.
+
+    The daily Chronos-2 record is left out unless ``model`` asks for it: it is kept to
+    score Chronos-2 on prices it cannot have seen, not to stand in for the chosen model.
+    """
     sql, args = "SELECT id FROM forecast_runs WHERE universe = ?", [universe]
+    if not model:
+        sql += f" AND model != '{CHRONOS}'"
     if horizon:
         sql += " AND horizon = ?"
         args.append(horizon)
@@ -273,8 +348,17 @@ def forecast_one(con, cache_dir: Path, run: dict, symbol: str, cash: str = "BIL"
     panel = F.build_panel(close, high, low, volume, market, cash, pd.DatetimeIndex([cutoff]), horizon=run["horizon"])
     if (cutoff, symbol) not in panel.index:
         return None
+    rows = panel.loc[[(cutoff, symbol)]]
+    if run["model"].endswith(STACKED) or run["model"] == CHRONOS:
+        from .foundation import chronos_features
+
+        rows = rows.join(chronos_features(close[[symbol]], rows, run["horizon"], "cuda" if cuda_usable() else "cpu"))
     model = load_model(run)
-    row = model.predict(panel.loc[[(cutoff, symbol)]]).iloc[0]
+    if run["model"] == CHRONOS:
+        from .foundation import Chronos2
+
+        model.model = Chronos2(close[[symbol]], device="cuda" if cuda_usable() else "cpu").fit(None, [], run["horizon"])
+    row = model.predict(rows).iloc[0]
     flags = [] if symbol in config.get("tickers", []) else [
         f"this model was trained on {UNIVERSES.get(run['universe'], run['universe'])} and {symbol} was not among them"
         + ("; treat it as a forecast for an unfamiliar kind of asset" if run["universe"] == "etf" else "")]

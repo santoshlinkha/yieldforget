@@ -84,3 +84,19 @@ class Chronos2(Forecaster):
         return {"name": self.name, "checkpoint": "amazon/chronos-2", "license": "Apache-2.0",
                 "context": CONTEXT, "device": self.device, "contamination": "unknown (no training cutoff published)",
                 "released": RELEASE}
+
+
+FEATURES = ["chronos_mean", "chronos_range"]
+
+
+def chronos_features(close: pd.DataFrame, rows: pd.DataFrame, horizon: int, device: str = "cpu") -> pd.DataFrame:
+    """Chronos-2's forecast as two inputs for another model (stacking), one row per panel row.
+
+    ``chronos_mean``: its median log return above cash over ``horizon``; ``chronos_range``:
+    its 95th minus 5th percentile, how unsure it is. Chronos-2 is not fitted, so each row's
+    value uses only the prices up to that row's date: no leakage beyond Chronos-2's own
+    pretraining, whose contamination risk is unknown (see the module docstring).
+    """
+    model = Chronos2(close, device=device).fit(None, [], horizon)
+    q = model.quantiles(rows)
+    return pd.DataFrame({"chronos_mean": q[:, 1], "chronos_range": q[:, 2] - q[:, 0]}, index=rows.index)

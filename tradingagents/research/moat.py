@@ -99,6 +99,40 @@ def _is_financial(sector: str | None, line) -> bool:
     return sector == "Financial Services" or bool(line("income", "Net Income") and line("balance", "Total Assets"))
 
 
+def _roic(line, periods: list[str]) -> dict[str, tuple[float, float]]:
+    """``{period: (ROIC, tax rate)}``, newest first, for the years with the data.
+
+    ROIC = operating income × (1 − the year's own tax rate) ÷ invested capital averaged
+    over the year's start and end; invested capital is equity + total debt − the cash
+    beyond 2% of revenue. A year with no positive capital is left out.
+    """
+    revenue, operating = line("income", "Total Revenue"), line("income", "Operating Income")
+    pretax, tax = line("income", "Pretax Income"), line("income", "Tax Provision")
+    equity, debt, cash = line("balance", "Stockholders Equity"), line("balance", "Total Debt"), line("balance", "Cash And Cash Equivalents")
+
+    def invested(p):
+        if p not in equity:
+            return None
+        excess = max(0.0, cash.get(p, 0.0) - OPERATING_CASH * revenue[p]) if p in revenue else cash.get(p, 0.0)
+        return equity[p] + debt.get(p, 0.0) - excess
+
+    capital = {p: c for p in periods if (c := invested(p)) is not None}
+    out = {}
+    for i, p in enumerate(periods):
+        rate = _ratio(tax.get(p), pretax.get(p)) if pretax.get(p, 0) > 0 else None
+        rate = min(max(rate, 0.0), 0.5) if rate is not None else TAX
+        c = _average(capital, periods, i)
+        if p in operating and c is not None and c > 0:
+            out[p] = (operating[p] * (1 - rate) / c, rate)
+    return out
+
+
+def roic_by_year(statements: dict) -> dict[str, tuple[float, float]]:
+    """``{period: (ROIC, tax rate)}`` from ``history.financials`` output; see ``_roic``."""
+    periods = ((statements.get("income") or {}).get("annual") or {}).get("periods") or []
+    return _roic(lambda kind, name: _series(statements, kind, name), periods)
+
+
 def _company_checks(line, periods, sector, industry) -> tuple[list[dict], str]:
     if industry in INDUSTRY_BARS:
         bars, basis = INDUSTRY_BARS[industry], f"bars for {industry} companies"
@@ -108,8 +142,6 @@ def _company_checks(line, periods, sector, industry) -> tuple[list[dict], str]:
         bars, basis = DEFAULT_BARS, "general bars" + (f" ({sector} has none of its own)" if sector else "")
     gm_bar, gm_floor, om_bar, roic_bar = bars
     revenue, gross, operating = line("income", "Total Revenue"), line("income", "Gross Profit"), line("income", "Operating Income")
-    pretax, tax = line("income", "Pretax Income"), line("income", "Tax Provision")
-    equity, debt, cash = line("balance", "Stockholders Equity"), line("balance", "Total Debt"), line("balance", "Cash And Cash Equivalents")
     checks = []
 
     gm = [m for m in (_ratio(gross.get(p), revenue.get(p)) for p in periods) if m is not None]
@@ -121,21 +153,8 @@ def _company_checks(line, periods, sector, industry) -> tuple[list[dict], str]:
     else:
         checks.append(_check("Pricing power", None, "no gross margin reported", rule))
 
-    def invested(p):
-        if p not in equity:
-            return None
-        excess = max(0.0, cash.get(p, 0.0) - OPERATING_CASH * revenue[p]) if p in revenue else cash.get(p, 0.0)
-        return equity[p] + debt.get(p, 0.0) - excess
-
-    capital = {p: c for p in periods if (c := invested(p)) is not None}
-    roic, rates = [], []
-    for i, p in enumerate(periods):
-        rate = _ratio(tax.get(p), pretax.get(p)) if pretax.get(p, 0) > 0 else None
-        rate = min(max(rate, 0.0), 0.5) if rate is not None else TAX
-        c = _average(capital, periods, i)
-        if p in operating and c is not None and c > 0:
-            roic.append(operating[p] * (1 - rate) / c)
-            rates.append(rate)
+    by_year = _roic(line, periods)
+    roic, rates = [r for r, _ in by_year.values()], [t for _, t in by_year.values()]
     rule = f"{roic_bar:.0%}+ every year"
     if len(roic) >= 2:
         checks.append(_check("Returns on capital", min(roic) >= roic_bar,

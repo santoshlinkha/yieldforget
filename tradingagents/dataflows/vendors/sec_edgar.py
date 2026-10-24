@@ -255,3 +255,96 @@ def get_income_statement(ticker: str, freq: str = "quarterly", as_of_date: str |
 def get_cashflow(ticker: str, freq: str = "quarterly", as_of_date: str | None = None) -> str:
     """Cash flow statement as filed on or before ``as_of_date``."""
     return _statement("cashflow", ticker, freq, as_of_date, "Cash Flow Statement")
+
+
+_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+_ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
+BUSINESS_CHARS = 40_000
+
+
+MOAT_WORDS = ("competition", "competitive", "competitors", "customers", "patent", "intellectual property",
+              "brand", "trademark", "network", "switching", "scale", "license", "regulat", "distribution")
+
+
+def _business_text(html: str) -> str:
+    """Item 1 (Business) of a 10-K's text: from its heading to Item 1A (Risk Factors).
+
+    The table of contents and cross-references name both items too: a match preceded
+    by a quote mark, "see", "in" and the like is a reference, not a heading, and of the
+    rest the longest heading-to-1A stretch is the section. When none of 5,000 characters
+    is found (some filers use a cross-reference index instead of item headings), the
+    text is excerpts around the words a moat shows up in: competition, customers,
+    patents, brands, networks, switching, scale.
+    """
+    import re
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    # Inline XBRL keeps its tagged facts in a hidden header: data, not prose.
+    for tag in [*soup.find_all("ix:header"), *soup.find_all(style=re.compile(r"display:\s*none", re.I))]:
+        tag.decompose()
+    text = re.sub(r"\s+", " ", soup.get_text(" "))
+
+    def spaced(words):
+        # Headings are sometimes typeset letter by letter: "B USINESS".
+        return r"\s*".join(r"\s?".join(w) for w in words.split())
+
+    def heading(pos):
+        before = text[max(0, pos - 14):pos].lower()
+        return not any(w in before for w in ('"', "“", "see ", " in ", "under ", "part i,", " and ", " of "))
+
+    starts = [m.start() for m in re.finditer(r"item\s*1\s*[.:—-]?\s*" + spaced("business"), text, re.I)
+              if heading(m.start())]
+    ends = [m.start() for m in re.finditer(r"item\s*1a\s*[.:—-]?\s*" + spaced("risk factors"), text, re.I)
+            if heading(m.start())]
+    best = ""
+    for s in starts:
+        e = next((e for e in ends if e > s), None)
+        if e is not None and e - s > len(best):
+            best = text[s:e]
+    if len(best) >= 5000:
+        return best[:BUSINESS_CHARS].strip()
+    windows = []
+    lower = text.lower()
+    cover = len(text) // 50   # past the cover page and its check boxes
+    for word in MOAT_WORDS:
+        for m in [m for m in re.finditer(re.escape(word), lower) if m.start() > cover][:4]:
+            windows.append((max(0, m.start() - 600), m.start() + 900))
+    merged = []
+    for a, b in sorted(windows):
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    excerpt = " [...] ".join(text[a:b] for a, b in merged)
+    return (excerpt or text)[:BUSINESS_CHARS].strip()
+
+
+def business_section(ticker: str) -> dict | None:
+    """The latest 10-K's business description (Item 1, which includes Competition), with
+    its filing date and link; None for a company with no 10-K on EDGAR (a fund, a
+    foreign filer). Fetched once per filing: the text is saved under its accession number."""
+    cik = cik_for(ticker)
+    if cik is None:
+        return None
+    recent = _cached_json(_SUBMISSIONS_URL.format(cik=cik), f"submissions_{cik}.json").get("filings", {}).get("recent", {})
+    for i, form in enumerate(recent.get("form", [])):
+        if form != "10-K":
+            continue
+        accession, document = recent["accessionNumber"][i], recent["primaryDocument"][i]
+        path = Path(get_config()["data_cache_dir"]) / "sec_edgar" / f"business_{accession}.json"
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        url = _ARCHIVE_URL.format(cik=int(cik), accession=accession.replace("-", ""), document=document)
+        try:
+            response = requests.get(url, headers={"User-Agent": _user_agent()}, timeout=60)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise VendorUnavailableError(f"SEC EDGAR filing request failed ({type(exc).__name__})") from exc
+        out = {"form": form, "filed": recent["filingDate"][i], "period": recent["reportDate"][i],
+               "accession": accession, "url": url, "text": _business_text(response.text)}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        replace_file(path, lambda temp: Path(temp).write_text(json.dumps(out), encoding="utf-8"))
+        return out
+    return None

@@ -76,6 +76,14 @@ details summary { cursor: pointer; }
 .consensus { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .consensus .big { font-size: 22px; font-weight: 700; }
 .events { list-style: none; margin: 0; padding: 0; }
+h3.sec { font-size: 14px; margin: 18px 0 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+h3.sec:first-of-type { border-top: 0; padding-top: 0; margin-top: 4px; }
+.st { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+.st.ok { color: var(--buy); } .st.flag { color: var(--sell); } .st.warn { color: var(--warn); } .st.info { color: var(--muted); }
+.answer { margin: 8px 0 0; font-size: 13px; }
+.quote { font-style: italic; color: var(--muted); font-size: 12.5px; }
+.str-strong { color: var(--buy); font-weight: 600; } .str-moderate { color: var(--buy); }
+.str-weak { color: var(--warn); } .str-none, .str-unclear { color: var(--muted); }
 .events li { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .events .when { color: var(--muted); width: 84px; flex: none; }
 .events .kind { width: 74px; flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
@@ -106,7 +114,9 @@ details summary { cursor: pointer; }
       <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div id="chart" style="margin-top:12px"></div></div>
       <div class="card"><h2>Wall Street analyst ratings</h2><div id="analysts"></div></div>
       <div class="card"><h2>Wall Street EPS and revenue estimates</h2><div id="estimates"></div></div>
-      <div class="card"><h2>Competitive moat (quantitative)</h2><div id="moat"></div></div>
+      <div class="card"><h2>Quality checklist</h2>
+        <h3 class="sec">1. Economic moat</h3><div id="moat"></div><div id="sources"></div>
+        <div id="quality"></div></div>
       <div class="card"><h2>Earnings: estimate vs reported</h2><div class="table-wrap"><table id="earn"></table></div></div>
       <div class="card"><h2>Dividends, splits and share count</h2><div id="corp"></div></div>
       <div class="card"><h2>Financial statements</h2><div id="fin"></div></div>
@@ -146,6 +156,55 @@ function chart(c) {
   c.dates.forEach((d, i) => { const y = d.slice(0, 4); if (y !== last && i > 0) { if (+y % 2 === 0) g += `<text x="${sx(i)}" y="${H - 6}" text-anchor="middle">${y}</text>`; } last = y; });
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(symbol)} price against SPY">${g}${line(b, "--s2", 1.25)}${line(a, "--s1", 2)}</svg>
     <div class="legend"><span style="--c: var(--s1)">${esc(symbol)}</span><span style="--c: var(--s2)">SPY, scaled to the same start</span></div>`;
+}
+
+function quality(q) {
+  const ST = {ok: "pass", warn: "check", flag: "flag", info: "info"};
+  return q.sections.map((sec, i) => {
+    const c = sec.counts;
+    const tally = [c.ok && `${c.ok} pass`, c.warn && `${c.warn} to check`, c.flag && `${c.flag} flagged`].filter(Boolean).join(" · ");
+    return `<h3 class="sec">${i + 2}. ${esc(sec.title)} <span class="muted small" style="font-weight:400">${tally}</span></h3>
+      <table><tr><th class="l">Test</th><th class="l">This company</th><th class="l">Rule</th><th></th></tr>` +
+      sec.items.map(x => `<tr><td class="l">${esc(x.name)}</td><td class="l">${esc(x.value)}</td><td class="l muted small">${esc(x.rule)}</td>
+        <td>${x.status ? `<span class="st ${x.status}">${ST[x.status]}</span>` : "<span class='muted small'>no data</span>"}</td></tr>`).join("") + "</table>" +
+      (sec.answer ? `<p class="answer"><b>Can it survive a high-rate downturn?</b> ${esc(sec.answer)}</p>` : "");
+  }).join("") +
+  `<p class="muted small">From Yahoo's statements and quote, the app's own rules. The reverse DCF assumes a ${(q.assumptions.discount * 100).toFixed(0)}% discount rate and ${(q.assumptions.terminal * 100).toFixed(1)}% growth after year ${q.assumptions.years}; change those and the implied growth moves. A company with a lending arm (an automaker's finance unit) carries that debt here, which inflates its debt ratios and enterprise value.</p>`;
+}
+
+let sourcesTimer = null;
+function sources(ms) {
+  const box = $("sources");
+  if (ms && ms.error) { box.innerHTML = failed(ms); return; }
+  const saved = ms && ms.saved, job = ms && ms.job;
+  if (job && job.running) {
+    box.innerHTML = `<p class="muted small">${esc(job.progress)}…</p>`;
+    clearTimeout(sourcesTimer);
+    sourcesTimer = setTimeout(async () => sources(await (await fetch("/api/moat/sources?symbol=" + encodeURIComponent(symbol))).json()), 2500);
+    return;
+  }
+  if (!saved) {
+    box.innerHTML = `<div style="margin-top:10px"><button id="readMoat">Read the moat's sources from the 10-K (AI, paid)</button>
+      <p class="muted small">One call to the configured AI model, about $0.03, held to your AI budget and saved per filing, so each 10-K is read once. It rates switching costs, network effects, cost advantages, intangible assets and efficient scale, quoting the filing for each.</p>
+      ${job && job.error ? `<p class="note">${esc(job.error)}</p>` : ""}</div>`;
+    $("readMoat").onclick = async () => {
+      $("readMoat").disabled = true;
+      const res = await fetch("/api/moat/sources", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({symbol})});
+      const body = await res.json();
+      if (!res.ok && res.status !== 409) { box.innerHTML += `<p class="note">${esc(body.error || res.statusText)}</p>`; return; }
+      sources(await (await fetch("/api/moat/sources?symbol=" + encodeURIComponent(symbol))).json());
+    };
+    return;
+  }
+  const f = saved.filing;
+  box.innerHTML = `<h3 style="margin:14px 0 6px;font-size:13px">Where the moat comes from <span class="muted small" style="font-weight:400">AI reading of the ${esc(f.form)} filed ${esc(f.filed)}</span></h3>
+    <p style="margin:0 0 8px">${esc(saved.summary)}</p>
+    <table><tr><th class="l">Source</th><th class="l">Strength</th><th class="l">From the filing</th></tr>` +
+    saved.sources.map(x => `<tr><td class="l">${esc(x.label)}</td><td class="l"><span class="str-${esc(x.strength)}">${esc(x.strength)}</span></td>
+      <td class="l">${esc(x.why)}${x.evidence ? `<div class="quote">“${esc(x.evidence)}” ${x.verified ? "<span class='up' title='Found word for word in the filing'>✓ in filing</span>" : "<span class='down' title='Not found in the filing, so the rating is set to unclear'>not found in filing</span>"}</div>` : ""}</td></tr>`).join("") +
+    `</table><p class="answer"><b>Durable?</b> ${esc(saved.durable)}: ${esc(saved.durable_why)}</p>` +
+    (saved.threats.length ? `<p class="answer"><b>Threats the filing names:</b> ${saved.threats.map(esc).join("; ")}</p>` : "") +
+    `<p class="muted small">By ${esc(saved.model)} from the filing's business section only (<a href="${esc(f.url)}" target="_blank" rel="noopener">read it</a>). Each quote is checked against the filing; a rating whose quote is not there is set to "unclear". An AI judgment, not a fact: read the quotes.</p>`;
 }
 
 function dividendBars(byYear) {
@@ -252,10 +311,12 @@ async function load() {
       <table><tr><th class="l">Check</th><th class="l">This company</th><th class="l">Needs</th><th>Result</th></tr>` +
       mo.checks.map(c => `<tr><td class="l">${esc(c.name)}</td><td class="l">${esc(c.value)}</td><td class="l muted">${esc(c.rule)}</td>
         <td>${c.passed == null ? "<span class='muted'>no data</span>" : c.passed ? "<span class='up'>pass</span>" : "<span class='down'>fail</span>"}</td></tr>`).join("") +
-      `</table><p class="muted small">The app's own indicators from Yahoo's annual statements: signs a moat leaves in the numbers (pricing power, returns on capital, cash). Not Morningstar's moat rating, and it can't see brands, patents or network effects directly. The bars for each sector are the app's rough judgment, not measured sector averages.</p>`;
+      `</table><p class="muted small">The app's own indicators from Yahoo's annual statements: signs a moat leaves in the numbers (pricing power, returns on capital, cash). Not Morningstar's moat rating. Numbers can't show brands, patents or network effects; the AI reading of the 10-K below looks for those. The bars for each sector are the app's rough judgment, not measured sector averages.</p>`;
   }
 
   $("corp").innerHTML = failed(d.corporate) || corporate(d.corporate);
+  $("quality").innerHTML = d.quality ? failed(d.quality) || quality(d.quality) : "";
+  if (d.moat && !d.moat.note) sources(d.moat_sources);
 
   const e = d.earnings;
   $("earn").innerHTML = failed(e) ? `<tr><td>${failed(e)}</td></tr>` : (e.length ? "<tr><th class='l'>Report date</th><th>EPS estimate</th><th>Reported</th><th>Surprise</th></tr>" +
