@@ -636,7 +636,11 @@ function renderOverviewExtras(r) {
     ["investing", "trading", "combined"].filter(k => sl[k]).map(k => `<tr class="${k === r.sleeve ? "chosen" : ""}"><td>${k === "combined" ? "<b>Whole IRA</b>" : k[0].toUpperCase() + k.slice(1)}</td><td>${usd(sl[k].equity)}</td><td>${usd(sl[k].cash.settled)}</td><td>${usd(sl[k].cash.unsettled)}</td><td>${sl[k].positions}</td></tr>`).join("");
   const f = r.freshness || {};
   const when = t => t ? new Date(t).toLocaleString(undefined, {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : "never";
-  $("freshness").innerHTML = `<p>Prices: closes through <b>${esc(f.prices_through || "–")}</b> (checked ${when(f.prices_checked)}). Only completed sessions are used.</p>` +
+  const rf = r.returns_from || {};
+  const returnsLine = rf.model === "forecast"
+    ? `<p class="note">Expected returns come from <b>forecasts</b> (${esc(rf.forecast_model)}, ${rf.horizon} sessions, run ${esc((rf.run || "").slice(0, 8))}), not the standard rule. In backtests no forecast beat the standard rule after costs. Turn it off under Forecasts.</p>`
+    : `<p>Expected returns: the standard rule (volatility × shrunk Sharpe).</p>`;
+  $("freshness").innerHTML = returnsLine + `<p>Prices: closes through <b>${esc(f.prices_through || "–")}</b> (checked ${when(f.prices_checked)}). Only completed sessions are used.</p>` +
     `<p>This plan: <b>preview</b>, not saved. Last official recommendation: ${f.last_official ? `${esc(f.last_official.id.slice(0, 8))} for ${esc(f.last_official.session)} (${esc(f.last_official.status)})` : "none yet"}.</p>` +
     `<p>Last forecast run: ${f.last_forecast ? `${esc(f.last_forecast.model)}, ${f.last_forecast.horizon} sessions, data to ${esc(f.last_forecast.info_cutoff)}` : "none"}. Last recorded trade or transfer: ${when(f.last_event)}.</p>`;
 }
@@ -715,7 +719,10 @@ let fcSort = {key: "mean", dir: -1}, lastFc = null;
 function renderForecasts(d) {
   lastFc = d;
   const r = d.run;
-  $("fcUse").checked = d.settings.investing.return_model === "forecast";
+  const inv = d.settings.investing;
+  $("fcUse").checked = inv.return_model === "forecast";
+  $("fcUse").parentElement.title = inv.return_model === "forecast"
+    ? `The Investing plan uses the latest ${inv.forecast_model} run at ${inv.forecast_horizon} sessions` : "The Investing plan uses the standard rule";
   if (!r) { $("fcRunInfo").innerHTML = '<p class="muted">No forecast run yet.</p>'; $("fcTable").innerHTML = ""; }
   else {
     const c = r.calibration || {};
@@ -757,7 +764,11 @@ $("fcRun").onclick = async () => {
 };
 $("fcHorizon").onchange = loadForecasts;
 $("fcUse").onchange = async () => {
-  try { await api("/api/risk", {sleeve: "investing", return_model: $("fcUse").checked ? "forecast" : "vol_prior", forecast_horizon: +$("fcHorizon").value}); refresh(); }
+  try {
+    await api("/api/risk", {sleeve: "investing", return_model: $("fcUse").checked ? "forecast" : "vol_prior",
+                            forecast_horizon: +$("fcHorizon").value, forecast_model: $("fcModel").value});
+    refresh(); loadForecasts();
+  }
   catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }
 };
 

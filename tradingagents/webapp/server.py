@@ -164,10 +164,12 @@ class App:
         if s["return_model"] == "forecast":
             from tradingagents.research.engine import expected_returns, latest_run
 
-            run = latest_run(self.store.con, horizon=s["forecast_horizon"])
+            # The model chosen for the sleeve, not whichever forecast happened to run last.
+            run = latest_run(self.store.con, horizon=s["forecast_horizon"], model=s["forecast_model"])
             if run is None:
-                raise ValueError(f"The {self.sleeve(body)} sleeve is set to use forecasts, but no forecast run exists "
-                                 f"for {s['forecast_horizon']} sessions. Run one under Forecasts first.")
+                raise ValueError(f"The {self.sleeve(body)} sleeve is set to use {s['forecast_model']} forecasts over "
+                                 f"{s['forecast_horizon']} sessions, but there is no such run. Run one under Forecasts, "
+                                 f"or switch the plan back to the standard rule.")
             run["calibration"] = json.loads(run["calibration_json"])
             settings.return_model, settings.forecast_horizon, settings.forecast_run = "forecast", run["horizon"], run["id"]
             settings.forecast_mu = expected_returns(run, [f["ticker"] for f in run["forecasts"]])
@@ -283,7 +285,11 @@ class App:
 
         now = datetime.now(pytz.utc)
         session = recommendations.session_for(now)
-        extras = {"orders_session": session, "orders_session_is_today": session == _today()}
+        extras = {"orders_session": session, "orders_session_is_today": session == _today(),
+                  "returns_from": ({"model": "forecast", "run": c["settings"].forecast_run,
+                                    "forecast_model": self.store.get(c["sleeve"], "forecast_model"),
+                                    "horizon": c["settings"].forecast_horizon}
+                                   if c["settings"].return_model == "forecast" else {"model": "vol_prior"})}
         if c["sleeve"] == "investing":
             current = load_schedule(self.schedule_path) if self.schedule_path.exists() else {}
             budget = sum(current.values()) or float(self.store.get("investing", "daily_contribution"))
@@ -411,7 +417,7 @@ class App:
             t["scores"] = json.loads(t.pop("scores_json"))
             t["by_period"] = json.loads(t.pop("by_period_json"))
         return {"runs": runs, "run": chosen, "trials": trials, "job": self.forecast.state(),
-                "settings": {s: {k: self.store.get(s, k) for k in ("return_model", "forecast_horizon")}
+                "settings": {s: {k: self.store.get(s, k) for k in ("return_model", "forecast_horizon", "forecast_model")}
                              for s in SLEEVES}}
 
     # --- one ticker, everything known about it ---
@@ -838,6 +844,10 @@ def make_handler(app: App):
                             if body["return_model"] not in ("vol_prior", "forecast"):
                                 raise ValueError("return model must be vol_prior or forecast")
                             app.store.set(sleeve, "return_model", body["return_model"])
+                        if body.get("forecast_model"):
+                            from tradingagents.research.engine import factory
+                            factory(body["forecast_model"])   # refuses an unknown model
+                            app.store.set(sleeve, "forecast_model", body["forecast_model"])
                         if body.get("forecast_horizon"):
                             if int(body["forecast_horizon"]) not in (5, 20, 60):
                                 raise ValueError("the forecast horizon is 5, 20 or 60 sessions")
