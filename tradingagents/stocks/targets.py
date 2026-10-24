@@ -14,7 +14,7 @@ the ``h`` sessions after the cutoff, t+1 to t+h, measured from the close at t:
   holder from t saw. It is a different thing from the terminal loss: a stock can
   fall 15% and recover by the end.
 - **Large loss** (terminal): r <= -loss_k * sigma_h.
-- **Deep drawdown**: drawdown from entry <= -(exp(drawdown_k * sigma_h) - 1).
+- **Deep drawdown**: drawdown from entry <= expm1(-drawdown_k * sigma_h).
 - **Breakout barriers** come from the previous trading range, known at t: the
   highest high and lowest low of the last ``range_window`` sessions through t.
   An upward breakout is any high in t+1..t+h above the upper barrier; a downward
@@ -50,6 +50,8 @@ import pandas as pd
 EWMA_LAMBDA = 0.94
 TREND_STATES = ("up", "down", "sideways", "unclear")
 EVENTS = ("up_break", "down_break", "large_loss", "deep_drawdown")
+# Risks during the actual position (entry at the next close): what risk gates use.
+POSITION_EVENTS = ("pos_large_loss", "pos_deep_drawdown")
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class Thresholds:
     sideways_range_k: float = 1.25
     loss_k: float = 1.5
     drawdown_k: float = 1.5
+    contract: str = "v2"      # v2: position risks from the next-close entry; arithmetic barriers via expm1
 
     def version(self) -> str:
         return "thr-" + hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()[:10]
@@ -124,7 +127,8 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
     end_close = fwd_c[:, -1, :]
 
     # The session (1 to h) on which the drawdown first went past its threshold: an alarm's lead time.
-    dd_line = -(np.exp(th.drawdown_k * sigma_h) - 1)
+    # A fall of k sigma in log terms is an arithmetic return of expm1(-k sigma).
+    dd_line = np.expm1(-th.drawdown_k * sigma_h)
     breached = (fwd_l / start[:, None, :] - 1) <= dd_line[:, None, :]
     dd_day = np.where(breached.any(axis=1), breached.argmax(axis=1) + 1.0, np.nan)
 
@@ -144,8 +148,15 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
     stock_ret = (logc[exit_] - logc[entry]) * np.where(tradable_ok, 1.0, np.nan)
     lc = np.log(cash.reindex(sessions).ffill().to_numpy())
     ls = np.log(spy.reindex(sessions).ffill().to_numpy())
-    cash_ret = np.nan_to_num(lc[exit_] - lc[entry])
+    cash_ret = lc[exit_] - lc[entry]          # missing before the cash fund existed: no label, not zero
     spy_ret = ls[exit_] - ls[entry]
+
+    # Position risks, on the actual holding: entry at close t+1, adverse excursion over the lows of
+    # t+2..t+1+h relative to the entry close, never above zero; terminal on the exit close.
+    entry_px = c[entry]
+    later_lows = _forward(lo, entry, horizon)              # lows of entry+1 .. entry+h
+    mae = np.minimum(np.nanmin(later_lows, axis=1) / entry_px - 1, 0.0) * np.where(tradable_ok, 1.0, np.nan)
+    pos_ret = np.expm1(stock_ret)
 
     def frame(values, mask_to=None):
         v = np.asarray(values, dtype=float)
@@ -166,12 +177,15 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
         "both_same_bar": frame(both_same_bar, r),
         "large_loss": frame(r <= -th.loss_k * sigma_h, r),
         "deep_drawdown": frame(drawdown <= dd_line, r),
+        "mae_position": frame(mae),
+        "pos_large_loss": frame(pos_ret <= np.expm1(-th.loss_k * sigma_h), stock_ret),
+        "pos_deep_drawdown": frame(mae <= dd_line, mae),
         "dd_breach_day": frame(dd_day, r),
         "trend_state": frame(state, r),
     })
     # Where sigma_h is unknown (too little history), no threshold applies: no event label.
     unknown = out["sigma_h"].isna()
-    out.loc[unknown, ["large_loss", "deep_drawdown", "trend_state"]] = np.nan
+    out.loc[unknown, ["large_loss", "deep_drawdown", "trend_state", "pos_large_loss", "pos_deep_drawdown"]] = np.nan
     label_end = pd.Series(sessions[np.minimum(rows + 1 + horizon, n - 1)], index=dates)
     label_end[~tradable_ok[:, 0]] = pd.NaT
     out["label_end"] = label_end.reindex(out.index.get_level_values(0)).to_numpy()

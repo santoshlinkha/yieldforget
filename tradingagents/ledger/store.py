@@ -57,19 +57,33 @@ class Store:
     # --- settings ---
 
     def get(self, scope: str, key: str):
+        from . import capital
+
+        if (scope, key) in capital.ALIASES:     # old per-sleeve keys read the canonical capital settings
+            capital.ensure(self)
+            scope, key = capital.SCOPE, capital.ALIASES[(scope, key)]
         row = self.con.execute("SELECT value_json FROM settings WHERE scope = ? AND key = ?", (scope, key)).fetchone()
         if row:
             return json.loads(row[0])
-        defaults = GLOBAL_DEFAULTS if scope == "global" else SLEEVE_DEFAULTS.get(scope, {})
+        defaults = GLOBAL_DEFAULTS if scope == "global" else capital.DEFAULTS if scope == capital.SCOPE             else SLEEVE_DEFAULTS.get(scope, {})
         if key not in defaults:
             raise KeyError(f"no setting {scope}.{key}")
         return defaults[key]
 
     def settings(self, scope: str) -> dict:
-        defaults = GLOBAL_DEFAULTS if scope == "global" else SLEEVE_DEFAULTS[scope]
+        from . import capital
+
+        defaults = GLOBAL_DEFAULTS if scope == "global" else capital.DEFAULTS if scope == capital.SCOPE             else SLEEVE_DEFAULTS[scope]
         return {k: self.get(scope, k) for k in defaults}
 
     def set(self, scope: str, key: str, value, source: str = "user"):
+        from . import capital
+
+        if (scope, key) in capital.ALIASES:
+            capital.ensure(self)
+            scope, key = capital.SCOPE, capital.ALIASES[(scope, key)]
+        if scope == capital.SCOPE:
+            value = capital.validate(key, value)   # the backend checks every amount, whoever sends it
         self.get(scope, key)   # refuses unknown keys
         text = json.dumps(value)
         with transaction(self.con):

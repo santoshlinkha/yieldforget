@@ -115,12 +115,30 @@ def models_for(panel: pd.DataFrame, cutoff: pd.Timestamp, horizon: int, config: 
     return fitted, {"key": key, "sha256": hashlib.sha256(blob).hexdigest(), "reused": False}
 
 
-def evidence(con, horizon: int) -> dict:
-    """What the latest stock study found at this horizon, per target: development and final test."""
-    row = con.execute("SELECT id, scores_json FROM research_trials WHERE name = ? ORDER BY id DESC LIMIT 1",
-                      (f"stock_study:h{horizon}",)).fetchone()
+def evidence(con, horizon: int, thresholds: Thresholds | None = None, features: list[str] | None = None) -> dict:
+    """What the latest stock study found at this horizon, per target: development and final test.
+
+    Evidence belongs to one design: the study's thresholds version and feature list must equal the
+    ones in use, or nothing is inherited (status ``untested``): a changed model never wears another
+    model's badge. A rescored trial is matched through the original study it rescored.
+    """
+    thresholds = thresholds or Thresholds()
+    features = features if features is not None else P.features_for()
+    row = None
+    for r in con.execute("SELECT id, scores_json, config_json FROM research_trials WHERE name = ? ORDER BY id DESC",
+                         (f"stock_study:h{horizon}",)):
+        config = json.loads(r["config_json"] or "{}")
+        if "rescore_of" in config:
+            original = con.execute("SELECT config_json FROM research_trials WHERE name = ? AND config_json NOT LIKE ?"
+                                   " AND id < ? ORDER BY id DESC LIMIT 1",
+                                   (f"stock_study:h{horizon}", '%rescore_of%', r["id"])).fetchone()
+            config = json.loads(original["config_json"]) if original else {}
+        if config.get("thresholds_version") == thresholds.version() and config.get("features") == features:
+            row = r
+            break
     if not row:
-        return {"trial": None, "status": "untested"}
+        return {"trial": None, "status": "untested",
+                "note": f"no study with thresholds {thresholds.version()} and this feature list"}
     s = json.loads(row["scores_json"])
     out = {"trial": row["id"], "choices": s.get("choices", {})}
     for part in ("development", "final_test"):
@@ -218,7 +236,7 @@ def run_batch(con, cache_dir: Path, requested: list[str], sources: dict[str, str
         panel = P.build(data, h, dates=plans[h], th=config.thresholds, groups=config.groups, macro=macro)
         progress(f"fitting or loading the {h}-session models")
         fitted, art = models_for(panel, cutoff, h, config, Path(cache_dir) / "stock_models", device)
-        ev = evidence(con, h)
+        ev = evidence(con, h, config.thresholds, P.features_for(config.groups))
         weights = (ev.get("choices") or {}).get("ensemble_weights") or {}
         at = panel.xs(cutoff, level="date", drop_level=False) if cutoff in panel.index.get_level_values(0) else panel.iloc[:0]
         table = forecast_rows(fitted, at, weights) if len(at) else pd.DataFrame()

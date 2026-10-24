@@ -34,7 +34,7 @@ from tradingagents.dataflows import local_store
 from tradingagents.dataflows.vendors.index_members import get_sp500_members
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.ledger import imports as csv_import
-from tradingagents.ledger import recommendations
+from tradingagents.ledger import capital, recommendations
 from tradingagents.ledger.accounting import SLEEVES
 from tradingagents.ledger.ai_gateway import Budget, Gateway, Policy, Price
 from tradingagents.ledger.store import Store
@@ -251,7 +251,9 @@ class App:
         with self.lock:
             rec = recommendations.save(
                 self.store.con, account_id=self.store.ledger.account_id, sleeve=sleeve, plan=plan,
-                suggestion=suggestion, settings=settings, closes=c["closes"], universe=c["universe"],
+                # The capital amounts in force are frozen with the record: later edits never change it.
+                suggestion=suggestion, settings={**asdict(settings), "capital": capital.snapshot(self.store)},
+                closes=c["closes"], universe=c["universe"],
                 info_cutoff=c["closes"].index[-1].date().isoformat(), market_data_at=fetched,
                 ai={"ratings": c["ratings"] or {}, "ratings_date": self.ratings_date}, price_tickers=tickers)
         # Next to the records it belongs to, so a second set of books never mixes its reports in.
@@ -295,7 +297,8 @@ class App:
                                    if c["settings"].return_model == "forecast" else {"model": "vol_prior"})}
         if c["sleeve"] == "investing":
             current = load_schedule(self.schedule_path) if self.schedule_path.exists() else {}
-            budget = sum(current.values()) or float(self.store.get("investing", "daily_contribution"))
+            # The planned Investing purchase per session (Settings > Capital), not a deposit.
+            budget = capital.load(self.store).daily_investment_usd
             extras["auto_invest"] = asdict(recommend(c["plan"], budget, current))
         books = self.books()
         extras["sleeves"] = {k: {"equity": v["equity"], "cash": v["cash"], "positions": len(v["positions"])}
@@ -538,6 +541,18 @@ class App:
             out[t] = read_news(t, f.get("name") or t, run["info_cutoff"], news["items"], numbers, self.config,
                                gateway=self.gateway(), allow_paid=True, fallbacks=tuple(g["ai_fallbacks"]))
         return {"shortlist": wanted[:limit], "readings": out}
+
+    # --- capital: the three amounts, against what the books actually hold ---
+
+    def capital_state(self) -> dict:
+        from tradingagents.optimizer.data import latest_prices
+
+        tickers = {e["ticker"] for e in self.store.ledger.events() if e["ticker"]}
+        prices = latest_prices(self.cache_dir, tickers) if tickers else {}
+        today = _today()
+        return {"settings": capital.snapshot(self.store), "history": capital.history(self.store, 20),
+                "proposal": capital.reallocation(self.store, today, prices),
+                "daily_plan": capital.daily_plan(self.store, date.today())}
 
     def live_records(self) -> list[dict]:
         """Every ETF model and horizon with saved runs, scored on what happened after each run."""
@@ -1032,6 +1047,8 @@ def make_handler(app: App):
                     self._json(app.ai_usage())
                 elif url.path == "/api/forecasts/combined":
                     self._json(app.combined_forecasts(int(query.get("horizon") or 20), query.get("universe") or "etf"))
+                elif url.path == "/api/capital":
+                    self._json(app.capital_state())
                 elif url.path == "/api/stocks":
                     self._json(app.stock_run(query.get("run")))
                 elif url.path == "/api/stocks/outcomes":
@@ -1081,7 +1098,7 @@ def make_handler(app: App):
                     if self.path == "/api/ledger/trading-preview":
                         tickers = {e["ticker"] for e in app.store.ledger.events() if e["ticker"]}
                         self._json(app.store.trading_assignment_preview(
-                            float(body.get("amount") or app.store.get("trading", "initial_allocation")),
+                            float(body.get("amount") or capital.load(app.store).trading_capital_usd),
                             latest_prices(app.cache_dir, tickers), _today()))
                     else:
                         self._json(app.ledger_write(self.path, body))
@@ -1143,6 +1160,16 @@ def make_handler(app: App):
                     self._json({"ok": True})
                 elif self.path == "/api/market/explain":
                     self._started(app.start_explain(), "The market explanation")
+                elif self.path == "/api/capital":
+                    with app.lock:
+                        capital.update(app.store, body.get("values") or {}, source="user")
+                    self._json(app.capital_state())
+                elif self.path == "/api/capital/transfer":
+                    # An accepted reallocation: recorded as an ordinary settled-cash transfer.
+                    with app.lock:
+                        app.store.ledger.transfer(body["from"], body["to"], _today(), cash=float(body["cash"]),
+                                                  note="capital reallocation (accepted proposal)")
+                    self._json(app.capital_state())
                 elif self.path == "/api/stocks/run":
                     self._started(app.start_stocks(body), "A stock batch")
                 elif self.path == "/api/stocks/ideas":

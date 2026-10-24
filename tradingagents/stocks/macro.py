@@ -39,6 +39,15 @@ REVISED = {"CPIAUCSL": "monthly", "UNRATE": "monthly", "PAYEMS": "monthly", "NFC
 UNREVISED = ("T10Y2Y", "BAA10Y", "DFF")
 from tradingagents.research.features import MACRO_FEATURES as FEATURES  # noqa: E402  (one list, used by the models too)
 MAX_AGE = 7 * 24 * 3600
+# Publication timing, audited per series (release times from the publishers' schedules):
+# - CPIAUCSL, UNRATE, PAYEMS: BLS releases at 8:30 ET; ALFRED's realtime_start is the release
+#   date, used from the next day (as_known: strictly before the decision date).
+# - NFCI: Chicago Fed, Wednesdays 8:30 ET, data through the prior Friday; vintages, same rule.
+# - DFF: the New York Fed publishes the effective rate for day d at about 9:00 ET on d+1; usable
+#   at the close of d+1: one business day.
+# - T10Y2Y (from H.15 constant-maturity yields) and BAA10Y (Moody's via H.15): FRED posts day d's
+#   value on the next business day, not always before that day's close: two business days.
+LAG_BDAYS = {"DFF": 1, "T10Y2Y": 2, "BAA10Y": 2}
 
 
 def _fetch(series: str, vintages: bool, cache_dir: Path) -> list[dict]:
@@ -120,7 +129,7 @@ def features(dates: pd.DatetimeIndex, cache_dir: Path) -> pd.DataFrame:
             logger.warning("FRED %s unavailable: %s", series, exc)
             continue
         s = pd.Series({pd.Timestamp(r["date"]): r["value"] for r in rows}).sort_index()
-        s.index = s.index + pd.Timedelta(days=1)          # an observation is usable the next day
+        s.index = s.index + pd.offsets.BDay(LAG_BDAYS[series])    # usable at the close after publication
         daily = s.reindex(s.index.union(dates)).ffill()
         out[name] = daily.reindex(dates).to_numpy()
         if name == "credit_spread":

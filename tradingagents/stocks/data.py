@@ -126,6 +126,8 @@ class StockData:
     facts: dict[str, dict | None] = field(default_factory=dict)
     actions: dict[str, dict] = field(default_factory=dict)
     errors: dict[str, list[str]] = field(default_factory=dict)
+    spans: dict | None = None                 # point-in-time membership intervals (``membership``)
+    survivorship: str = "biased"              # "partial" with historical membership, else "biased"
 
     @property
     def stocks(self) -> list[str]:
@@ -143,25 +145,36 @@ def load(requested: list[str], cache_dir: Path, universe: bool = True, progress=
     say = progress or (lambda stage, **_: None)
     cache_dir = Path(cache_dir)
     table = members(cache_dir)
+    from . import membership
+
     say("checking which tickers are stocks")
     asked, rejected = classify(requested, cache_dir, table, workers)
     info = dict(asked)
+    spans, survivorship = None, "biased"
     if universe:
         extra, _ = classify([t for t in table.index if t not in info], cache_dir, table, workers)
         info.update(extra)
+        changes = membership.load(cache_dir)
+        if changes is not None:
+            spans, survivorship = membership.intervals(changes), "partial"
+            # Former members since 2005: prices only inside their intervals, no SEC facts (see membership).
+            for t in membership.members_since(spans, "2005-01-01"):
+                if t not in info:
+                    info[t] = {"name": t, "sector": None, "sector_etf": None, "cik": None, "added": None,
+                               "sp500": True, "removed": True}
     tickers = list(info)
     support = [CASH, *MARKET, *sorted({v for v in SECTOR_ETF.values()})]
     say("loading daily prices", count=len(tickers))
     b = bars([*tickers, *support], cache_dir)
     data = StockData(cache_dir, info, [t for t in requested if t in asked], rejected,
-                     b["Close"], b["High"], b["Low"], b["Volume"])
+                     b["Close"], b["High"], b["Low"], b["Volume"], spans=spans, survivorship=survivorship)
     for t in tickers:
         if t not in data.close.columns or data.close[t].dropna().empty:
             data.errors.setdefault(t, []).append("no prices from Yahoo")
 
     def one(t):
         got, problems = {}, []
-        if fundamentals:
+        if fundamentals and not info[t].get("removed"):
             try:
                 got["facts"] = facts_for(t, cache_dir, info[t].get("cik"))
             except Exception as exc:  # recorded per stock; the batch carries on

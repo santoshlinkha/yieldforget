@@ -444,6 +444,20 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
 
     <section class="tab" id="settings">
       <div class="page-head"><div><h2>Settings</h2><p>Your holdings, recurring buys, risk and goals, and what to scan. Holdings and risk settings are kept in portfolio.sqlite3; recurring buys and the scan list in their files next to the app.</p></div></div>
+      <div class="card" id="capitalCard">
+        <h3>Capital</h3>
+        <p class="muted">Targets for how much each sleeve is funded with, and the planned Investing purchase per market session. The books stay the truth: changing a target moves no money; it proposes transfers you can record. Trading capital is the money assigned to Trading, <b>not a daily trading budget</b>.</p>
+        <div class="row">
+          <div style="width:190px"><label for="capTrading">Trading capital ($)</label><input type="number" id="capTrading" step="0.01" min="0"></div>
+          <div style="width:190px"><label for="capInvesting">Investing capital ($)</label><input type="number" id="capInvesting" step="0.01" min="0"></div>
+          <div style="width:220px"><label for="capDaily">Daily investment ($ per session)</label><input type="number" id="capDaily" step="0.01" min="0"></div>
+          <button id="capSave">Save amounts</button>
+          <span class="muted small" id="capStatus"></span>
+        </div>
+        <div class="table-wrap" style="margin-top:10px"><table id="capTable" class="compact"></table></div>
+        <div id="capProposal"></div>
+        <p class="muted small" id="capPlan"></p>
+      </div>
       <div class="grid">
         <div class="card">
           <h3>Holdings</h3>
@@ -916,6 +930,35 @@ $("fcUse").onchange = async () => {
   catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }
 };
 
+// --- capital: the three amounts and the books ---
+async function loadCapital() {
+  let c;
+  try { c = await api("/api/capital"); } catch (e) { $("capStatus").textContent = e.message; return; }
+  const st = c.settings, p = c.proposal, money = v => v == null ? "–" : usd(v);
+  $("capTrading").value = st.trading_capital_usd; $("capInvesting").value = st.investing_capital_usd; $("capDaily").value = st.daily_investment_usd;
+  $("capStatus").textContent = `settings version ${st.version} (${st.hash})`;
+  $("capTable").innerHTML = "<tr><th class='l'>Sleeve</th><th>Target</th><th>Funded so far</th><th>Equity now</th><th>Settled cash</th><th>Unsettled</th><th>Reserved</th></tr>" +
+    Object.entries(p.sleeves).map(([k, v]) => `<tr><td class="l">${k[0].toUpperCase() + k.slice(1)}</td><td>${money(v.target)}</td><td>${money(v.funded)}</td><td>${money(v.equity)}</td><td>${money(v.settled_cash)}</td><td>${money(v.unsettled)}</td><td>${money(v.reserved)}</td></tr>`).join("");
+  $("capProposal").innerHTML = (p.transfers.length ? "<p><b>Proposed:</b> " + p.transfers.map((t, i) =>
+      `move ${usd(t.cash)} of settled cash from ${t.from} to ${t.to} <button class="ghost" data-i="${i}">Record this transfer</button>`).join("; ") + "</p>"
+      : "<p class='muted'>No transfer needed: each sleeve's funding matches its target.</p>") +
+    p.notes.map(n => `<p class="muted small">${esc(n)}</p>`).join("");
+  $("capProposal").querySelectorAll("button[data-i]").forEach(b => b.onclick = async () => {
+    const t = p.transfers[+b.dataset.i];
+    if (!confirm(`Record a transfer of ${usd(t.cash)} from ${t.from} to ${t.to}? It changes the books (not Robinhood).`)) return;
+    try { await api("/api/capital/transfer", t); loadCapital(); refresh(); } catch (e) { showError(e.message); }
+  });
+  const d = c.daily_plan;
+  $("capPlan").textContent = `Next session ${d.session}: planned ${usd(d.planned)}, settled cash ${usd(d.settled_available)}, buy ${usd(d.buy)}. ` + d.notes.join(" ");
+}
+$("capSave").onclick = async () => {
+  try {
+    await api("/api/capital", {values: {trading_capital_usd: +$("capTrading").value, investing_capital_usd: +$("capInvesting").value,
+                                        daily_investment_usd: +$("capDaily").value}});
+    loadCapital(); refresh();
+  } catch (e) { showError(e.message); }
+};
+
 // --- settings editors ---
 function editorRows(table, rows, cols) {
   table.innerHTML = "<tr>" + cols.map(c => `<th>${c.label}</th>`).join("") + "<th></th></tr>" +
@@ -1298,7 +1341,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); loadCapital(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over

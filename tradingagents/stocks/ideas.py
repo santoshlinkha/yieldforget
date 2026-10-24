@@ -95,7 +95,10 @@ def make(con, store, cache_dir, run_id: str | None = None, horizon: int = 20, as
     state = store.ledger.state(sleeve, as_of)
     rows = [f for f in run["forecasts"] if f["horizon"] == horizon]
     tickers = [f["ticker"] for f in rows]
-    last = _prices(cache_dir, [*tickers, *state.positions]).ffill().iloc[-1]
+    # Prices as of the decision date, never later ones; a price over a week old is flagged below.
+    known = _prices(cache_dir, [*tickers, *state.positions]).ffill().loc[:pd.Timestamp(as_of)]
+    last = known.iloc[-1] if len(known) else pd.Series(dtype=float)
+    price_day = known.index[-1].date() if len(known) else None
     held_value = sum(q * float(last.get(t, 0) or 0) for t, q in state.positions.items())
     sleeve_value = held_value + state.cash.total
     available = state.cash.available
@@ -109,20 +112,35 @@ def make(con, store, cache_dir, run_id: str | None = None, horizon: int = 20, as
                 "p_large_loss": fc.get("p_large_loss"), "evidence": (f.get("evidence_status") or {}).get("return"),
                 "reasons": list(f.get("reasons") or [])}
         flagged = f["status"] != "ok" or any(r.startswith(("stale", "insufficient", "no trading")) for r in line["reasons"])
+        if price_day is None or (as_of - price_day).days > 7:
+            flagged = True
+            line["reasons"].append(f"price as of {price_day}: too old for {as_of}")
+        risk = fc.get("p_large_loss")
+        risk_ok = isinstance(risk, (int, float)) and np.isfinite(risk) and 0 <= risk <= 1
         if f["status"] != "ok" or fc.get("net") is None:
             line["action"] = "abstain"
+        elif not risk_ok and fc["net"] > 0:
+            # A missing or invalid risk estimate blocks approval; it is never read as zero risk.
+            line["action"] = "watch (risk estimate missing or invalid: approval blocked)"
         elif fc["net"] <= 0:
             line["action"] = "consider reducing (no short orders)" if held > 0 else "avoid (no short orders)"
-        elif line["evidence"] == "backed" and (fc.get("p_large_loss") or 0) <= rules["max_large_loss_prob"] and not flagged:
+        elif line["evidence"] == "backed" and risk <= rules["max_large_loss_prob"] and not flagged:
             line["action"] = "buy candidate"
             buys.append(line)
         else:
             why = "return evidence not backed by the final test" if line["evidence"] != "backed" else \
-                "large-loss probability above the cap" if (fc.get("p_large_loss") or 0) > rules["max_large_loss_prob"] \
+                "large-loss probability above the cap" if risk > rules["max_large_loss_prob"] \
                 else "data-quality flag"
             line["action"] = f"watch ({why})"
         lines.append(line)
-    buys = sorted(buys, key=lambda x: -x["net"])[: rules["max_names"]]
+    # The name limit counts what Trading already holds, not only new buys.
+    held_names = {t for t, q in state.positions.items() if q > 1e-9}
+    new_slots = max(0, rules["max_names"] - len(held_names))
+    ranked = sorted(buys, key=lambda x: -x["net"])
+    buys = [b for b in ranked if b["ticker"] in held_names] + [b for b in ranked if b["ticker"] not in held_names][:new_slots]
+    for b in ranked:
+        if b not in buys:
+            b["action"] = f"watch (name limit: {rules['max_names']} names including holdings)"
     sizes = {}
     if buys:
         per = min(rules["max_position_share"] * sleeve_value, available / len(buys))

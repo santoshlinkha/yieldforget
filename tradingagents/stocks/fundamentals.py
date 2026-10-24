@@ -59,7 +59,7 @@ INSTANT = {"assets", "liabilities", "equity", "shares"}
 FEATURES = ["rev_growth_y", "rev_growth_q", "gross_margin", "op_margin", "net_margin", "fcf_margin", "roa",
             "liabilities_to_assets", "dilution_1y"]
 VALUATION = ["earnings_yield", "sales_yield", "fcf_yield", "book_yield"]
-RAW = ["revenue_y", "net_income_y", "fcf_y", "equity_i", "shares_i", "filing_age_days"]
+RAW = ["revenue_y", "net_income_y", "fcf_y", "equity_i", "shares_i", "shares_end_ord", "filing_age_days"]
 
 
 class RateLimiter:
@@ -206,9 +206,9 @@ def _features(known: dict, splits: list | None) -> dict:
         out["gross_margin"] = _ratio(gross, revenue)
         out["op_margin"] = _ratio(get("op_income", "annual").get(end_y), revenue)
         out["net_margin"] = _ratio(get("net_income", "annual").get(end_y), revenue)
-        ocf = get("ocf", "annual").get(end_y)
-        if ocf is not None:
-            fcf = ocf - (get("capex", "annual").get(end_y) or 0.0)
+        ocf, capex = get("ocf", "annual").get(end_y), get("capex", "annual").get(end_y)
+        if ocf is not None and capex is not None:     # a missing capex is unknown, not zero
+            fcf = ocf - capex
             out["fcf_y"], out["fcf_margin"] = fcf, _ratio(fcf, revenue)
         out["net_income_y"] = get("net_income", "annual").get(end_y, np.nan)
     end_q, rq = _latest(get("revenue", "quarter"))
@@ -228,6 +228,7 @@ def _features(known: dict, splits: list | None) -> dict:
     end_s, sh = _latest(shares)
     if end_s:
         out["shares_i"] = sh
+        out["shares_end_ord"] = float(_day(end_s).toordinal())   # the date the count is as of
         before = _year_before(shares, end_s, slack=60)
         if before is not None:
             prior_end = (_day(end_s) - timedelta(days=365)).isoformat()
@@ -286,10 +287,16 @@ def history(facts: dict, dates: pd.DatetimeIndex, splits: list | None = None) ->
     return out
 
 
-def valuation(fund: pd.DataFrame, raw_price: pd.Series) -> pd.DataFrame:
-    """Yields on the market value at each date: the price as it then traded times the share
-    count then reported (both pre-split when a split came later, so they match)."""
-    cap = raw_price.reindex(fund.index) * fund["shares_i"]
+def valuation(fund: pd.DataFrame, raw_price: pd.Series, splits: list | None = None) -> pd.DataFrame:
+    """Yields on the market value at each date: the price as it then traded times the share count
+    reported, carried to that date's split basis (a split between the count's date and the
+    valuation date multiplies the count), so price and shares always match."""
+    shares = fund["shares_i"].copy()
+    for i, (d, ordv) in enumerate(zip(fund.index, fund.get("shares_end_ord", pd.Series(np.nan, index=fund.index)),
+                                      strict=True)):
+        if np.isfinite(ordv):
+            shares.iloc[i] *= _split_factor(splits, date.fromordinal(int(ordv)).isoformat(), d.date().isoformat())
+    cap = raw_price.reindex(fund.index) * shares
     cap = cap.where(cap > 0)
     return pd.DataFrame({"earnings_yield": fund["net_income_y"] / cap, "sales_yield": fund["revenue_y"] / cap,
                          "fcf_yield": fund["fcf_y"] / cap, "book_yield": fund["equity_i"] / cap}, index=fund.index)

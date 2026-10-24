@@ -227,7 +227,7 @@ def test_recommendations_never_short_stay_within_settled_cash_and_limits(tmp_pat
     store.ledger.fill("trading", "buy", "HELD", 2.0, 50.0, day, settle_date=day)
     tickers = ["AAA", "BBB", "CCC", "HELD", "WEAK"]
     close = pd.DataFrame({t: np.linspace(40, 47.3, 260) for t in [*tickers, "SPY", "BIL"]},
-                         index=pd.bdate_range("2025-10-01", periods=260))
+                         index=pd.bdate_range(end="2026-10-23", periods=260))
     monkeypatch.setattr(ideas, "_prices", lambda cache_dir, names: close)
     con = store.con
     con.execute("INSERT INTO stock_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

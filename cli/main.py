@@ -410,7 +410,9 @@ def book_fund_trading(amount: float = typer.Option(None, help="Dollars to assign
     from datetime import date
 
     store = _book_store(portfolio)
-    amount = amount or store.get("trading", "initial_allocation")
+    from tradingagents.ledger import capital
+
+    amount = amount or capital.load(store).trading_capital_usd
     preview = store.trading_assignment_preview(amount, _prices(store), date.today())
     for step in preview["steps"]:
         if "cash" in step:
@@ -487,6 +489,27 @@ def book_decide(rec_id: str, decision: str, note: str = None, portfolio: str = P
         raise ValueError(f"{rec_id} matches {len(matches)} recommendations")
     recommendations.decide(store.con, matches[0], decision, note)
     console.print(f"Recorded {decision}. Holdings change only when you record the fills.")
+
+
+@book_app.command("capital")
+@_book_errors
+def book_capital(trading: float = typer.Option(None, help="Trading capital, dollars (not a daily budget)"),
+                 investing: float = typer.Option(None, help="Investing capital, dollars"),
+                 daily: float = typer.Option(None, help="Planned Investing purchase per market session"),
+                 portfolio: str = PORTFOLIO_OPT):
+    """Show or change the three capital amounts; shows the reallocation proposal and today's purchase plan."""
+    import json
+    from datetime import date
+
+    from tradingagents.ledger import capital
+
+    store = _book_store(portfolio)
+    values = {k: v for k, v in (("trading_capital_usd", trading), ("investing_capital_usd", investing),
+                                ("daily_investment_usd", daily)) if v is not None}
+    snap = capital.update(store, values, source="cli") if values else capital.snapshot(store)
+    console.print(json.dumps({"settings": snap, "proposal": capital.reallocation(store, date.today(), _prices(store)),
+                              "daily_plan": capital.daily_plan(store, date.today())}, indent=1, default=str))
+    console.print("[dim]Nothing moves until you record a transfer (book transfer ... --cash N).[/dim]")
 
 
 @book_app.command("ai")

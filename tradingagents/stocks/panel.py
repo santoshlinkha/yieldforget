@@ -53,6 +53,49 @@ UNRANKED = {"current_trend"}
 SLIPPAGE = 0.0002
 
 
+def rank_against(frame: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame:
+    """Each value's percentile among the **reference** values of its date, into [-0.5, 0.5].
+
+    Reference cells (point-in-time members) are ranked among themselves only; any other cell
+    (a requested non-member, a stock outside the index that day) is placed against that same
+    reference distribution, so it never moves a reference rank. Ties take the middle rank;
+    missing stays missing; ticker order cannot matter.
+    """
+    values, ref = frame.to_numpy(dtype=float), reference.reindex_like(frame).fillna(False).to_numpy(dtype=bool)
+    res = np.full(values.shape, np.nan)
+    for i in range(values.shape[0]):
+        row, use = values[i], ref[i] & np.isfinite(values[i])
+        pool = np.sort(row[use])
+        if len(pool) < 2:
+            continue
+        ok = np.isfinite(row)
+        lo = np.searchsorted(pool, row, side="left")
+        hi = np.searchsorted(pool, row, side="right")
+        n = len(pool)
+        # A member: its percentile rank among members (ties share the average rank), as before.
+        # Anyone else: the share of members below it (ties count half), so it stays in [-0.5, 0.5].
+        member_rank = (lo + hi + 1) / 2 / n - 0.5
+        outside = np.clip((lo + hi) / 2 / n - 0.5, -0.5, 0.5)
+        res[i] = np.where(ok, np.where(ref[i], member_rank, outside), np.nan)
+    return pd.DataFrame(res, index=frame.index, columns=frame.columns)
+
+
+def member_mask(data: StockData, dates: pd.DatetimeIndex, tickers: list[str]) -> pd.DataFrame:
+    """Who was in the reference universe on each date: historical intervals when available, else each
+    of today's members from its date added (survivorship-biased)."""
+    from . import membership
+
+    if data.spans:
+        return membership.mask(data.spans, dates, tickers)
+    out = pd.DataFrame(False, index=dates, columns=tickers)
+    for t in tickers:
+        i = data.info.get(t, {})
+        if i.get("sp500"):
+            added = pd.Timestamp(i["added"]) if i.get("added") else pd.Timestamp("1900-01-01")
+            out.loc[dates >= added, t] = True
+    return out
+
+
 def every_for(horizon: int) -> int:
     return 10 if horizon <= 5 else 20
 
@@ -107,7 +150,7 @@ def _fundamental(data: StockData, tickers: list[str], dates) -> dict[str, pd.Dat
             continue
         acts = data.actions.get(t) or {}
         h = FU.history(facts, dates, acts.get("splits"))
-        v = FU.valuation(h, raw_close(data.close[t], acts).reindex(dates))
+        v = FU.valuation(h, raw_close(data.close[t], acts).reindex(dates), acts.get("splits"))
         for k in FU.FEATURES + ["filing_age_days"]:
             cols[k][t] = h[k]
         for k in FU.VALUATION:
@@ -118,20 +161,24 @@ def _fundamental(data: StockData, tickers: list[str], dates) -> dict[str, pd.Dat
 def build(data: StockData, horizon: int, dates: pd.DatetimeIndex | None = None, th: Thresholds = Thresholds(),
           groups=DEFAULT_GROUPS, start: str = "2006-01-01", macro: pd.DataFrame | None = None) -> pd.DataFrame:
     """The panel for one horizon. ``macro``: precomputed economic features (shared across horizons)."""
-    tickers = data.stocks
+    tickers = sorted(data.stocks)          # a fixed order: results never depend on input order
     sessions = data.close.index
     if dates is None:
         dates = decision_dates(sessions, start=start, every=every_for(horizon)).union(pd.DatetimeIndex([sessions[-1]]))
+    # Point-in-time membership is applied before any cross-sectional ranking: ranks compare a stock
+    # only with that date's members, and requested non-members never move a member's rank.
+    member = member_mask(data, dates, tickers)
     frames = []
     if "technical" in groups:
         for name, frame in _technical(data, tickers, dates).items():
             if name not in GROUPS["technical"] and name != "vol_3m":
                 continue
             sampled = frame.reindex(dates)
-            frames.append((sampled if name in UNRANKED else _rank(sampled)).stack(future_stack=True).rename(name))
+            frames.append((sampled if name in UNRANKED else rank_against(sampled, member))
+                          .stack(future_stack=True).rename(name))
     if "fundamental" in groups:
         for name, frame in _fundamental(data, tickers, dates).items():
-            frames.append(_rank(frame).stack(future_stack=True).rename(name))
+            frames.append(rank_against(frame, member).stack(future_stack=True).rename(name))
     panel = pd.concat(frames, axis=1) if frames else pd.DataFrame(
         index=pd.MultiIndex.from_product([dates, tickers]))
     panel.index.names = ["date", "ticker"]
@@ -154,11 +201,12 @@ def build(data: StockData, horizon: int, dates: pd.DatetimeIndex | None = None, 
         .reindex(idx.get_level_values(0)).to_numpy()
     targets = labels(close, high, low, cash, data.close["SPY"], dates, horizon, th)
     panel = panel.join(targets)
-    added = pd.Series({t: pd.Timestamp(i["added"]) for t, i in data.info.items() if i.get("added")})
-    when = added.reindex(idx.get_level_values(1)).to_numpy()
-    in_index = pd.isna(when) | (idx.get_level_values(0).to_numpy() >= when)
-    requested = idx.get_level_values(1).isin(data.requested)
-    panel["in_index"] = in_index | requested
+    # ``in_index``: a member of the reference universe on that date. Only these rows train or score
+    # models. Requested stocks outside it are forecast, never trained on, so asking about a stock
+    # cannot change the models or anyone else's forecast.
+    panel["in_index"] = member.stack(future_stack=True).reindex(idx).fillna(False).to_numpy(dtype=bool)
+    panel["requested"] = idx.get_level_values(1).isin(data.requested)
+    panel["removed"] = idx.get_level_values(1).isin([t for t, i in data.info.items() if i.get("removed")])
     # A row needs a price on its date and a year of history.
     have = close.reindex(dates).stack(future_stack=True).reindex(idx).notna().to_numpy()
     year = raw_vol.reindex(dates).stack(future_stack=True).reindex(idx).notna().to_numpy() & \
