@@ -102,12 +102,15 @@ inside ±1.645 sigma (target 90%). See `experiments/output/risk_forecasts.json` 
 
 | Horizon | 10-year sample (current) | trailing 3 months | EWMA | GARCH(1,1)-t |
 |---|---|---|---|---|
-| 5 | 0.69 | 0.51 | 0.44 | **0.42** |
-| 20 | 0.70 | 0.52 | 0.39 | **0.35** |
-| 60 | 0.77 | 0.77 | 0.72 | **0.45** |
+| 5 | 0.685 (cov 92%) | 0.511 (87%) | 0.441 (87%) | **0.403** (88%) |
+| 20 | 0.698 (93%) | 0.516 (88%) | 0.391 (88%) | **0.328** (92%) |
+| 60 | 0.765 (94%) | 0.771 (88%) | 0.724 (88%) | **0.427** (93%) |
 
-GARCH is best at every horizon, and EWMA beats the optimizer's 10-year figure (which
-over-covers: 93%, too wide). A GARCH fit that does not converge counts as no forecast.
+GARCH is best at every horizon, and EWMA beats the optimizer's 10-year figure. GARCH fits that
+did not converge or forecast implausibly (about 2% of rows) count as no forecast and are left
+out of its score. Median realized/forecast variance: 10-year 0.51-0.56 (too wide in a typical
+month), EWMA 0.93-1.02, GARCH 0.71-0.84. That sits with coverage near 90% because
+realized variance is skewed: most months are calm, and a few are not.
 
 Covariance for the optimizer: the **10-year sample covariance did best**. Its long-only
 minimum-variance portfolio had the lowest realized volatility, and its equal-weight
