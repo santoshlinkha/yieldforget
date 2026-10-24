@@ -37,8 +37,11 @@ HISTORY_TTL = timedelta(days=7)
 def _records(frame: pd.DataFrame | None) -> list[dict]:
     if frame is None or len(frame) == 0:
         return []
+    if isinstance(frame.index, pd.RangeIndex):   # a plain row number carries nothing to keep
+        return json_safe(frame.to_dict("records"))
     out = frame.reset_index()
-    out.iloc[:, 0] = out.iloc[:, 0].astype(str)
+    first = out.columns[0]
+    out[first] = out[first].astype(str)   # dates and labels as text (pandas 3 refuses an in-place cast)
     return json_safe(out.to_dict("records"))
 
 
@@ -210,7 +213,9 @@ def financials(symbol: str, cache_dir=None) -> dict:
 
 
 def current_analysts(symbol: str, cache_dir=None) -> dict:
-    """Today's consensus price target and recommendation counts, saved once per session."""
+    """Today's Wall Street consensus, saved once per session: price targets, the buy/hold/sell
+    counts over the last four months, and the EPS and revenue estimates (average, low, high,
+    analyst count, growth) for this and next quarter and year, with their trend and revisions."""
     from tradingagents.dataflows.vendors.yahoo.common import yf_retry
 
     store = local_store.store(cache_dir)
@@ -226,4 +231,8 @@ def current_analysts(symbol: str, cache_dir=None) -> dict:
 
     return {"price_targets": get("price_targets", lambda t: t.analyst_price_targets or {}),
             "recommendations": get("recommendations", lambda t: _records(t.recommendations_summary)),
-            "eps_trend": get("eps_trend", lambda t: _records(t.eps_trend))}
+            "eps_trend": get("eps_trend", lambda t: _records(t.eps_trend)),
+            "earnings_estimate": get("earnings_estimate", lambda t: _records(t.earnings_estimate)),
+            "revenue_estimate": get("revenue_estimate", lambda t: _records(t.revenue_estimate)),
+            "eps_revisions": get("eps_revisions", lambda t: _records(t.eps_revisions)),
+            "growth_estimates": get("growth_estimates", lambda t: _records(t.growth_estimates))}

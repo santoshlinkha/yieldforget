@@ -137,3 +137,12 @@ def test_an_empty_news_answer_is_asked_again(tmp_path):
     store.articles("ticker:AAA:30", empty)
     store.articles("ticker:AAA:30", empty)
     assert len(asked) == 2
+
+
+def test_yahoo_tables_become_records_whatever_their_index():
+    from tradingagents.dataflows.vendors.yahoo.history import _records
+
+    numbered = pd.DataFrame({"period": ["0m", "-1m"], "buy": [18, 19]})
+    dated = pd.DataFrame({"Firm": ["X"]}, index=pd.DatetimeIndex(["2026-10-20"], name="GradeDate"))
+    assert _records(numbered) == [{"period": "0m", "buy": 18}, {"period": "-1m", "buy": 19}]
+    assert _records(dated) == [{"GradeDate": "2026-10-20", "Firm": "X"}]

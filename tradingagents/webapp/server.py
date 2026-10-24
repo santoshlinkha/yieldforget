@@ -487,15 +487,39 @@ class App:
                     "official": history}
 
         def forecast():
-            from tradingagents.research.engine import latest_run
-            out_f = []
+            """The standard rule's estimate (always), and each horizon's latest model forecast: the
+            stored one when the ticker was in the run, otherwise computed now with the run's model."""
+            from tradingagents.optimizer.data import compute_stats, fetch_closes
+            from tradingagents.optimizer.plan import growth_excess
+            from tradingagents.research.engine import forecast_one, latest_run
+
+            settings = OptimizerSettings()
+            closes = fetch_closes([symbol, settings.cash_ticker, settings.cash_proxy], required=[symbol],
+                                  cache_dir=self.cache_dir)
+            stats = compute_stats(closes, [settings.cash_ticker, symbol], settings.cash_ticker, settings.lookback_years,
+                                  settings.short_history_years, settings.short_history_floor, {},
+                                  settings.cash_proxy)
+            g = float(growth_excess(stats, settings)[0])
+            rule = {"growth_above_cash": g, "growth": g + stats.cash_return, "cash": stats.cash_return,
+                    "volatility": float(stats.vol[0]), "worst_drop": float(stats.worst_loss[0]),
+                    "assumed_drop": bool(stats.floored[0]), "years": float(stats.years[0])}
+            models = []
             for h in (5, 20, 60):
                 run = latest_run(self.store.con, horizon=h)
-                f = run and next((x for x in run["forecasts"] if x["ticker"] == symbol), None)
+                if not run:
+                    continue
+                f = next((x for x in run["forecasts"] if x["ticker"] == symbol), None)
                 if f:
-                    out_f.append({"horizon": h, "model": run["model"], "info_cutoff": run["info_cutoff"],
-                                  **{k: f[k] for k in ("mean", "median", "q05", "q95", "p_gain", "estimation_sd")}})
-            return out_f
+                    models.append({"horizon": h, "model": run["model"], "info_cutoff": run["info_cutoff"],
+                                   "on_demand": False, "flags": json.loads(f.get("flags_json") or "[]"),
+                                   **{k: f[k] for k in ("mean", "median", "q05", "q95", "p_gain", "estimation_sd")}})
+                    continue
+                key = ("forecast_one", run["id"], symbol)
+                if key not in self._memo:
+                    self._memo[key] = ("", forecast_one(self.store.con, self.cache_dir, run, symbol))
+                if self._memo[key][1]:
+                    models.append(self._memo[key][1])
+            return {"rule": rule, "models": models}
 
         def analysts():
             actions = yh.upgrades(symbol, self.cache_dir)
@@ -541,8 +565,12 @@ class App:
         quote_type = (out.get("profile") or {}).get("quoteType") if isinstance(out.get("profile"), dict) else None
         if quote_type == "ETF":
             out["financials"] = {"note": "Funds have no company financial statements."}
+            out["moat"] = {"note": "Funds have no moat of their own; look at the companies they hold."}
         else:
             section("financials", lambda: yh.financials(symbol, self.cache_dir))
+            if isinstance(out.get("financials"), dict) and "error" not in out["financials"]:
+                from tradingagents.research.moat import moat
+                section("moat", lambda: moat(out["financials"]))
         section("reports", reports)
         return out
 

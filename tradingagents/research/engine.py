@@ -203,3 +203,35 @@ def expected_returns(run: dict, tickers: list[str], conservative: bool = True, k
             mu -= k * f["estimation_sd"]
         out[f["ticker"]] = mu
     return out
+
+
+def forecast_one(con, cache_dir: Path, run: dict, symbol: str, cash: str = "BIL") -> dict | None:
+    """A saved run's model applied to one more ticker, at the run's own information cutoff.
+
+    The ticker's features are ranked against the run's own funds on that date, as in
+    training, so its forecast is comparable with theirs. A ticker outside the run's
+    universe (a single stock, when the model was trained on ETFs) is flagged: the model
+    never saw anything like it, and its forecast deserves less trust. None when the
+    ticker has no year of prices at the cutoff.
+    """
+    config = run.get("config") or json.loads(run.get("config_json") or "{}")
+    tickers = [t for t in config.get("tickers", []) if t != symbol]
+    cutoff = pd.Timestamp(run["info_cutoff"])
+    b = bars([*tickers, symbol, cash, *MARKET], cache_dir)
+    close = b["Close"][[*tickers, symbol, cash]]
+    close = close[(close.index >= pd.Timestamp("2004-01-01")) & (close.index <= cutoff)]
+    if symbol not in close or close[symbol].dropna().empty or close.index[-1] != cutoff:
+        return None
+    high, low, volume = (b[f][[*tickers, symbol, cash]].reindex(close.index) for f in ("High", "Low", "Volume"))
+    market = {m: b["Close"][m].loc[:cutoff].dropna() for m in MARKET if b["Close"][m].notna().any()}
+    panel = F.build_panel(close, high, low, volume, market, cash, pd.DatetimeIndex([cutoff]), horizon=run["horizon"])
+    if (cutoff, symbol) not in panel.index:
+        return None
+    model = load_model(run)
+    row = model.predict(panel.loc[[(cutoff, symbol)]]).iloc[0]
+    flags = [] if symbol in config.get("tickers", []) else [
+        f"this model was trained only on {run['universe'].upper()}s and {symbol} was not among them; "
+        "treat it as a forecast for an unfamiliar kind of asset"]
+    return {"horizon": run["horizon"], "model": run["model"], "info_cutoff": run["info_cutoff"], "on_demand": True,
+            "flags": flags, **{k: float(row[k]) for k in ("mean", "median", "q05", "q95", "p_gain")},
+            "estimation_sd": None}

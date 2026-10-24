@@ -73,6 +73,20 @@ svg text { fill: var(--muted); font-size: 11px; }
 .report { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 details summary { cursor: pointer; }
 .up { color: var(--buy); font-weight: 600; } .down { color: var(--sell); font-weight: 600; }
+.consensus { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.consensus .big { font-size: 22px; font-weight: 700; }
+.consensus .big.buy { color: var(--buy); } .consensus .big.sell { color: var(--sell); } .consensus .big.hold { color: #d97706; }
+.ratingbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--surface-2); margin: 6px 0 4px; }
+.ratingbar span { display: block; height: 100%; }
+.rb-buy { background: var(--buy); } .rb-hold { background: #f59e0b; } .rb-sell { background: var(--sell); }
+.rb-legend { display: flex; gap: 14px; font-size: 12.5px; flex-wrap: wrap; }
+.rb-legend b { font-size: 15px; }
+.target { position: relative; height: 34px; margin: 14px 4px 4px; }
+.target .rail { position: absolute; top: 15px; left: 0; right: 0; height: 4px; border-radius: 2px; background: var(--surface-2); border: 1px solid var(--border); }
+.target .mark { position: absolute; top: 6px; width: 2px; height: 22px; background: var(--muted); }
+.target .mark.now { background: var(--accent); width: 3px; }
+.target .lbl { position: absolute; top: -12px; transform: translateX(-50%); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.target .lbl.now { top: 30px; color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -84,14 +98,16 @@ details summary { cursor: pointer; }
   <div class="grid">
     <div>
       <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div id="chart" style="margin-top:12px"></div></div>
-      <div class="card"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
+      <div class="card"><h2>Wall Street analyst ratings</h2><div id="analysts"></div></div>
+      <div class="card"><h2>Wall Street EPS and revenue estimates</h2><div id="estimates"></div></div>
+      <div class="card"><h2>Competitive moat (quantitative)</h2><div id="moat"></div></div>
+      <div class="card"><h2>Earnings: estimate vs reported</h2><div class="table-wrap"><table id="earn"></table></div></div>
       <div class="card"><h2>Financial statements</h2><div id="fin"></div></div>
-      <div class="card"><h2>Earnings</h2><div class="table-wrap"><table id="earn"></table></div></div>
     </div>
     <div>
       <div class="card"><h2>In your account</h2><div id="mine"></div></div>
-      <div class="card"><h2>Forecasts</h2><div id="fc"></div></div>
-      <div class="card"><h2>Analysts</h2><div id="analysts"></div></div>
+      <div class="card"><h2>Expected return</h2><div id="fc"></div></div>
+      <div class="card"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
       <div class="card"><h2>About</h2><div id="about"></div></div>
       <div class="card"><h2>Saved analysis reports</h2><div id="reports"></div></div>
     </div>
@@ -174,6 +190,20 @@ async function load() {
     draw();
   }
 
+  const mo = d.moat;
+  if (!mo) $("moat").innerHTML = `<p class="muted">No statements to check.</p>`;
+  else if (mo.note) $("moat").innerHTML = `<p class="muted">${esc(mo.note)}</p>`;
+  else if (failed(mo)) $("moat").innerHTML = failed(mo);
+  else {
+    const cls = {"strong indicators": "buy", "some indicators": "hold", "few indicators": "sell"}[mo.verdict] || "";
+    $("moat").innerHTML = `<div class="consensus"><span class="big ${cls}">${esc(mo.verdict[0].toUpperCase() + mo.verdict.slice(1))}</span>
+        <span class="muted">${mo.passed} of ${mo.scored} checks passed${mo.years ? `, annual statements ${esc(mo.years)}` : ""}</span></div>
+      <table><tr><th class="l">Check</th><th class="l">This company</th><th class="l">Needs</th><th>Result</th></tr>` +
+      mo.checks.map(c => `<tr><td class="l">${esc(c.name)}</td><td class="l">${esc(c.value)}</td><td class="l muted">${esc(c.rule)}</td>
+        <td>${c.passed == null ? "<span class='muted'>no data</span>" : c.passed ? "<span class='up'>pass</span>" : "<span class='down'>fail</span>"}</td></tr>`).join("") +
+      `</table><p class="muted small">The app's own indicators from Yahoo's annual statements: signs a moat leaves in the numbers (pricing power, returns on capital, cash). Not Morningstar's moat rating, and it can't see brands, patents or network effects directly. Banks and insurers report differently, so it says less about them.</p>`;
+  }
+
   const e = d.earnings;
   $("earn").innerHTML = failed(e) ? `<tr><td>${failed(e)}</td></tr>` : (e.length ? "<tr><th class='l'>Report date</th><th>EPS estimate</th><th>Reported</th><th>Surprise</th></tr>" +
     e.map(x => `<tr><td class="l">${esc(x.date)}</td><td>${x.estimate == null ? "–" : x.estimate.toFixed(2)}</td><td>${x.reported == null ? "upcoming" : x.reported.toFixed(2)}</td><td>${x.surprise_pct == null ? "–" : `<span class="${x.surprise_pct >= 0 ? "pos" : "neg"}">${x.surprise_pct.toFixed(1)}%</span>`}</td></tr>`).join("") : "<tr><td class='muted'>No earnings: funds do not report them.</td></tr>");
@@ -190,21 +220,73 @@ async function load() {
   }
 
   const fc = d.forecast;
-  $("fc").innerHTML = failed(fc) || (fc.length ? `<table><tr><th class="l">Horizon</th><th>Mean</th><th>5–95%</th><th>P(gain)</th></tr>` +
-    fc.map(x => `<tr><td class="l">${x.horizon} sessions <span class="muted small">${esc(x.model)}</span></td><td>${spct(x.mean, 2)}</td><td>${spct(x.q05)} to ${spct(x.q95)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") +
-    `</table><p class="muted small">Log return above cash over the horizon, from data to ${esc(fc[0].info_cutoff)}. Model estimates, not outcomes; see the Forecasts tab for their record.</p>` : "<p class='muted'>Not in any forecast run.</p>");
+  if (failed(fc)) $("fc").innerHTML = failed(fc);
+  else {
+    const r = fc.rule;
+    let h = `<p><b>Standard rule</b> (what the plan uses by default): expected growth <b>${pct(r.growth)}</b> a year, ` +
+      `${spct(r.growth_above_cash)} above cash (${pct(r.cash)}). Volatility ${pct(r.volatility, 0)}, worst drop ${pct(r.worst_drop, 0)}` +
+      `${r.assumed_drop ? " (assumed: under 10 years of history)" : ""}.</p>`;
+    if (fc.models.length) {
+      h += `<table><tr><th class="l">Model forecast</th><th>Mean</th><th>5–95%</th><th>P(gain)</th></tr>` +
+        fc.models.map(x => `<tr><td class="l">${x.horizon} sessions <span class="muted small">${esc(x.model)}${x.on_demand ? ", computed now" : ""}</span></td><td>${spct(x.mean, 2)}</td><td>${spct(x.q05)} to ${spct(x.q95)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + "</table>";
+      const flags = [...new Set(fc.models.flatMap(x => x.flags || []))];
+      if (flags.length) h += `<p class="note small">${esc(flags.join("; "))}.</p>`;
+      h += `<p class="muted small">Log return above cash over the horizon, from data to ${esc(fc.models[0].info_cutoff)}. In backtests these models ranked funds better than chance but did not beat the standard rule in the portfolio after costs.</p>`;
+    } else h += "<p class='muted small'>No forecast model has been run yet (Forecasts tab).</p>";
+    $("fc").innerHTML = h;
+  }
 
   const an = d.analysts;
   if (failed(an)) $("analysts").innerHTML = failed(an);
   else {
-    const cur = an.current || {}, pt = cur.price_targets || {}, rec = (cur.recommendations || [])[0];
+    const cur = an.current || {}, pt = cur.price_targets || {}, recs = cur.recommendations || [], rec = recs[0];
     let h = "";
-    if (pt.mean) h += `<p>Price target: mean <b>${money(pt.mean)}</b> (low ${money(pt.low)}, high ${money(pt.high)})` + (p && !p.error ? `, ${spct(pt.mean / p.last - 1)} from here` : "") + "</p>";
-    if (rec) h += `<p class="small">This month: ${rec.strongBuy} strong buy · ${rec.buy} buy · ${rec.hold} hold · ${rec.sell} sell · ${rec.strongSell} strong sell</p>`;
-    if (prof.recommendationKey) h += `<p class="small muted">Consensus: ${esc(prof.recommendationKey.replace("_", " "))} (${prof.numberOfAnalystOpinions || "?"} analysts)</p>`;
+    if (rec) {
+      const buy = rec.strongBuy + rec.buy, hold = rec.hold, sell = rec.sell + rec.strongSell, n = buy + hold + sell;
+      const share = x => n ? x / n : 0;
+      const key = (prof.recommendationKey || (share(buy) >= 0.5 ? "buy" : share(sell) >= 0.5 ? "sell" : "hold")).replace("_", " ");
+      const cls = /buy/.test(key) ? "buy" : /sell|under/.test(key) ? "sell" : "hold";
+      h += `<div class="consensus"><span class="big ${cls}">${esc(key[0].toUpperCase() + key.slice(1))}</span>` +
+        `<span class="muted">consensus of ${n} analysts this month${prof.recommendationMean ? ` · score ${prof.recommendationMean.toFixed(2)} (1 strong buy, 5 strong sell)` : ""}</span></div>` +
+        `<div class="ratingbar"><span class="rb-buy" style="width:${(100 * share(buy)).toFixed(1)}%"></span><span class="rb-hold" style="width:${(100 * share(hold)).toFixed(1)}%"></span><span class="rb-sell" style="width:${(100 * share(sell)).toFixed(1)}%"></span></div>` +
+        `<div class="rb-legend"><span class="pos"><b>${pct(share(buy), 0)}</b> buy (${rec.strongBuy} strong, ${rec.buy})</span><span style="color:#d97706"><b>${pct(share(hold), 0)}</b> hold (${hold})</span><span class="neg"><b>${pct(share(sell), 0)}</b> sell (${rec.sell}, ${rec.strongSell} strong)</span></div>`;
+      if (recs.length > 1) {
+        const label = {"0m": "This month", "-1m": "1 month ago", "-2m": "2 months ago", "-3m": "3 months ago"};
+        h += `<details><summary class="small">How the ratings changed over ${recs.length} months</summary><table><tr><th class="l">Month</th><th>Strong buy</th><th>Buy</th><th>Hold</th><th>Sell</th><th>Strong sell</th></tr>` +
+          recs.map(r => `<tr><td class="l">${esc(label[r.period] || r.period)}</td><td>${r.strongBuy}</td><td>${r.buy}</td><td>${r.hold}</td><td>${r.sell}</td><td>${r.strongSell}</td></tr>`).join("") + "</table></details>";
+      }
+    }
+    if (pt.mean && pt.low && pt.high) {
+      const now = p && !p.error ? p.last : pt.current;
+      const lo = Math.min(pt.low, now), hi = Math.max(pt.high, now), x = v => (100 * (v - lo) / ((hi - lo) || 1)).toFixed(1) + "%";
+      h += `<h4 style="margin:16px 0 0;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Price targets, next 12 months</h4>` +
+        `<p>Average <b>${money(pt.mean)}</b>${now ? `, ${spct(pt.mean / now - 1)} from today's ${money(now)}` : ""}; median ${money(pt.median)}.</p>` +
+        `<div class="target"><div class="rail"></div>` +
+        [["low", pt.low], ["average", pt.mean], ["high", pt.high]].map(([l, v]) => `<div class="mark" style="left:${x(v)}"></div><div class="lbl" style="left:${x(v)}">${l} ${money(v, 0)}</div>`).join("") +
+        (now ? `<div class="mark now" style="left:${x(now)}"></div><div class="lbl now" style="left:${x(now)}">now</div>` : "") + `</div><div style="height:16px"></div>`;
+    }
     h += an.actions.length ? `<details ${h ? "" : "open"}><summary class="small">Rating changes, newest first (${an.actions_total} on record)</summary><table>` +
       an.actions.map(x => `<tr><td class="l small">${esc(x.date)}</td><td class="l small">${esc(x.Firm)}</td><td class="l small"><span class="${x.Action === "up" ? "up" : x.Action === "down" ? "down" : ""}">${esc(x.ToGrade)}</span>${x.FromGrade && x.FromGrade !== x.ToGrade ? ` <span class="muted">from ${esc(x.FromGrade)}</span>` : ""}</td><td class="small">${x.currentPriceTarget ? money(x.currentPriceTarget, 0) : ""}</td></tr>`).join("") + "</table></details>" : "";
     $("analysts").innerHTML = h || "<p class='muted'>No analyst coverage (funds usually have none).</p>";
+
+    // EPS and revenue estimates
+    const period = {"0q": "This quarter", "+1q": "Next quarter", "0y": "This year", "+1y": "Next year"};
+    const ee = cur.earnings_estimate || [], re = cur.revenue_estimate || [], trend = cur.eps_trend || [], rev = cur.eps_revisions || [];
+    let e = "";
+    const next = Array.isArray(d.earnings) ? d.earnings.find(x => x.reported == null) : null;
+    if (next) e += `<p>Next report: <b>${esc(next.date)}</b>${next.estimate != null ? `, expected EPS <b>${next.estimate.toFixed(2)}</b>` : ""}.</p>`;
+    if (ee.length) e += `<table><tr><th class="l">EPS</th><th>Expected</th><th>Range</th><th>Analysts</th><th>Year ago</th><th>Growth</th></tr>` +
+      ee.map(r => `<tr><td class="l">${esc(period[r.period] || r.period)}</td><td><b>${r.avg?.toFixed(2) ?? "–"}</b></td><td>${r.low?.toFixed(2) ?? "–"} to ${r.high?.toFixed(2) ?? "–"}</td><td>${r.numberOfAnalysts ?? "–"}</td><td>${r.yearAgoEps?.toFixed(2) ?? "–"}</td><td>${spct(r.growth)}</td></tr>`).join("") + "</table>";
+    if (trend.length) {
+      const ch = (a, b) => a != null && b ? spct(a / b - 1, 1) : "–";
+      e += `<details><summary class="small">How the EPS estimates moved, and analysts revising them</summary><table><tr><th class="l">Period</th><th>Now</th><th>vs 7 days</th><th>vs 30 days</th><th>vs 90 days</th><th>Raised (30d)</th><th>Cut (30d)</th></tr>` +
+        trend.map(t => { const r2 = rev.find(x => x.period === t.period) || {};
+          return `<tr><td class="l">${esc(period[t.period] || t.period)}</td><td>${t.current?.toFixed(2) ?? "–"}</td><td>${ch(t.current, t["7daysAgo"])}</td><td>${ch(t.current, t["30daysAgo"])}</td><td>${ch(t.current, t["90daysAgo"])}</td><td class="pos">${r2.upLast30days ?? "–"}</td><td class="neg">${r2.downLast30days ?? "–"}</td></tr>`; }).join("") + "</table></details>";
+    }
+    if (re.length) e += `<details><summary class="small">Revenue estimates</summary><table><tr><th class="l">Revenue</th><th>Expected</th><th>Range</th><th>Analysts</th><th>Growth</th></tr>` +
+      re.map(r => `<tr><td class="l">${esc(period[r.period] || r.period)}</td><td><b>${big(r.avg)}</b></td><td>${big(r.low)} to ${big(r.high)}</td><td>${r.numberOfAnalysts ?? "–"}</td><td>${spct(r.growth)}</td></tr>`).join("") + "</table></details>";
+    $("estimates").innerHTML = e ? e + `<p class="muted small">Wall Street consensus from Yahoo Finance, as of today; saved daily so a history builds up.</p>`
+      : "<p class='muted'>No earnings estimates (funds have none).</p>";
   }
 
   const facts = [["Type", prof.quoteType], ["Sector", prof.sector], ["Industry", prof.industry], ["Category", prof.category], ["Fund family", prof.fundFamily],
