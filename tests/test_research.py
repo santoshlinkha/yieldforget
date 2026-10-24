@@ -225,3 +225,25 @@ def test_lstm_challenger_trains_reproducibly_on_cpu():
     b = LSTMForecaster(seqs, epochs=3).fit(panel, F.PRICE_FEATURES, 20).predict(panel.iloc[:50])
     np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-7)
     assert np.isfinite(a).all()
+
+
+def test_a_batch_comparison_lines_up_evidence_agreement_and_flat_runs():
+    from tradingagents.research.engine import compare_runs
+
+    def run(rid, model, horizon, means, ic=None):
+        return {"run_id": rid, "model": model, "horizon": horizon, "backend": "cpu", "seconds": 1.0,
+                "calibration": {"trial": 9, "mean_ic": ic, "ic_ci": [0.0, 0.1], "p_value_holm": 0.01} if ic else {},
+                "forecasts": [{"ticker": t, "mean": m} for t, m in means.items()]}
+
+    rows = compare_runs([
+        run("a", "xgb_rank", 60, {"X": 0.03, "Y": 0.02, "Z": 0.01}, ic=0.066),
+        run("b", "elastic_net", 60, {"X": 0.02, "Y": 0.01, "Z": 0.00}, ic=0.045),
+        run("c", "xgb", 60, {"X": 0.01, "Y": 0.01, "Z": 0.01}),
+        run("d", "elastic_net", 20, {"X": 0.0, "Y": 0.1, "Z": 0.2}),
+    ], top=2)
+    by = {r["run_id"]: r for r in rows}
+    assert [r["horizon"] for r in rows] == [20, 60, 60, 60]
+    assert by["a"]["agreement"] == pytest.approx(1.0)        # same order as b; c is flat and correlates with nothing
+    assert by["d"]["agreement"] is None                      # nothing else at 20 sessions
+    assert not by["c"]["ranks"] and by["c"]["top"] == []
+    assert [t["ticker"] for t in by["a"]["top"]] == ["X", "Y"] and by["a"]["mean_ic"] == 0.066

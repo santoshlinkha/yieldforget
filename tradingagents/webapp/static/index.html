@@ -143,6 +143,14 @@ td.name { color: var(--muted); white-space: normal; min-width: 150px; }
 .days-wrap { overflow: visible; }
 td.reason { white-space: normal; text-align: left; color: var(--muted); font-size: 12.5px; min-width: 180px; max-width: 460px; }
 .table-wrap > table { width: 100%; }
+.fc-controls { align-items: flex-end; flex-wrap: wrap; gap: 14px; }
+.fc-controls fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.fc-controls legend { font-size: 12px; color: var(--muted); padding: 0; margin-bottom: 4px; }
+table.compact th, table.compact td { padding: 5px 6px; font-size: 12.5px; }
+table.compact th { white-space: normal; vertical-align: bottom; }
+table.compact tr.group td { font-weight: 600; color: var(--text); background: var(--surface-2); text-align: left; }
+.pill { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--buy) 18%, transparent); color: var(--buy); white-space: nowrap; }
+#fcBatch tr[data-run] { cursor: pointer; } #fcBatch tr.shown td { background: var(--surface-2); }
 tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .tag { font-size: 10.5px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 6px; margin-left: 6px; font-weight: 600; letter-spacing: .02em; }
 .pos { color: var(--buy); } .neg { color: var(--sell); }
@@ -404,14 +412,19 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     <section class="tab" id="forecasts">
       <div class="page-head"><div><h2>Forecast models</h2><p>Return forecasts made on this machine from Yahoo prices: no paid AI. A forecast is a log return <b>above cash</b> over its horizon in trading sessions, not a yearly rate, with a 5-95% range and the chance of a gain. These are model estimates, not outcomes; the evidence for each model is its walk-forward record below.</p></div></div>
       <div class="card">
-        <div class="row" style="margin-top:0">
+        <div class="row fc-controls" style="margin-top:0">
           <div style="width:170px"><label for="fcUniverse">Trained on</label><select id="fcUniverse"><option value="etf" selected>ETFs (the plan's)</option><option value="stock">S&amp;P 500 stocks</option></select></div>
-          <div style="width:140px"><label for="fcHorizon">Horizon</label><select id="fcHorizon"><option value="5">5 sessions</option><option value="20" selected>20 sessions</option><option value="60">60 sessions</option></select></div>
-          <div style="width:180px"><label for="fcModel">Model</label><select id="fcModel"><option value="elastic_net">Elastic Net</option><option value="momentum">Momentum</option><option value="xgb">XGBoost</option><option value="xgb_rank">XGBoost ranking</option><option value="xgb_quantile">XGBoost quantiles</option></select></div>
-          <button id="fcRun">Run forecast</button>
-          <label class="check" title="Feed the Investing plan from the latest forecast run instead of the volatility rule"><input type="checkbox" id="fcUse"> Use forecasts in the Investing plan</label>
+          <fieldset><legend>Horizons</legend><label class="check"><input type="checkbox" name="fcH" value="5"> 5 sessions</label><label class="check"><input type="checkbox" name="fcH" value="20" checked> 20 sessions</label><label class="check"><input type="checkbox" name="fcH" value="60"> 60 sessions</label></fieldset>
+          <fieldset><legend>Models</legend><label class="check"><input type="checkbox" name="fcM" value="elastic_net" checked> Elastic Net</label><label class="check"><input type="checkbox" name="fcM" value="momentum"> Momentum</label><label class="check"><input type="checkbox" name="fcM" value="xgb"> XGBoost</label><label class="check"><input type="checkbox" name="fcM" value="xgb_rank"> XGBoost ranking</label><label class="check"><input type="checkbox" name="fcM" value="xgb_quantile"> XGBoost quantiles</label></fieldset>
+          <button id="fcRun">Run selected</button>
           <span class="muted" id="fcStatus"></span>
         </div>
+        <div id="fcBatchWrap" style="display:none">
+          <h3 style="margin:14px 0 4px">Side by side: the runs just made</h3>
+          <p class="muted small">Evidence columns come from each model's walk-forward trial at that horizon. <b>Agrees</b>: mean rank correlation of its forecasts with the other models' at the same horizon (1 = same order). Click a row to see its forecasts below.</p>
+          <div class="table-wrap"><table id="fcBatch" class="compact"></table></div>
+        </div>
+        <div class="row" style="margin:12px 0 0"><label class="check" title="Feed the Investing plan from the run shown below instead of the volatility rule"><input type="checkbox" id="fcUse"> Use the run shown below in the Investing plan</label></div>
         <div id="fcRunInfo"></div>
         <div class="table-wrap"><table id="fcTable"></table></div>
         <div class="row" id="fcMore" style="display:none"><button class="ghost" id="fcToggle"></button></div>
@@ -419,7 +432,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
       <div class="card">
         <h3>Model comparison (walk-forward, out of sample)</h3>
         <p class="muted">Each row was refitted every year on data available then, and scored on the years after. <b>IC</b>: how well the forecast ranked assets on each date (0 is chance). <b>R²</b>: whether its sizes beat "no return above cash" (negative is worse). <b>Calibration</b>: 1 if sizes are right, near 0 if far too confident. <b>Coverage</b>: share of outcomes inside the 5-95% range (target 90%). <b>Net top fifth</b>: per period, after 10 bp a side. <b>p (Holm)</b>: chance the IC is luck, after counting every model tried. Feature importance is not causation.</p>
-        <div class="table-wrap"><table id="fcTrials"></table></div>
+        <div class="table-wrap"><table id="fcTrials" class="compact"></table></div>
       </div>
       <div class="card">
         <h3>Compute</h3>
@@ -680,19 +693,33 @@ function renderOverviewExtras(r) {
 }
 
 let scanRows = [], scanAll = false, fcAll = false;
+// Sorted by a clicked column, like the forecast table; no key keeps the plan's order. Missing values sort last.
+let scanSort = {key: null, dir: -1};
+const SCAN_COLS = [["expected", "Growth"], ["worst_loss", "Worst drop"], ["score", "Score"], ["target", "Target"]];
 function renderScan() {
   const q = $("scanFilter").value.trim().toLowerCase();
-  const rows = q ? scanRows.filter(x => (x.ticker + " " + x.name).toLowerCase().includes(q)) : scanRows;
+  let rows = q ? scanRows.filter(x => (x.ticker + " " + x.name).toLowerCase().includes(q)) : scanRows;
+  if (scanSort.key) {
+    const k = scanSort.key;
+    rows = [...rows].sort((a, b) => (a[k] == null) - (b[k] == null) || scanSort.dir * ((a[k] ?? 0) - (b[k] ?? 0)));
+  }
   const SCAN_SHOWN = 30;
   const shown = q || scanAll ? rows.slice(0, 600) : rows.slice(0, SCAN_SHOWN);
   $("scanMore").style.display = !q && rows.length > SCAN_SHOWN ? "" : "none";
   $("scanToggle").textContent = scanAll ? `Show the first ${SCAN_SHOWN}` : `Show all ${rows.length} funds`;
   $("scanToggle").onclick = () => { scanAll = !scanAll; renderScan(); };
-  $("scanTable").innerHTML = `<tr><th>#</th><th>Ticker</th><th class='name'>Name</th><th>Growth</th><th>Worst drop</th><th>Score</th><th>Target</th><th class='name'>Why</th></tr>` +
+  const arrow = k => scanSort.key === k ? (scanSort.dir < 0 ? " ▾" : " ▴") : "";
+  $("scanTable").innerHTML = `<tr><th title="Rank in the plan's order; click to restore it" data-k="" style="cursor:pointer">#${scanSort.key ? "" : " ▾"}</th><th>Ticker</th><th class='name'>Name</th>` +
+    SCAN_COLS.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer" title="Sort by ${label.toLowerCase()}">${label}${arrow(k)}</th>`).join("") + `<th class='name'>Why</th></tr>` +
     shown.map(x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td class="muted">${scanRows.indexOf(x) + 1}</td><td><strong>${tk(x.ticker)}</strong>${x.held ? '<span class="tag">HELD</span>' : ""}</td><td class="name">${esc(x.name)}</td>
       <td>${x.expected == null ? "–" : pct(x.expected)}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.score.toFixed(2)}</td>
       <td>${x.target > 1e-4 ? pct(x.target) : "–"}</td><td class="reason">${esc(x.reason)}</td></tr>`).join("") +
     (q && rows.length > shown.length ? `<tr><td colspan="8" class="muted">${rows.length - shown.length} more match; narrow the filter.</td></tr>` : "");
+  $("scanTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+    const k = th.dataset.k || null;
+    scanSort = {key: k, dir: k && scanSort.key === k ? -scanSort.dir : -1};
+    renderScan();
+  });
 }
 $("scanFilter").oninput = renderScan;
 
@@ -753,14 +780,45 @@ function renderBacktest(r) {
 
 // --- forecasts ---
 const lpct = (x, d = 2) => x == null ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%`;
-let fcSort = {key: "mean", dir: -1}, lastFc = null;
+let fcSort = {key: "mean", dir: -1}, lastFc = null, fcView = null, fcWasRunning = false;
+const fcChecked = name => [...document.querySelectorAll(`input[name=${name}]:checked`)].map(i => i.value);
+function fcRunLabel() {
+  const n = fcChecked("fcH").length * fcChecked("fcM").length;
+  $("fcRun").textContent = n > 1 ? `Run ${n} at once` : "Run forecast";
+  if (!(lastFc && lastFc.job.running)) $("fcRun").disabled = n === 0;
+}
+function renderBatch(res) {
+  const rows = res && res.batch || [];
+  $("fcBatchWrap").style.display = rows.length || (res && res.failed && res.failed.length) ? "" : "none";
+  if (!res) return;
+  // Per horizon, the model with the strongest evidence: significant (Holm p < 0.05) and the highest IC.
+  const best = {};
+  rows.filter(r => r.ranks && r.p_value_holm != null && r.p_value_holm < 0.05)
+    .forEach(r => { if (!best[r.horizon] || r.mean_ic > best[r.horizon].mean_ic) best[r.horizon] = r; });
+  let last = null;
+  $("fcBatch").innerHTML = "<tr><th class='l'>Model</th><th>IC (95%)</th><th>p (Holm)</th><th>Calib.</th><th>Cover.</th><th>Net top fifth</th><th>Agrees</th><th class='l'>Highest forecasts</th><th>Time</th></tr>" +
+    rows.map(r => {
+      const head = r.horizon !== last ? `<tr class="group"><td colspan="9">${r.horizon} sessions</td></tr>` : "";
+      last = r.horizon;
+      const tag = best[r.horizon] === r ? ` <span class="pill">best evidence</span>` : "";
+      return head + `<tr data-run="${esc(r.run_id)}" class="${fcView === r.run_id ? "shown" : ""}"><td class="l"><b>${esc(r.model)}</b>${tag}</td>
+        <td>${r.mean_ic == null ? "<span class='muted'>no trial</span>" : r.mean_ic.toFixed(3) + ` <span class="muted">(${r.ic_ci[0].toFixed(3)}, ${r.ic_ci[1].toFixed(3)})</span>`}</td>
+        <td>${r.p_value_holm == null ? "–" : r.p_value_holm.toFixed(3)}</td><td>${r.calibration_xs == null ? "–" : r.calibration_xs.toFixed(2)}</td>
+        <td>${pct(r.coverage_90, 0)}</td><td>${lpct(r.top_minus_all_net)}</td><td>${r.agreement == null ? "–" : r.agreement.toFixed(2)}</td>
+        <td class="l">${r.ranks ? r.top.map(t => `${esc(t.ticker)} <span class="muted">${lpct(t.mean)}</span>`).join(", ") : "<span class='neg'>same forecast for all: ranks nothing</span>"}</td>
+        <td>${r.seconds.toFixed(0)} s</td></tr>`;
+    }).join("") +
+    (res.failed || []).map(f => `<tr><td class="l"><b>${esc(f.model)}</b>, ${f.horizon} sessions</td><td colspan="8" class="l neg">Failed: ${esc(f.error)}</td></tr>`).join("");
+  $("fcBatch").querySelectorAll("tr[data-run]").forEach(tr => tr.onclick = () => { fcView = tr.dataset.run; loadForecasts(); });
+}
 function renderForecasts(d) {
   lastFc = d;
   const r = d.run;
   const inv = d.settings.investing;
-  $("fcUse").checked = inv.return_model === "forecast";
   // The plan holds funds, so only ETF runs can feed it; stock runs serve the ticker page.
-  $("fcUse").disabled = $("fcUniverse").value !== "etf";
+  $("fcUse").disabled = !r || r.universe !== "etf";
+  $("fcUse").checked = !!r && inv.return_model === "forecast" && inv.forecast_model === r.model && inv.forecast_horizon === r.horizon;
+  renderBatch(d.job.result);
   $("fcUse").parentElement.title = inv.return_model === "forecast"
     ? `The Investing plan uses the latest ${inv.forecast_model} run at ${inv.forecast_horizon} sessions` : "The Investing plan uses the standard rule";
   if (!r) { $("fcRunInfo").innerHTML = '<p class="muted">No forecast run yet.</p>'; $("fcTable").innerHTML = ""; }
@@ -782,15 +840,24 @@ function renderForecasts(d) {
   }
   const latest = {};
   d.trials.filter(x => /^(forecast|challenger)_study/.test(x.name)).forEach(x => { latest[`${x.name.replace(":rescore", "")}`] = x; });
-  const t = Object.values(latest).sort((a, b) => a.horizon - b.horizon);
-  $("fcTrials").innerHTML = "<tr><th>Universe</th><th>Horizon</th><th>Model</th><th>IC (95%)</th><th>R²</th><th>Calibration (within date)</th><th>Coverage</th><th>Brier vs null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
-    t.flatMap(x => Object.values(x.scores).map(m => `<tr><td>${esc(x.universe)}${x.universe === "sp500" || x.universe === "stock" ? " (survivorship-biased)" : ""}</td><td>${x.horizon}</td><td>${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` (${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(4)} / ${m.brier_null.toFixed(4)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`)).join("");
+  // Grouped by universe and horizon, so neither repeats on every row and the table fits its panel.
+  const groups = {};
+  Object.values(latest).forEach(x => { const k = `${x.universe}|${x.horizon}`; groups[k] = groups[k] || {universe: x.universe, horizon: x.horizon, scores: {}}; Object.assign(groups[k].scores, x.scores); });
+  const order = {etf: 0, stock: 1, sp500: 2};
+  const UNI = {etf: "ETFs", stock: "S&P 500 stocks, price features (survivorship-biased)", sp500: "S&P 500 stocks with analyst data (survivorship-biased)"};
+  $("fcTrials").innerHTML = "<tr><th class='l'>Model</th><th>IC (95%)</th><th>R²</th><th>Calib. (within date)</th><th>Cover.</th><th>Brier / null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
+    Object.values(groups).sort((a, b) => (order[a.universe] ?? 9) - (order[b.universe] ?? 9) || a.horizon - b.horizon).map(g =>
+      `<tr class="group"><td colspan="8">${esc(UNI[g.universe] || g.universe)} · ${g.horizon} sessions</td></tr>` +
+      Object.values(g.scores).map(m => `<tr><td class="l">${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` <span class="muted">(${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})</span>`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(3)} / ${m.brier_null.toFixed(3)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`).join("")).join("");
   const j = d.job;
   $("fcStatus").textContent = j.running ? j.progress : j.error ? "Failed: " + j.error : "";
+  if (fcWasRunning && !j.running) fcView = null;   // a finished batch: show its newest run
+  fcWasRunning = j.running;
   $("fcRun").disabled = j.running;
+  fcRunLabel();
 }
 async function loadForecasts() {
-  try { const d = await api(`/api/forecasts?horizon=${$("fcHorizon").value}&universe=${$("fcUniverse").value}`); renderForecasts(d); if (d.job.running) setTimeout(loadForecasts, 3000); }
+  try { const d = await api(`/api/forecasts?universe=${$("fcUniverse").value}` + (fcView ? `&run=${encodeURIComponent(fcView)}` : "")); renderForecasts(d); if (d.job.running) setTimeout(loadForecasts, 3000); }
   catch (e) { $("fcRunInfo").innerHTML = `<p class="note">${esc(e.message)}</p>`; }
 }
 async function loadHardware() {
@@ -804,15 +871,18 @@ async function loadHardware() {
   } catch (e) { $("fcHardware").textContent = e.message; }
 }
 $("fcRun").onclick = async () => {
-  try { await api("/api/forecasts/run", {horizon: +$("fcHorizon").value, model: $("fcModel").value, universe: $("fcUniverse").value}); loadForecasts(); }
+  try {
+    await api("/api/forecasts/run", {horizons: fcChecked("fcH").map(Number), models: fcChecked("fcM"), universe: $("fcUniverse").value});
+    fcWasRunning = true; loadForecasts();
+  }
   catch (e) { showError(e.message); }
 };
-$("fcHorizon").onchange = loadForecasts;
-$("fcUniverse").onchange = loadForecasts;
+document.querySelectorAll("input[name=fcH], input[name=fcM]").forEach(i => i.onchange = fcRunLabel);
+$("fcUniverse").onchange = () => { fcView = null; loadForecasts(); };
 $("fcUse").onchange = async () => {
   try {
     await api("/api/risk", {sleeve: "investing", return_model: $("fcUse").checked ? "forecast" : "vol_prior",
-                            forecast_horizon: +$("fcHorizon").value, forecast_model: $("fcModel").value});
+                            forecast_horizon: lastFc.run.horizon, forecast_model: lastFc.run.model});
     refresh(); loadForecasts();
   }
   catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }

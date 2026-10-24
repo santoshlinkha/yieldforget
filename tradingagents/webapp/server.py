@@ -375,12 +375,16 @@ class App:
     # --- forecasts (local numerical work; no paid model is called) ---
 
     def start_forecast(self, body: dict) -> bool:
-        from tradingagents.research.engine import UNIVERSES, run_forecast
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        horizon = int(body.get("horizon") or 20)
-        if horizon not in (5, 20, 60):
+        from tradingagents.research.engine import UNIVERSES, compare_runs, factory, run_forecast
+
+        horizons = [int(h) for h in body.get("horizons") or [body.get("horizon") or 20]]
+        if not horizons or any(h not in (5, 20, 60) for h in horizons):
             raise ValueError("the forecast horizon is 5, 20 or 60 sessions")
-        model = body.get("model") or "elastic_net"
+        models = list(dict.fromkeys(body.get("models") or [body.get("model") or "elastic_net"]))
+        for m in models:
+            factory(m)   # an unknown name fails here, before anything starts
         universe = body.get("universe") or "etf"
         if universe == "etf":
             context, _ = self.store.portfolio("combined", _today())
@@ -395,11 +399,26 @@ class App:
             raise ValueError("the forecast universe is etf or stock")
         device = self.store.get("global", "compute_backend")
 
+        combos = [(m, h) for h in horizons for m in models]
+
         def work(job):
-            job.progress = f"training {model} on {UNIVERSES[universe]}, {horizon}-session horizon"
-            out = run_forecast(self.store.con, self.cache_dir, tickers, horizon=horizon, model=model,
-                               universe=universe, device_setting=device)
-            return {k: v for k, v in out.items() if k != "forecasts"}
+            # Several at once: each run is its own thread with its own database connections.
+            # Three at a time, since every boosted-tree fit already uses all the cores.
+            done, runs, failed = 0, [], []
+            job.progress = f"training {len(combos)} model{'s' * (len(combos) > 1)} on {UNIVERSES[universe]}"
+            with ThreadPoolExecutor(max_workers=min(3, len(combos))) as pool:
+                futures = {pool.submit(run_forecast, self.store.con, self.cache_dir, tickers, horizon=h, model=m,
+                                       universe=universe, device_setting=device): (m, h) for m, h in combos}
+                for fut in as_completed(futures):
+                    m, h = futures[fut]
+                    done += 1
+                    try:
+                        runs.append(fut.result())
+                    except Exception as exc:  # one failing model leaves the others' results
+                        logger.exception("forecast %s at %s sessions failed", m, h)
+                        failed.append({"model": m, "horizon": h, "error": str(exc)})
+                    job.progress = f"{done} of {len(combos)} done on {UNIVERSES[universe]} (last: {m}, {h} sessions)"
+            return {"universe": universe, "batch": compare_runs(runs), "failed": failed}
 
         return self.forecast.start(work)
 
@@ -501,7 +520,7 @@ class App:
             stored one when the ticker was in the run, otherwise computed now with the run's model."""
             from tradingagents.optimizer.data import compute_stats, fetch_closes
             from tradingagents.optimizer.plan import growth_excess
-            from tradingagents.research.engine import forecast_one, latest_run
+            from tradingagents.research.engine import forecast_one, latest_run, ranks
 
             settings = OptimizerSettings()
             closes = fetch_closes([symbol, settings.cash_ticker, settings.cash_proxy], required=[symbol],
@@ -518,7 +537,9 @@ class App:
             universes = ("stock", "etf") if profile.get("quoteType") == "EQUITY" else ("etf",)
             models = []
             for h in (5, 20, 60):
-                run = next((r for u in universes if (r := latest_run(self.store.con, horizon=h, universe=u))), None)
+                # A stock run that ranks nothing says nothing about this company: the ETF run stands in.
+                run = next((r for u in universes if (r := latest_run(self.store.con, horizon=h, universe=u))
+                            and (u == "etf" or ranks(r))), None)
                 if not run:
                     continue
                 f = next((x for x in run["forecasts"] if x["ticker"] == symbol), None)

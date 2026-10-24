@@ -40,6 +40,13 @@ SEED = 7
 # What each universe's runs train on. ETF runs feed the plan; stock runs back the ticker page's
 # forecast for single companies, and are survivorship-biased (today's S&P 500 members).
 UNIVERSES = {"etf": "ETFs", "stock": "S&P 500 stocks"}
+FLAT = "this run gives every ticker the same forecast (its model kept only market-wide inputs), so it ranks nothing"
+
+
+def ranks(run: dict) -> bool:
+    """Whether a saved run tells its tickers apart: one that gives them all the same forecast does not."""
+    means = [f["mean"] for f in run.get("forecasts") or []]
+    return len(means) < 2 or float(np.ptp(means)) >= 1e-9
 
 
 def factory(name: str, device: str = "cpu"):
@@ -75,7 +82,9 @@ def run_forecast(con, cache_dir: Path, tickers: list[str], horizon: int = 20, mo
     from tradingagents.ledger.recommendations import code_version
 
     started = time.time()
-    tracemalloc.start()
+    tracing = not tracemalloc.is_tracing()
+    if tracing:
+        tracemalloc.start()
     tickers = [t for t in dict.fromkeys(tickers) if t != cash]
     b = bars([*tickers, cash, *MARKET], cache_dir)
     close = b["Close"][[*tickers, cash]]
@@ -118,10 +127,15 @@ def run_forecast(con, cache_dir: Path, tickers: list[str], horizon: int = 20, mo
     blob = pickle.dumps(prob)
     (folder / "model.pkl").write_bytes(blob)
     sha = hashlib.sha256(blob).hexdigest()
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
+    _, peak = tracemalloc.get_traced_memory()   # in a parallel batch, the peak of all runs so far
+    if tracing:
+        tracemalloc.stop()
     seconds = time.time() - started
     result = forecasts_for(prob, rows, str(cutoff.date()), MODEL_VERSION, used, seconds, spread, calibration, flags)
+    if len(result) > 1 and np.ptp([f.mean for f in result]) < 1e-9:
+        # Early stopping can leave a tree model with market-wide splits only: one number for everyone.
+        for f in result:
+            f.flags.append(FLAT)
     config = {"model": model, "horizon": horizon, "features": features, "bags": bags, "seed": SEED,
               "train_mean_label": float(train["label"].clip(*train["label"].quantile([0.01, 0.99])).mean()),
               "device_setting": device_setting, "device_reason": why, "gpu_note": note, "tickers": tickers,
@@ -149,6 +163,34 @@ def load_run(con, run_id: str) -> dict:
     run["forecasts"] = [dict(r) for r in con.execute("SELECT * FROM forecasts WHERE run_id = ? ORDER BY mean DESC",
                                                      (run_id,))]
     return run
+
+
+def compare_runs(runs: list[dict], top: int = 3) -> list[dict]:
+    """One row per run of a batch (``run_forecast`` results), for a side-by-side table.
+
+    Each row has the walk-forward evidence behind the model (IC with its 95% range, the
+    Holm p-value, within-date calibration, coverage, net return of the top fifth), whether
+    it tells tickers apart at all, its highest forecasts, and how far it agrees with the
+    batch's other models at the same horizon: the mean rank correlation of their forecasts.
+    """
+    means = {r["run_id"]: pd.Series({f["ticker"]: f["mean"] for f in r["forecasts"]}) for r in runs}
+    rows = []
+    for r in runs:
+        c = r.get("calibration") or {}
+        mine = means[r["run_id"]]
+        others = [means[o["run_id"]] for o in runs if o["run_id"] != r["run_id"] and o["horizon"] == r["horizon"]]
+        agree = [mine.corr(o.reindex(mine.index), method="spearman") for o in others]
+        agree = [a for a in agree if a == a]
+        flat = len(mine) > 1 and float(np.ptp(mine.to_numpy())) < 1e-9
+        rows.append({"run_id": r["run_id"], "model": r["model"], "horizon": r["horizon"], "backend": r["backend"],
+                     "seconds": r["seconds"], "ranks": not flat, "trial": c.get("trial"), "mean_ic": c.get("mean_ic"),
+                     "ic_ci": c.get("ic_ci"), "p_value_holm": c.get("p_value_holm"),
+                     "calibration_xs": c.get("calibration_xs"), "coverage_90": c.get("coverage_90"),
+                     "top_minus_all_net": c.get("top_minus_all_net"),
+                     "top": [] if flat else [{"ticker": t, "mean": float(v)} for t, v in mine.nlargest(top).items()],
+                     "spread": float(mine.std()) if len(mine) > 1 else None,
+                     "agreement": float(np.mean(agree)) if agree else None})
+    return sorted(rows, key=lambda x: (x["horizon"], x["model"]))
 
 
 def latest_run(con, horizon: int | None = None, model: str | None = None, universe: str = "etf") -> dict | None:
