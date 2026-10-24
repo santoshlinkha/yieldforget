@@ -29,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from tradingagents.dataflows import local_store
 from tradingagents.dataflows.vendors.index_members import get_sp500_members
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.ledger import imports as csv_import
@@ -187,9 +188,8 @@ class App:
     def save_official(self, c: dict) -> dict:
         """Store a computed plan as the official recommendation for its session, and its report."""
         plan, suggestion, settings, sleeve = c["plan"], c["suggestion"], c["settings"], c["sleeve"]
-        cache_file = self.cache_dir / f"closes_{_today()}.pkl"
-        fetched = datetime.fromtimestamp(cache_file.stat().st_mtime).astimezone().isoformat() \
-            if cache_file.exists() else datetime.now().astimezone().isoformat()
+        market_store = local_store.store(self.cache_dir)
+        fetched = (market_store.bars_checked_at() if market_store else None) or datetime.now().astimezone().isoformat()
         optimized = [r.ticker for r in plan.rows if not r.screened]
         tickers = [*optimized, plan.cash.ticker, settings.cash_proxy, *settings.scenario_references,
                    *settings.proxies.values()]
@@ -299,20 +299,22 @@ class App:
             extra = read_config(self.universe_path)["extra"]
             candidates = list(dict.fromkeys([*ETFS, *extra, *held]))
             proxies = [p for t, p in settings.proxies.items() if t in candidates]
-            closes = fetch_closes([*candidates, *proxies, settings.cash_proxy, settings.cash_ticker, "VTI", "BND",
+            closes = fetch_closes([*candidates, *proxies, settings.cash_proxy, settings.cash_ticker, "VTI", "SPY",
                                    *settings.scenario_references],
                                   required=[settings.cash_proxy], cache_dir=self.cache_dir)
             prices = {t: float(closes[t].dropna().iloc[-1]) for t in held if t in closes}
             values = {p.ticker.upper(): p.quantity * prices.get(p.ticker.upper(), 0.0) for p in context.positions}
             total = sum(values.values()) + float(context.cash or 0.0)
-            mix = {t: v / total for t, v in values.items() if t != settings.cash_ticker and v > 0} if total else {}
 
             def progress(n, of):
                 job.progress = f"rebalance {n} of {of}"
 
+            # Shown against VTI, SPY and SGOV only, each starting from the sleeve's value today.
             result = run_backtest(closes, [t for t in candidates if t in closes], settings, start=start,
-                                  current_mix=mix, progress=progress)
+                                  progress=progress)
             data = asdict(result)
+            data["capital"] = total
+            data["sgov_start"] = str(closes["SGOV"].first_valid_index().date()) if "SGOV" in closes else None
             data["report"] = render_backtest(result)
             return data
 
@@ -597,4 +599,11 @@ def serve(portfolio_path: str, schedule_path: str, port: int = 8765, config: dic
         raise ValueError(f"portfolio file {portfolio} does not exist")
     universe = Path(universe_path).resolve() if universe_path else portfolio.parent / "my_universe.json"
     app = App(portfolio, schedule, universe, {**DEFAULT_CONFIG, **(config or {})})
-    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
+    return _Server(("127.0.0.1", port), make_handler(app))
+
+
+class _Server(ThreadingHTTPServer):
+    # On Windows, address reuse lets a second server bind the same port beside a running
+    # one, and requests then reach whichever answers: an old copy with old code. Binding
+    # exclusively makes a second start fail instead.
+    allow_reuse_address = os.name != "nt"

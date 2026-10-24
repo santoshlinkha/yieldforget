@@ -57,6 +57,13 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _no_local_store(monkeypatch):
+    """Downloads are not kept between tests: one test's fake data must not answer another's.
+    A test of the store itself turns it back on in a folder of its own."""
+    monkeypatch.setenv("TRADINGAGENTS_LOCAL_STORE", "off")
+
+
+@pytest.fixture(autouse=True)
 def _no_network(request, monkeypatch):
     """Tests do not reach the network; one that must is marked integration."""
     if request.node.get_closest_marker("integration"):

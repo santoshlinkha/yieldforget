@@ -350,7 +350,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     </section>
 
     <section class="tab" id="backtest">
-      <div class="page-head"><div><h2>Backtest</h2><p>Replays the optimizer month by month using only prices known at each date, at your risk level, against VTI, a 60/40 mix and your current mix. AI ratings are left out: the models already know how those years ended.</p></div></div>
+      <div class="page-head"><div><h2>Backtest</h2><p>What your sleeve's value today would have become following the strategy month by month (using only prices known at each date, at your risk level), against holding VTI, SPY or SGOV instead. A simulation of the past, not your record; AI ratings are left out.</p></div></div>
       <div class="card">
         <div class="row" style="margin-top:0">
           <div style="width:180px"><label for="btStart">Start</label><input type="date" id="btStart" value="2012-01-03" min="2008-01-02"></div>
@@ -572,29 +572,31 @@ function renderChart(p) {
 }
 
 function renderBacktest(r) {
-  const names = Object.keys(r.curves);
-  const W = 720, H = 280, L = 48, R = 16, T = 12, B = 32;
-  const vals = names.flatMap(n => r.curves[n]);
+  // The strategy first, then the benchmarks; every line starts from the same capital.
+  const capital = r.capital || 1;
+  const names = ["Optimizer", "VTI", "SPY", "SGOV"].filter(n => r.curves[n]);
+  const label = n => n === "Optimizer" ? "Strategy" : n === "SGOV" && r.sgov_start ? `SGOV (T-bills before ${r.sgov_start.slice(0, 4)})` : n;
+  const value = (n, i) => r.curves[n][i] / r.curves[n][0] * capital;
+  const W = 720, H = 300, L = 62, R = 16, T = 12, B = 32, n = r.dates.length;
+  const vals = names.flatMap(k => r.curves[k].map((_, i) => value(k, i)));
   const lo = Math.log(Math.min(...vals) * 0.95), hi = Math.log(Math.max(...vals) * 1.05);
-  const n = r.dates.length;
   const sx = i => L + (i / (n - 1)) * (W - L - R), sy = v => H - B - ((Math.log(v) - lo) / (hi - lo || 1)) * (H - T - B);
-  const yTicks = [0.5, 1, 1.5, 2, 3, 4, 6, 8, 12].filter(v => Math.log(v) >= lo && Math.log(v) <= hi);
+  const yTicks = [0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12].map(m => m * capital).filter(v => Math.log(v) >= lo && Math.log(v) <= hi);
   const years = []; let lastY = "";
   r.dates.forEach((d, i) => { const y = d.slice(0, 4); if (y !== lastY && +y % 2 === 0) years.push(i); lastY = y; });
-  const grid = axes(W, H, L, R, T, B, sx, sy, years, yTicks, i => r.dates[i].slice(0, 4), v => "$" + v);
-  const lines = names.map((name, k) => `<path d="${r.curves[name].map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join("")}" fill="none" stroke="var(${SERIES[k % 4]})" stroke-width="${k ? 1.5 : 2.75}"><title>${esc(name)}</title></path>`).join("");
-  $("btChart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Growth of one dollar, log scale">${grid}${lines}</svg>
-    <div class="legend">${names.map((name, k) => `<span style="--c: var(${SERIES[k % 4]})">${esc(name)}</span>`).join("")}</div>`;
-  $("btTable").innerHTML = "<tr><th>Strategy</th><th>$1 became</th><th>Per year</th><th>Worst drop</th><th>Volatility</th><th>Sharpe</th><th>Worst month</th></tr>" +
-    names.map(name => { const m = r.metrics[name]; return `<tr><td>${esc(name)}</td><td>$${m.final.toFixed(2)}</td><td>${pct(m.cagr)}</td><td>${pct(m.max_drawdown)}</td><td>${pct(m.volatility)}</td><td>${m.sharpe.toFixed(2)}</td><td>${pct(m.worst_month)}</td></tr>`; }).join("");
-  const opt = r.metrics["Optimizer"], avg = r.invested.reduce((a, b) => a + b[1], 0) / (r.invested.length || 1);
-  const held = r.loss_limit == null || opt.max_drawdown <= r.loss_limit;
-  $("btVerdict").innerHTML = `<div class="${held ? "ok" : "note"}"><b>${r.loss_limit == null ? "No stress cap" : capText(r.loss_limit) + " stress cap"}, ${r.start} to ${r.end}:</b> the optimizer's worst drop was ${pct(opt.max_drawdown)}, ` +
-    `${held ? "so the limit held" : "so the limit did NOT hold"}. It earned ${pct(opt.cagr)} a year, ${pct(avg, 0)} invested on average over ${r.rebalances} monthly rebalances.` +
-    (() => { const scored = r.history.filter(h => h.limit != null && h.next_year_drop != null);
-             const broken = scored.filter(h => h.next_year_drop > h.limit + 1e-9);
-             return scored.length ? ` Each month's mix, held a year, fell further than its limit ${broken.length} times in ${scored.length}.` : ""; })() + `</div>` +
-    r.notes.map(x => `<p class="muted">${esc(x)}</p>`).join("");
+  const money = v => v >= 1000 ? "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k" : "$" + v.toFixed(0);
+  const grid = axes(W, H, L, R, T, B, sx, sy, years, yTicks, i => r.dates[i].slice(0, 4), money);
+  const lines = names.map((k, j) => `<path d="${r.curves[k].map((_, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(value(k, i)).toFixed(1)}`).join("")}" fill="none" stroke="var(${SERIES[j % 4]})" stroke-width="${j ? 1.5 : 2.75}"><title>${esc(label(k))}</title></path>`).join("");
+  const last = k => value(k, n - 1);
+  $("btChart").innerHTML = `<p class="muted">${usd(capital)} on ${r.start}, to ${r.end}.</p>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Value of the strategy against VTI, SPY and SGOV, log scale">${grid}${lines}</svg>
+    <div class="legend">${names.map((k, j) => `<span style="--c: var(${SERIES[j % 4]})">${esc(label(k))}: ${usd(last(k))}</span>`).join("")}</div>`;
+  $("btTable").innerHTML = "<tr><th>Held instead</th><th>Value at the end</th><th>Strategy minus it</th></tr>" +
+    names.filter(k => k !== "Optimizer").map(k => {
+      const d = last("Optimizer") - last(k);
+      return `<tr><td>${esc(label(k))}</td><td>${usd(last(k))}</td><td class="${d >= 0 ? "pos" : "neg"}">${d >= 0 ? "+" : "−"}${usd(Math.abs(d))}</td></tr>`;
+    }).join("");
+  $("btVerdict").innerHTML = "";
 }
 
 async function pollBacktest() {

@@ -20,7 +20,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from tradingagents.dataflows.vendors.yahoo.market import get_full_history_closes_many
+from tradingagents.dataflows import local_store
+from tradingagents.dataflows.vendors.yahoo.market import get_full_history_closes_many, get_history_bars_many
 
 logger = logging.getLogger(__name__)
 
@@ -28,24 +29,23 @@ TRADING_DAYS = 252
 
 
 def fetch_closes(tickers, required=(), cache_dir: str | Path | None = None) -> pd.DataFrame:
-    """Adjusted daily closes up to today over each ticker's whole history, one column each.
+    """Adjusted daily closes over each ticker's whole history, one column each.
 
     A ticker in ``required`` without prices is an error; any other one is left
     out, so one delisted fund in a scan list does not stop the scan. With
-    ``cache_dir`` the day's prices are kept on disk and only tickers not yet
-    fetched today are downloaded.
+    ``cache_dir`` the prices are kept for good in the local market-data store
+    (``tradingagents.dataflows.local_store``): each ticker's history is
+    downloaded once, and afterwards only the sessions since its last stored
+    close, through the last *final* close. Without it, the whole history is
+    downloaded each time.
     """
     tickers = list(dict.fromkeys(tickers))
-    end = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-    path = Path(cache_dir) / f"closes_{date.today().isoformat()}.pkl" if cache_dir else None
-    cached = pd.read_pickle(path) if path and path.exists() else pd.DataFrame()
-    todo = [t for t in tickers if t not in cached.columns]
-    if todo:
-        fresh = get_full_history_closes_many(todo, end)
-        cached = pd.concat([cached, fresh], axis=1).sort_index()
-        if path:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            cached.to_pickle(path)
+    market_store = local_store.store(cache_dir) if cache_dir else None
+    if market_store is not None:
+        cached = market_store.bars(tickers, get_history_bars_many)["Close"]
+    else:
+        end = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        cached = get_full_history_closes_many(tickers, end)
     have = [t for t in tickers if t in cached.columns and cached[t].notna().any()]
     missing = [t for t in required if t not in have]
     if missing:
@@ -56,7 +56,10 @@ def fetch_closes(tickers, required=(), cache_dir: str | Path | None = None) -> p
 
 
 def latest_prices(cache_dir: str | Path, tickers) -> dict[str, float]:
-    """Last cached close for each ticker, from the newest day's price cache; empty if none."""
+    """Last stored close for each ticker, without downloading; empty for tickers never fetched."""
+    market_store = local_store.store(cache_dir)
+    if market_store is not None:
+        return market_store.last_close(tickers)
     files = sorted(Path(cache_dir).glob("closes_*.pkl"))
     if not files:
         return {}

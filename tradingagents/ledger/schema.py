@@ -231,4 +231,21 @@ CREATE TABLE legacy_imports (
     payload BLOB NOT NULL
 );
 """ + "".join(_guards(t) for t in _IMMUTABLE),
+    2: """
+-- Every forecasting experiment run, whatever it found, so the number of trials is known.
+CREATE TABLE research_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    name TEXT NOT NULL,
+    universe TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    first_test TEXT NOT NULL,
+    last_test TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    code_version TEXT NOT NULL,
+    scores_json TEXT NOT NULL,
+    by_period_json TEXT NOT NULL,
+    seconds REAL NOT NULL
+);
+""" + _guards("research_trials"),
 }

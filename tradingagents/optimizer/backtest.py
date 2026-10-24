@@ -33,6 +33,11 @@ from .data import TRADING_DAYS, compute_stats, max_drawdown
 from .plan import OptimizerSettings, growth_excess, plan_weights, scan_list, stress_models
 
 
+# What the strategy is shown against. A fund that did not exist yet holds cash (BIL)
+# until it did, so "SGOV" is T-bills before mid-2020.
+BENCHMARKS = {"VTI": {"VTI": 1.0}, "SPY": {"SPY": 1.0}, "SGOV": {"SGOV": 1.0}}
+
+
 @dataclass
 class Metrics:
     final: float          # growth of $1
@@ -163,7 +168,8 @@ def rebalance_plan(closes: pd.DataFrame, candidates: list[str], settings: Optimi
 def run_backtest(closes: pd.DataFrame, candidates: list[str], settings: OptimizerSettings,
                  start: str = "2012-01-03", every: int = 21, current_mix: dict[str, float] | None = None,
                  progress: Callable[[int, int], None] | None = None, cost_bps: float = 0.0,
-                 schedule: list | None = None, history: list[Rebalance] | None = None) -> BacktestResult:
+                 schedule: list | None = None, history: list[Rebalance] | None = None,
+                 benchmarks: dict[str, dict[str, float]] | None = None) -> BacktestResult:
     """Rebalance every ``every`` trading days from ``start``, as the optimizer would have.
 
     ``schedule`` and ``history`` from an earlier ``rebalance_plan`` over the same
@@ -189,7 +195,7 @@ def run_backtest(closes: pd.DataFrame, candidates: list[str], settings: Optimize
     cost = cost_bps / 1e4
     curve, traded = _simulate(returns, cash, schedule, cost)
     curves = {"Optimizer": curve}
-    for name, mix in {"VTI only": {"VTI": 1.0}, "60/40 (VTI/BND)": {"VTI": 0.6, "BND": 0.4},
+    for name, mix in {**(BENCHMARKS if benchmarks is None else benchmarks),
                       "Your mix now": current_mix or {}}.items():
         if not mix or not all(t in returns for t in mix):
             continue

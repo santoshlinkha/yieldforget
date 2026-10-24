@@ -296,6 +296,31 @@ def get_full_history_closes_many(symbols: list[str], end_date: str) -> pd.DataFr
     return closes.reindex(columns=symbols)
 
 
+BAR_FIELDS = ("Close", "High", "Low", "Volume")
+
+
+def get_history_bars_many(symbols: list[str], start: str | None, end: str) -> dict[str, pd.DataFrame]:
+    """Adjusted daily bars from ``start`` (the whole history if None) up to, not including,
+    ``end``: ``{field: frame}`` for Close, High, Low and Volume, one column per symbol."""
+    canonical = {normalize_symbol(s): s for s in symbols}
+    frame = yf_retry(lambda: yf.download(list(canonical), start=start or "1990-01-01", end=end, auto_adjust=True,
+                                         progress=False, threads=True, group_by="column"))
+    out = {}
+    for field in BAR_FIELDS:
+        if frame is None or frame.empty or field not in frame.columns.get_level_values(0):
+            out[field] = pd.DataFrame(columns=symbols, dtype=float)
+            continue
+        part = frame[field] if isinstance(frame.columns, pd.MultiIndex) else frame[[field]]
+        if not isinstance(frame.columns, pd.MultiIndex):
+            part.columns = list(canonical)[:1]
+        part = part.rename(columns=canonical)
+        if getattr(part.index, "tz", None) is not None:
+            part = part.tz_localize(None)
+        part.index = part.index.normalize()
+        out[field] = part[~part.index.duplicated(keep="last")].reindex(columns=symbols)
+    return out
+
+
 def get_stock_stats(
     symbol: Annotated[str, "ticker symbol for the company"],
     indicator: Annotated[

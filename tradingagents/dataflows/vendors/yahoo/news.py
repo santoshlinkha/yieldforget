@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
 
+from tradingagents.dataflows import local_store
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.date_window import coverage_gap, in_window
 from tradingagents.dataflows.symbols import normalize_symbol
@@ -57,6 +58,16 @@ def _extract_article_data(article: dict) -> dict:
         }
 
 
+def _articles(key: str, fetch) -> list[dict]:
+    """Parsed articles for one source request, from the local store when it has them
+    fresh (see ``local_store``); straight from Yahoo when the store is off."""
+    def parsed():
+        return [_extract_article_data(a) for a in (fetch() or [])]
+
+    market_store = local_store.store()
+    return market_store.articles(key, parsed) if market_store is not None else parsed()
+
+
 def get_news_yfinance(
     ticker: str,
     start_date: str,
@@ -79,7 +90,8 @@ def get_news_yfinance(
     # returns no news. Keep the user's ticker in the report header.
     canonical = normalize_symbol(ticker)
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
-    news = yf_retry(lambda: yf.Ticker(canonical).get_news(count=article_limit)) or []
+    news = _articles(f"ticker:{canonical}:{article_limit}",
+                     lambda: yf_retry(lambda: yf.Ticker(canonical).get_news(count=article_limit)))
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -87,9 +99,7 @@ def get_news_yfinance(
     news_str = ""
     filtered_count = 0
 
-    for article in news:
-        data = _extract_article_data(article)
-
+    for data in news:
         # Keep only articles within the requested window (look-ahead safe).
         if not in_window(data["pub_date"], start_dt, end_dt):
             continue
@@ -104,7 +114,7 @@ def get_news_yfinance(
 
     if filtered_count == 0:
         gap = coverage_gap(
-            (_extract_article_data(a)["pub_date"] for a in news),
+            (a["pub_date"] for a in news),
             start_date, end_date, "Yahoo Finance news", f"news for {ticker}{resolved}",
         )
         return gap or f"No news found for {ticker}{resolved} between {start_date} and {end_date}"
@@ -146,18 +156,17 @@ def get_global_news_yfinance(
     seen_titles = set()
 
     for query in search_queries:
-        found = yf_retry(lambda q=query: yf.Search(
+        found = _articles(f"search:{query}:{limit}", lambda q=query: yf_retry(lambda: yf.Search(
             query=q,
             news_count=limit,
             enable_fuzzy_query=True,
-        ).news)
+        ).news))
 
-        for article in found or []:
+        for data in found:
             # Window first: the limit counts what the run may read, so an
             # out-of-window article must not spend the budget or cut the
             # remaining searches short (#1356). Flat articles are filtered
             # on the same rule, so none can leak future news (#1007).
-            data = _extract_article_data(article)
             if not in_window(data["pub_date"], start_dt, curr_dt):
                 continue
             if data["title"] and data["title"] not in seen_titles:
@@ -198,10 +207,9 @@ def get_market_headlines(as_of_date: str, queries: list[str], look_back_days: in
     start_dt = end_dt - relativedelta(days=look_back_days)
     found, seen = [], set()
     for query in queries:
-        articles = yf_retry(lambda q=query: yf.Search(query=q, news_count=per_query,
-                                                      enable_fuzzy_query=True).news)
-        for article in articles or []:
-            data = _extract_article_data(article)
+        articles = _articles(f"search:{query}:{per_query}", lambda q=query: yf_retry(
+            lambda: yf.Search(query=q, news_count=per_query, enable_fuzzy_query=True).news))
+        for data in articles:
             if not in_window(data["pub_date"], start_dt, end_dt) or data["title"] in seen:
                 continue
             seen.add(data["title"])

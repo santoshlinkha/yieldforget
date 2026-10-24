@@ -38,6 +38,12 @@ dev = [
 bedrock = [
     "langchain-aws>=1.7.9",
 ]
+# Forecasting research: gradient-boosted trees (CPU or CUDA) and GARCH volatility.
+# pip install "tradingagents[research]". Everything else runs without them.
+research = [
+    "xgboost>=3.0",
+    "arch>=7.0",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"
