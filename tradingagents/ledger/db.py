@@ -15,6 +15,7 @@ backup is taken.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -30,17 +31,45 @@ def now_utc() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def connect(path: str | Path, migrate: bool = True, backup_dir: str | Path | None = None) -> sqlite3.Connection:
-    """Open the database, creating it if needed, and bring its schema up to date."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existed = path.exists() and path.stat().st_size > 0
+def _open(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(path, timeout=30, isolation_level=None, check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=FULL")
     con.execute("PRAGMA foreign_keys=ON")
     con.execute("PRAGMA busy_timeout=30000")
+    return con
+
+
+class LocalConnection:
+    """One SQLite connection per thread, behind one object.
+
+    The web server answers requests on several threads; a transaction begun on
+    one connection by one thread must not be joined by another. Each thread gets
+    its own connection, and SQLite's write lock (with the busy timeout) queues
+    the writers.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._local = threading.local()
+
+    def _con(self) -> sqlite3.Connection:
+        con = getattr(self._local, "con", None)
+        if con is None:
+            con = self._local.con = _open(self.path)
+        return con
+
+    def __getattr__(self, name):
+        return getattr(self._con(), name)
+
+
+def connect(path: str | Path, migrate: bool = True, backup_dir: str | Path | None = None) -> LocalConnection:
+    """Open the database, creating it if needed, and bring its schema up to date."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.exists() and path.stat().st_size > 0
+    con = LocalConnection(path)
     if migrate:
         pending = pending_migrations(con)
         if pending and existed:
@@ -100,7 +129,7 @@ def backup(con: sqlite3.Connection, folder: Path, label: str = "manual") -> Path
         target = folder / f"portfolio_{stamp}_{label}_{n}.sqlite3"
     dest = sqlite3.connect(target)
     try:
-        con.backup(dest)
+        (con._con() if isinstance(con, LocalConnection) else con).backup(dest)
     finally:
         dest.close()
     return target

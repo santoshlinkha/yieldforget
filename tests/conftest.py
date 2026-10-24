@@ -65,9 +65,22 @@ def _no_network(request, monkeypatch):
     def refuse(*args, **kwargs):
         raise OSError(f"test tried to reach the network: {args[1:] or kwargs}")
 
-    monkeypatch.setattr(socket.socket, "connect", refuse)
-    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
-    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: refuse(None, *a))
+    # This machine's own loopback is not the network: the web app's tests talk to a
+    # server they start themselves on 127.0.0.1.
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    connect, connect_ex, getaddrinfo = socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo
+
+    def guarded(original):
+        def call(self, address, *a, **k):
+            if isinstance(address, tuple) and address[0] in loopback:
+                return original(self, address, *a, **k)
+            return refuse(self, address)
+        return call
+
+    monkeypatch.setattr(socket.socket, "connect", guarded(connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded(connect_ex))
+    monkeypatch.setattr(socket, "getaddrinfo",
+                        lambda host, *a, **k: getaddrinfo(host, *a, **k) if host in loopback else refuse(None, host, *a))
     # yfinance's HTTP client is libcurl, which never touches Python's sockets.
     from curl_cffi import requests as curl_requests
 

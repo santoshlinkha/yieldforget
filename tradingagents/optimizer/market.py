@@ -199,8 +199,15 @@ def _checked(trend: Trend, headlines: list[dict]) -> dict:
     return out
 
 
-def market_brief(overview: dict, config: dict) -> dict:
-    """One LLM call explaining the overview from headlines and macro data it is given."""
+def market_brief(overview: dict, config: dict, gateway=None, allow_paid: bool = False,
+                 fallbacks: tuple[str, ...] = ()) -> dict:
+    """One LLM call explaining the overview from headlines and macro data it is given.
+
+    The call goes through the AI gateway: the same prompt to the same model is
+    answered from the cache, and a new one is held to the budget. Another provider
+    is tried after a failure only when it is listed in ``fallbacks`` (the spending
+    policy), never by default.
+    """
     as_of = overview["as_of"]
     with run_config(config):
         headlines = get_market_headlines(as_of, NEWS_QUERIES, look_back_days=7)
@@ -237,38 +244,51 @@ HEADLINES FROM THE LAST 7 DAYS:
 MACRO DATA (FRED):
 {chr(10).join(macro) if macro else "(not available)"}
 """
+    if gateway is None:
+        raise ValueError("the market brief is a paid AI call and needs the AI gateway")
+    from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
+
     errors = []
-    for provider, model in _models(config):
+    for provider, model in _models(config, fallbacks):
         cfg = {**config, "llm_provider": provider}
-        try:
+
+        def work(callback, provider=provider, model=model, cfg=cfg):
             llm = create_llm_client(provider=provider, model=model,
                                     base_url=config.get("backend_url") if provider == config["llm_provider"] else None,
-                                    **build_llm_kwargs(cfg)).get_llm()
+                                    callbacks=[callback], **build_llm_kwargs(cfg)).get_llm()
             structured = bind_structured(llm, MarketBrief, "Market brief")
             brief = None
-            # A busy provider answers 503 for a moment; retry before settling for free text.
-            for wait in (0, 3, 8):
+            # A busy provider answers 503 for a moment; one retry before settling for free text.
+            for wait in (0, 3):
                 time.sleep(wait)
                 if (brief := invoke_structured(structured, prompt, "Market brief")) is not None:
                     break
             if brief is None:
-                return {"as_of": as_of, "summary": llm.invoke(prompt).content, "trends": [], "watch": [],
-                        "headlines": headlines, "model": model, "structured": False}
-        except Exception as exc:  # out of credit or unreachable: try the next provider
+                return {"summary": llm.invoke(prompt).content, "trends": [], "watch": [], "structured": False}
+            return {"summary": brief.summary, "trends": [t.model_dump() for t in brief.trends],
+                    "watch": brief.watch, "structured": True}
+
+        try:
+            answer, _ = gateway.run(task="market_brief", provider=provider, model=model, schema_version="brief-v1",
+                                    info_cutoff=as_of, inputs={"prompt": prompt}, work=work, est_usd=0.02,
+                                    est_requests=3, allow_paid=allow_paid)
+        except (AIBlocked, AIInProgress):
+            raise
+        except Exception as exc:  # out of credit or unreachable: the next provider, if the policy allows one
             errors.append(f"{provider}/{model}: {str(exc)[:160]}")
             logger.warning("market brief with %s/%s failed: %s", provider, model, exc)
             continue
-        trends = [_checked(t, headlines) for t in brief.trends]
-        return {"as_of": as_of, "summary": brief.summary, "trends": trends, "watch": brief.watch,
-                "headlines": headlines, "model": model, "structured": True}
+        trends = [_checked(Trend(**t), headlines) for t in answer["trends"]]
+        return {"as_of": as_of, "summary": answer["summary"], "trends": trends, "watch": answer["watch"],
+                "headlines": headlines, "model": model, "structured": answer["structured"]}
     raise ValueError("No AI provider could write the explanation. " + " | ".join(errors))
 
 
-def _models(config: dict) -> list[tuple[str, str]]:
-    """The configured quick model, then Gemini when a Google key is set: one account out of
-    credit should not leave the page without an explanation."""
+def _models(config: dict, fallbacks: tuple[str, ...] = ()) -> list[tuple[str, str]]:
+    """The configured quick model, then Gemini only when the spending policy lists it as a
+    fallback and a Google key is set."""
     models = [(config["llm_provider"], config["quick_think_llm"])]
-    if config["llm_provider"] != "google" and os.environ.get("GOOGLE_API_KEY"):
+    if "google" in fallbacks and config["llm_provider"] != "google" and os.environ.get("GOOGLE_API_KEY"):
         models += [("google", "gemini-3.8-flash"), ("google", "gemini-3.5-flash")]   # the second when the first is busy
     return models
 

@@ -238,7 +238,9 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
   <div id="error" class="note"></div>
   <main>
     <section class="tab active" id="today">
-      <div class="page-head"><div><h2>Overview</h2><p id="ovSub">Today's orders at your risk level, and where the market stands.</p></div></div>
+      <div class="page-head"><div><h2>Overview</h2><p id="ovSub">Today's orders at your risk level, and where the market stands.</p></div>
+        <div class="row"><button id="saveRec" title="Store this plan, unchanged, as the official recommendation for its trading session">Save as official recommendation</button></div></div>
+      <div id="saveMsg"></div>
       <div class="kpis" id="kpis"></div>
       <div class="split wide">
         <div class="card">
@@ -421,7 +423,7 @@ function showError(msg) { const e = $("error"); e.textContent = msg || ""; e.cla
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
   const data = await res.json();
-  if (!res.ok && res.status !== 409) throw new Error(data.error || res.statusText);
+  if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
 
@@ -469,14 +471,17 @@ const kpi = (label, value, from, cls = "") => `<div class="kpi ${cls}"><div clas
 const spct = (x, d = 2) => x == null ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%`;
 const susd = x => `${x >= 0 ? "+" : "−"}${usd(Math.abs(x))}`;
 
+let planSeq = 0;
 async function refresh() {
+  const seq = ++planSeq;
   showError(""); busy(true);
   $("subtitle").textContent = $("scan").checked ? "Scanning… the first scan of the day takes about a minute" : "Optimizing…";
   try {
     const r = await api("/api/plan", {risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
+    if (seq !== planSeq) return;   // a newer request is on its way; this answer is stale
     lastPlan = r; render(r);
-  } catch (e) { showError(e.message); $("subtitle").textContent = "Could not optimize."; }
-  finally { busy(false); }
+  } catch (e) { if (seq === planSeq) { showError(e.message); $("subtitle").textContent = "Could not optimize."; } }
+  finally { if (seq === planSeq) busy(false); }
 }
 
 function goalShort(g) {
@@ -488,7 +493,8 @@ function goalShort(g) {
 function render(r) {
   const p = r.plan, s = r.suggestion, limit = p.settings.loss_limit;
   $("subtitle").textContent = `${r.date} · ${usd(p.total)} · ${p.scanned} funds scanned${r.ai_used ? " · AI applied" : ""}`;
-  $("subtitle").title = "Saved to " + r.saved_to;
+  $("subtitle").textContent += " · preview, not saved";
+  $("subtitle").title = "A preview is computed, not stored. Save it to make it the official recommendation.";
 
   $("kpis").innerHTML =
     kpi("Portfolio value", usd(p.total), `level ${r.risk.level} · ${esc(r.risk.name)}`, "hero") +
@@ -866,6 +872,17 @@ document.querySelectorAll("#trRange button").forEach(b => b.onclick = () => {
 $("trStartBtn").onclick = async () => {
   try { await api("/api/tracker/start", {start: $("trStart").value}); pollTracker(); }
   catch (e) { showError(e.message); }
+};
+$("saveRec").onclick = async () => {
+  showError(""); $("saveRec").disabled = true; $("saveMsg").innerHTML = '<p class="muted">Saving…</p>';
+  try {
+    const r = await api("/api/recommendations/save", {risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
+    const s = r.saved;
+    $("saveMsg").innerHTML = `<div class="ok"><b>Saved</b> official recommendation ${esc(s.id.slice(0, 8))} for the ${esc(s.session)} session; orders may fill from ${esc(s.earliest_execution)}.` +
+      (s.supersedes ? ` It replaces ${esc(s.supersedes.slice(0, 8))}.` : "") + ` Saving is not trading: record fills when you place them.</div>`;
+    lastPlan = r; render(r); $("subtitle").textContent = $("subtitle").textContent.replace("preview, not saved", "saved as official");
+  } catch (e) { showError(e.message); $("saveMsg").innerHTML = ""; }
+  finally { $("saveRec").disabled = false; }
 };
 $("trUpdate").onclick = async () => { try { await api("/api/tracker/update", {}); pollTracker(); } catch (e) { showError(e.message); } };
 $("trReset").onclick = async () => {

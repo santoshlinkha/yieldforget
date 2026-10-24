@@ -251,13 +251,15 @@ def test_uncited_trend_is_low_confidence():
     assert bogus["confidence"] == "low" and bogus["sources"] == []
 
 
-def test_brief_falls_back_to_gemini_when_a_key_is_set(monkeypatch):
+def test_brief_falls_back_to_gemini_only_when_the_policy_allows(monkeypatch):
     from tradingagents.optimizer.market import _models
 
+    config = {"llm_provider": "openai", "quick_think_llm": "m"}
     monkeypatch.setenv("GOOGLE_API_KEY", "x")
-    assert [p for p, _ in _models({"llm_provider": "openai", "quick_think_llm": "m"})[1:]] == ["google", "google"]
+    assert len(_models(config)) == 1   # a key alone is not permission to spend on another provider
+    assert [p for p, _ in _models(config, ("google",))[1:]] == ["google", "google"]
     monkeypatch.delenv("GOOGLE_API_KEY")
-    assert len(_models({"llm_provider": "openai", "quick_think_llm": "m"})) == 1
+    assert len(_models(config, ("google",))) == 1
 
 
 def test_risk_levels_rise_and_are_saved(tmp_path):

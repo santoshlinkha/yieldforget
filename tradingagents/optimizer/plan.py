@@ -104,6 +104,7 @@ class Row:
     held: bool = False
     score: float = 0.0     # growth above cash per unit of worst drop
     reason: str = ""
+    screened: bool = False  # scored cheaply and left out before the optimizer ran
 
 
 @dataclass
@@ -431,7 +432,7 @@ def build_plan(portfolio: PortfolioContext, schedule: dict[str, float], settings
                    f"top {settings.max_candidates} go to the optimizer.")
             screened.append(Row(t, light.prices[t], 0.0, 0.0, 0.0, float(d),
                                 float(light.cash_return + g), floored=bool(light.floored[i]),
-                                name=describe(t), score=float(light_scores[i]), reason=why))
+                                name=describe(t), score=float(light_scores[i]), reason=why, screened=True))
         candidates = [t for t in candidates if t in kept]
 
     tickers = [*owned, *candidates]
