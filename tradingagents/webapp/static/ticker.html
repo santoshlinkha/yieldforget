@@ -513,9 +513,10 @@ async function load() {
   const rp = d.reports;
   if (failed(rp)) $("reports").innerHTML = failed(rp);
   else {
-    const withRun = rp.runs.filter(run => run.decision);
-    let h = withRun.length ? `<p class="small">Final decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.decision)}</b></a>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details data-day="${esc(run.date)}"><summary>${run.decision ? `<span class="verdict ${run.decision}" style="font-size:11px;padding:1px 8px;margin-right:6px">${run.decision}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents' view: ${esc(run.rating)} (not used)` : ""}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+    // Each saved run shows the agents' own decision (their rating as an action); the model's verdict is the card above.
+    const withRun = rp.runs.filter(run => run.agents);
+    let h = withRun.length ? `<p class="small">Agents' decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.agents)}</b></a>`).join(" · ")}</p>` : "";
+    h += rp.runs.length ? rp.runs.map(run => `<details data-day="${esc(run.date)}"><summary>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
       (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
