@@ -24,7 +24,7 @@ import os
 import threading
 import uuid
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -843,13 +843,24 @@ class App:
         paper = [t for t, r in board.items() if (r.get("decision") or {}).get("paper_action") == "PAPER ENTER"]
         reports_root = Path(self.config["results_dir"])
         rows, seen = [], set()
-        for t, why in [*((t, "you hold it") for t in held), *((t, "rule verdict BUY") for t in buys),
-                       *((t, "top of the daily decision") for t in paper)]:
+        # Stocks the agents analyzed in the last 30 days stay listed whatever their other signals say.
+        from tradingagents.stocks.verdict import RATING_DAYS
+
+        from tradingagents.memory import TradingMemoryLog
+
+        cutoff = (date.today() - timedelta(days=RATING_DAYS)).isoformat()
+        last_rated = {}
+        for e in TradingMemoryLog(self.config).load_entries():   # oldest first: the newest wins
+            if e.get("rating") and e.get("date", "") >= cutoff:
+                last_rated[e["ticker"].upper()] = {"rating": e["rating"], "date": e["date"]}
+        rated = sorted(last_rated, key=lambda t: last_rated[t]["date"], reverse=True)
+        for t, why in [*((t, "you hold it") for t in held), *((t, "analyzed by the agents") for t in rated),
+                       *((t, "rule verdict BUY") for t in buys), *((t, "top of the daily decision") for t in paper)]:
             if t in seen:
                 continue
             seen.add(t)
             r = board.get(t) or {}
-            rating = r.get("rating")
+            rating = r.get("rating") or last_rated.get(t)   # stocks outside the signal board keep their rating
             day_dir = reports_root / t / rating["date"] / "reports" if rating else None
             rows.append({"ticker": t, "name": describe(t), "why": why, "held": t in positions and bool(positions[t]),
                          "in_trading": t in trading, "rating": rating,

@@ -1211,18 +1211,17 @@ function aiRender() {
     const held = d.rows.filter(r => r.in_trading).map(r => r.ticker);
     aiPicked = new Set([...held, ...d.rows.filter(r => r.why === "rule verdict BUY").map(r => r.ticker)].slice(0, AI_PICK));
   }
-  $("aiTable").innerHTML = "<tr><th></th><th class='l'>Ticker</th><th class='l'>Listed because</th><th>AI decision</th><th class='l'>Agents' rating</th><th>Rule verdict</th><th>Agree</th><th></th></tr>" +
+  $("aiTable").innerHTML = "<tr><th></th><th class='l'>Ticker</th><th class='l'>Listed because</th><th>AI decision</th><th class='l'>Report</th><th>Rule verdict</th><th>Agree</th></tr>" +
     (d.rows.length ? aiShown(d.rows).map(r => {
       const ai = r.ai, agree = ai && r.verdict ? (ai.action === r.verdict ? "✓" : "✗") : "–";
       return `<tr><td><input type="checkbox" data-t="${esc(r.ticker)}" ${aiPicked.has(r.ticker) ? "checked" : ""} aria-label="Analyze ${esc(r.ticker)}"></td>
         <td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.name || "")}</span></td>
         <td class="l muted small">${esc(r.why)}${r.held ? " · held" : ""}</td>
         <td>${ai ? `<span class="vb ${ai.action}">${ai.action}</span>` : "<span class='muted small'>not run</span>"}</td>
-        <td class="l small">${ai ? `${esc(ai.rating)} <span class="muted">${esc(ai.date)}${ai.stale ? " (stale)" : ""}</span>` : "–"}</td>
+        <td class="l small">${ai ? `<a href="/ticker/${encodeURIComponent(r.ticker)}#report=${esc(ai.date)}" target="_blank" rel="noopener" title="Agents' rating: ${esc(ai.rating)}">Final decision, ${esc(ai.date)}</a>${ai.stale ? " <span class='muted'>(stale)</span>" : ""}` : "–"}</td>
         <td title="${esc(r.verdict_summary || "")}">${r.verdict ? `<span class="vb ${r.verdict}">${r.verdict}</span>` : "–"}</td>
-        <td class="${agree === "✓" ? "pos" : agree === "✗" ? "neg" : "muted"}">${agree}</td>
-        <td>${r.reports ? `<a href="/ticker/${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener">reports</a>` : ""}</td></tr>`;
-    }).join("") : "<tr><td colspan='8' class='muted l'>Nothing to list: no holdings, no BUY verdicts and no daily decision yet.</td></tr>");
+        <td class="${agree === "✓" ? "pos" : agree === "✗" ? "neg" : "muted"}">${agree}</td></tr>`;
+    }).join("") : "<tr><td colspan='7' class='muted l'>Nothing to list: no holdings, no BUY verdicts and no daily decision yet.</td></tr>");
   const hidden = d.rows.length - aiShown(d.rows).length;
   $("aiMore").innerHTML = hidden > 0 || aiAll ? `<button class="ghost" id="aiToggle">${aiAll ? "Show fewer" : `Show ${hidden} more`}</button>` : "";
   if ($("aiToggle")) $("aiToggle").onclick = () => { aiAll = !aiAll; aiRender(); };

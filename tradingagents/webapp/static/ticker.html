@@ -512,10 +512,11 @@ async function load() {
   const rp = d.reports;
   if (failed(rp)) $("reports").innerHTML = failed(rp);
   else {
-    let h = rp.ratings.length ? `<p class="small">AI ratings on record: ${rp.ratings.map(r => `${esc(r.date)} <b>${esc(r.rating)}</b>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details><summary>${run.decision ? `<span class="verdict ${run.decision}" style="font-size:11px;padding:1px 8px;margin-right:6px">${run.decision}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents: ${esc(run.rating)}` : ""}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+    const withRun = rp.runs.filter(run => run.decision);
+    let h = withRun.length ? `<p class="small">Final decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.decision)}</b></a>`).join(" · ")}</p>` : "";
+    h += rp.runs.length ? rp.runs.map(run => `<details data-day="${esc(run.date)}"><summary>${run.decision ? `<span class="verdict ${run.decision}" style="font-size:11px;padding:1px 8px;margin-right:6px">${run.decision}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents: ${esc(run.rating)}` : ""}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
       (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
-      run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}">${esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
+      run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     $("reports").innerHTML = h;
     $("reports").querySelectorAll("a[data-calls]").forEach(a => a.onclick = async ev => {
@@ -528,6 +529,10 @@ async function load() {
       const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
       $("reportView").innerHTML = renderMarkdown(await res.text());
     });
+    $("reports").querySelectorAll("a[data-open]").forEach(a => a.onclick = ev => { ev.preventDefault(); openRun(a.dataset.open); });
+    // /ticker/AVGO#report=2026-10-23 opens that run's final decision (the Decisions page links here).
+    const linked = (location.hash.match(/^#report=(\d{4}-\d{2}-\d{2})$/) || [])[1];
+    if (linked && !openRun.done) { openRun.done = true; openRun(linked); }
   }
 }
 // --- Markdown, rendered safely: every piece of text is escaped first; links only to web addresses ---
@@ -538,6 +543,15 @@ function mdInline(t) {
        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>")
        .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<i>$2</i>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<i>$2</i>");
   return h.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+}
+// Open one saved run and show its final decision (or its first report when it has none).
+function openRun(day) {
+  const box = document.querySelector(`#reports details[data-day="${day}"]`);
+  if (!box) return;
+  box.open = true;
+  const link = box.querySelector("a[data-final]") || box.querySelector("a[data-path]");
+  if (link) link.click();
+  box.scrollIntoView({behavior: "smooth", block: "start"});
 }
 function renderMarkdown(src) {
   const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
