@@ -272,10 +272,12 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
             ira: dict, prices: pd.Series, validated: bool, cutoff, execute) -> list[dict]:
     """ENTER (validated) or PAPER ENTER (experimental) and WAIT, with sizes and blocked constraints."""
     out = []
-    # A fixed order, ties broken by the score itself, then P(profit), then the ticker: the input order
-    # never decides which tied stock comes first, and ties are marked.
+    # The model's own order: its score, then P(profit), then the ticker (the same order as the saved ranks),
+    # so the input order never decides which tied stock comes first. Not the expected net: that comes from
+    # a binned map that need not rise with the score, and would put lower-ranked stocks first. Ties of the
+    # expected net are still marked, since tied stocks share one estimate.
     cand = today[today["in_index"]].reset_index().rename(columns={"index": "ticker"})
-    cand = cand.sort_values(["expected_net", "score_pct", "p_win", "ticker"], ascending=[False, False, False, True])
+    cand = cand.sort_values(["score_pct", "p_win", "ticker"], ascending=[False, False, True])
     ties = cand.groupby("expected_net")["ticker"].transform("count")
     cand = cand.assign(tied_with=ties - 1).set_index("ticker")
     active = (held - exiting)

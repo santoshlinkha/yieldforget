@@ -874,8 +874,9 @@ class App:
         held = sorted(t for t, q in positions.items() if q and t not in CASH_FUNDS)
         trading = sorted(t for t, q in self.store.ledger.state("trading", _today()).positions.items()
                          if q and t not in CASH_FUNDS)
-        by_rank = sorted((r for r in board.values() if r.get("verdict") and r.get("screen")),
-                         key=lambda r: r["screen"].get("rank") or 9999)
+        # BUY verdicts in the model's own order (its rank decides the verdict).
+        by_rank = sorted((r for r in board.values() if (r.get("verdict") or {}).get("model")),
+                         key=lambda r: r["verdict"]["model"]["rank"])
         buys = [r["ticker"] for r in by_rank if r["verdict"]["verdict"] == "BUY"]
         paper = [t for t, r in board.items() if (r.get("decision") or {}).get("paper_action") == "PAPER ENTER"]
         reports_root = Path(self.config["results_dir"])
