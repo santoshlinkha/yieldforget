@@ -199,11 +199,16 @@ def buy_and_hold(close_adj: pd.Series, capital: float, start, end) -> dict:
             "max_drawdown": float((eq / eq.cummax() - 1).min()), "daily": eq.pct_change().dropna()}
 
 
-def summary(sim: dict, bench: dict, cash: dict) -> dict:
+def summary(sim: dict, bench: dict, cash: dict, trials: int = 1) -> dict:
+    """The simulation against SPY and cash. ``trials``: how many rule and policy variants were tried to pick
+    this one, so the deflated Sharpe ratio of the daily excess over SPY charges for the search."""
+    from tradingagents.research.walkforward import deflated_sharpe
+
     ex = (sim["daily"] - bench["daily"].reindex(sim["daily"].index).fillna(0)).to_numpy()
     lo, hi = paired_ci(ex, block=20)
     keep = {k: v for k, v in sim.items() if k not in ("equity", "daily")}
     return {**keep, "vs_spy_daily_mean": float(np.nanmean(ex)), "vs_spy_ci": [lo, hi],
+            "vs_spy_deflated_sharpe": deflated_sharpe(ex, trials),
             "spy_total": bench["total"], "cash_total": cash["total"], "spy_max_drawdown": bench["max_drawdown"]}
 
 

@@ -147,7 +147,8 @@ def main():
                                  label=f"{name}:{sizing}")
                 bench = S.buy_and_hold(spy, cash_amount, a, b)
                 cash_b = S.buy_and_hold(bil, cash_amount, a, b)
-                out["simulation"][name][f"{part}:{sizing}"] = S.summary(sim, bench, cash_b)
+                # Every grid point of both policies was tried on development to choose this rule.
+                out["simulation"][name][f"{part}:{sizing}"] = S.summary(sim, bench, cash_b, trials=2 * len(grid))
             mom = sig.assign(rank_key=sig.join(member[["mom_12_1"]])["mom_12_1"].fillna(-1))
             sim = S.simulate(mom, px, div, POLICIES["fixed_20"], cash_amount, a, b, label="momentum_fixed_20")
             out["simulation"][name][f"{part}:momentum_baseline"] = S.summary(sim, S.buy_and_hold(spy, cash_amount, a, b),

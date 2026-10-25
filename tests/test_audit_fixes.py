@@ -115,3 +115,17 @@ def test_a_shadow_lot_takes_a_later_split_once():
     _apply_splits(state, book, actions, pd.Timestamp("2026-09-16"))
     _apply_splits(state, book, actions, pd.Timestamp("2026-09-17"))          # a second update: not again
     assert (book.lots[0].shares, book.lots[0].entry_px) == (pytest.approx(2.0), pytest.approx(50.0))
+
+
+def test_the_deflated_sharpe_ratio_charges_for_the_number_of_trials():
+    import numpy as np
+
+    from tradingagents.research.walkforward import deflated_sharpe
+
+    r = np.random.default_rng(3).normal(0.001, 0.01, 1000)        # per-period Sharpe about 0.1
+    one, many = deflated_sharpe(r, 1), deflated_sharpe(r, 32)
+    assert one["threshold"] == 0 and 0.99 < one["dsr"] <= 1                  # the probabilistic Sharpe ratio
+    assert many["threshold"] > 0 and many["dsr"] < one["dsr"]
+    flat = np.tile([0.01, -0.01], 500)
+    assert deflated_sharpe(flat, 1)["dsr"] == pytest.approx(0.5)           # zero Sharpe: a coin flip
+    assert deflated_sharpe(np.ones(10), 5)["dsr"] is None                   # no variation: no answer

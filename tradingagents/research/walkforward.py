@@ -106,6 +106,44 @@ def block_bootstrap(values: np.ndarray, block: int = 12, reps: int = 2000, seed:
     return float(lo), float(hi)
 
 
+def deflated_sharpe(returns: np.ndarray, trials: int, trial_sharpes: np.ndarray | None = None,
+                    sharpe_var: float | None = None) -> dict:
+    """The deflated Sharpe ratio (Bailey and Lopez de Prado, 2014): the probability that the true Sharpe
+    ratio of ``returns`` is above what the best of ``trials`` unskilled strategies would show by luck.
+
+    Everything is per period (not annualized). The luck threshold is
+    ``sqrt(V) * ((1 - g) * z(1 - 1/N) + g * z(1 - 1/(N e)))`` with ``g`` the Euler-Mascheroni constant and
+    ``V`` the variance of the trials' Sharpe ratios (``trial_sharpes``, or ``sharpe_var``; without either,
+    the variance of one Sharpe estimate under the null, ``1 / (T - 1)``). The test then corrects for the
+    returns' skew and fat tails. With one trial the threshold is 0 and this is the probabilistic Sharpe ratio.
+    Above 0.95 is the usual bar."""
+    from statistics import NormalDist
+
+    r = np.asarray(returns, dtype=float)
+    r = r[np.isfinite(r)]
+    t = len(r)
+    if t < 3 or r.std(ddof=1) == 0:
+        return {"dsr": None, "sharpe": None, "threshold": None, "trials": trials, "periods": t}
+    z = NormalDist()
+    sr = float(r.mean() / r.std(ddof=1))
+    centred = r - r.mean()
+    sd = centred.std()
+    skew = float((centred ** 3).mean() / sd ** 3)
+    kurt = float((centred ** 4).mean() / sd ** 4)          # not excess: 3 for a normal distribution
+    if trial_sharpes is not None and len(trial_sharpes) > 1:
+        var = float(np.var(np.asarray(trial_sharpes, dtype=float), ddof=1))
+    else:
+        var = sharpe_var if sharpe_var is not None else 1 / (t - 1)
+    n = max(int(trials), 1)
+    gamma = 0.5772156649015329
+    threshold = 0.0 if n == 1 else math.sqrt(var) * ((1 - gamma) * z.inv_cdf(1 - 1 / n)
+                                                      + gamma * z.inv_cdf(1 - 1 / (n * math.e)))
+    denom = 1 - skew * sr + (kurt - 1) / 4 * sr ** 2
+    stat = (sr - threshold) * math.sqrt(t - 1) / math.sqrt(denom) if denom > 0 else float("nan")
+    return {"dsr": float(z.cdf(stat)) if np.isfinite(stat) else None, "sharpe": sr, "threshold": threshold,
+            "skew": skew, "kurtosis": kurt, "trials": n, "periods": t}
+
+
 def _p_two_sided(t: float, n: int) -> float:
     return float(math.erfc(abs(t) / math.sqrt(2))) if n > 2 and np.isfinite(t) else 1.0
 
