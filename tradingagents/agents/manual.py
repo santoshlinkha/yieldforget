@@ -19,7 +19,7 @@ from tradingagents.agents.tools import compact_indicator, compact_prices
 
 INDICATORS = "close_10_ema,close_50_sma,close_200_sma,rsi,macd,macdh,boll_ub,boll_lb,atr,vwma"
 MACRO = ("fed_funds_rate", "10y_treasury", "cpi", "unemployment")
-LIMITS = {"fundamentals": 6000, "news": 5000, "global_news": 3500, "macro": 900}   # characters per section
+LIMITS = {"fundamentals": 14000, "statement": 4000, "news": 5000, "global_news": 3500, "macro": 900}   # characters
 RATINGS = [r.value for r in PortfolioRating]
 
 
@@ -47,7 +47,13 @@ def build_prompt(ticker: str, day: str, company: str = "") -> str:
     indicators = "\n\n".join(_fetch(i, lambda i=i: compact_indicator(route_to_vendor("get_indicators", ticker, i, day, 10)))
                              for i in INDICATORS.split(","))
     snapshot = _fetch("snapshot", lambda: build_verified_market_snapshot(ticker, day, 5))
-    fundamentals = _cut(_fetch("fundamentals", lambda: route_to_vendor("get_fundamentals", ticker, day)), LIMITS["fundamentals"])
+    # The profile tool withholds today-only values (multiples, market cap) for a past day; the statements
+    # come as filed by the day, as the fundamentals analyst's own tools serve them.
+    fundamentals = _cut("\n\n".join([
+        _fetch("fundamentals", lambda: route_to_vendor("get_fundamentals", ticker, day)),
+        *(_cut(_fetch(name, lambda tool=tool: route_to_vendor(tool, ticker, "quarterly", day)), LIMITS["statement"])
+          for name, tool in (("income statement", "get_income_statement"), ("balance sheet", "get_balance_sheet"),
+                             ("cash flow", "get_cashflow")))]), LIMITS["fundamentals"])
     news = _cut(_fetch("company news", lambda: route_to_vendor("get_news", ticker, week, day)), LIMITS["news"])
     world = _cut(_fetch("global news", lambda: route_to_vendor("get_global_news", day, 7, 10)), LIMITS["global_news"])
     macro = "\n\n".join(_cut(_fetch(m, lambda m=m: route_to_vendor("get_macro_indicators", m, day, 365)), LIMITS["macro"])
