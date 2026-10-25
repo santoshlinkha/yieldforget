@@ -135,8 +135,23 @@ def bundle_key(cutoff: pd.Timestamp, policy, features, thresholds) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:20]
 
 
-def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progress=None, train=True) -> tuple[dict, dict]:
-    """The fitted models for this week's data, policy, features and thresholds (training cache)."""
+def as_of_data(data, cutoff: pd.Timestamp):
+    """The prices as they stood at the cutoff's close: every row after it dropped, so nothing later can
+    reach features, labels or fits. Corporate actions stay whole: executable prices need them to undo the
+    adjustment, and are computed on the full history before this cut (``executable_prices``)."""
+    from dataclasses import replace
+
+    return replace(data, close=data.close.loc[:cutoff], high=data.high.loc[:cutoff], low=data.low.loc[:cutoff],
+                   volume=data.volume.loc[:cutoff])
+
+
+def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progress=None, train=True,
+               prices=None) -> tuple[dict, dict]:
+    """The fitted models for this week's data, policy, features and thresholds (training cache).
+
+    A cached bundle is reused only when it was fitted with data through the cutoff or earlier; a bundle from
+    later in the same week would carry what happened after the cutoff, so that cutoff gets its own fit.
+    ``prices`` is ``(executable prices, dividends)`` already cut at the cutoff."""
     from tradingagents.research.features import decision_dates
 
     from . import study as S
@@ -144,10 +159,18 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
     say = progress or (lambda *_: None)
     feats, th = P.features_for(), Thresholds()
     key = bundle_key(cutoff, policy, feats, th)
-    path = Path(cache_dir) / "decision_models" / f"{key}.pkl"
-    if path.exists():
-        blob = path.read_bytes()
-        return pickle.loads(blob), {"key": key, "sha256": hashlib.sha256(blob).hexdigest(), "reused": True}  # noqa: S301
+    folder = Path(cache_dir) / "decision_models"
+    for name in (key, f"{key}_{cutoff.date()}"):
+        path = folder / f"{name}.pkl"
+        if path.exists():
+            blob = path.read_bytes()
+            bundle = pickle.loads(blob)  # noqa: S301  (the app's own training cache)
+            if str(bundle.get("meta", {}).get("cutoff", "9999")) <= str(cutoff.date()):
+                return bundle, {"key": name, "sha256": hashlib.sha256(blob).hexdigest(), "reused": True}
+    path = folder / f"{key}.pkl"
+    if path.exists():      # the week's bundle is from a later cutoff: this cutoff is fitted on its own
+        key = f"{key}_{cutoff.date()}"
+        path = folder / f"{key}.pkl"
     if not train:
         raise ValueError("the decision models for this week, data and code are not fitted yet: run `stocks today --train` "
                          "(or POST /api/decisions/run with {\"train\": true})")
@@ -156,7 +179,8 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
     say("building the training panel")
     panel = P.build(data, policy.horizon, dates=dates, macro=macro)
     stocks = list(data.stocks)
-    px, div = executable_prices(data.close[stocks], data.actions)
+    px, div = prices if prices is not None else executable_prices(data.close[stocks], data.actions)
+    px, div = px.loc[:cutoff, stocks], div.loc[:cutoff, stocks]
     say("simulating the policy's trades")
     tr = S.attach_trades(panel, px, data.low[stocks], data.close[stocks], div, policy)
     edges = S.fold_edges(panel.index.get_level_values("date"))
@@ -164,7 +188,8 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
     oof = S.crossfit_primary(panel, feats, edges, [lambda: Ranker(device)])
     member = panel[panel["in_index"]]
     rows = oof.join(tr[["net", "complete", "exit_date"]]).join(member[[*feats, "label_end", "pos_large_loss"]])
-    rows = rows[rows["complete"]]
+    # Only trades closed by the cutoff, and only outcomes known by then: nothing after it is learned from.
+    rows = rows[rows["complete"] & (pd.to_datetime(rows["exit_date"]) <= cutoff)]
     rows["win"] = (rows["net"] > 0).astype(float)
     rows["score_pct"] = rows["xgb_rank_pct"]
     spy = data.close["SPY"]
@@ -179,7 +204,8 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
         "map_net": score_to_net(rows["score_pct"].to_numpy(), rows["net"].to_numpy()),
         "map_excess": score_to_net(rows["score_pct"].to_numpy(), excess),
         "quality": TradeQuality("logit", "sigmoid", device).fit(rows, [*feats, "score_pct"]),
-        "risk": XGBEvent(device).fit(member[member["pos_large_loss"].notna()], feats, "pos_large_loss"),
+        "risk": XGBEvent(device).fit(member[member["pos_large_loss"].notna()
+                                            & (pd.to_datetime(member["label_end"]) <= cutoff)], feats, "pos_large_loss"),
         "features": feats, "policy": policy, "thresholds": th.version(),
         "meta": {"cutoff": str(cutoff.date()), "train_rows": len(train_rows), "oof_rows": len(rows),
                  "seconds": round(time.time() - t0, 1), "device": device, "survivorship": data.survivorship},
@@ -362,16 +388,20 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     spy = data.close["SPY"].dropna()
     cutoff = spy.index[spy.index <= pd.Timestamp(as_of)][-1]
     freshness = (pd.Timestamp(as_of) - cutoff).days
+    stocks = list(data.stocks)
+    # Prices as traded, from the full history (undoing the adjustment needs every dividend), then everything
+    # is cut at the cutoff: a past ``as_of`` sees only what was known at that close.
+    px, div = executable_prices(data.close[stocks], data.actions)
+    px, div = px.loc[:cutoff], div.loc[:cutoff]
+    data = as_of_data(data, cutoff)
     device, _ = choose_device(store.get("global", "compute_backend"), 300_000)
     sessions = data.close.index
     macro = M.features(pd.DatetimeIndex([cutoff]), cache_dir)
     bundle, art = fit_bundle(data, M.features(P.decision_dates_for(sessions, cutoff), cache_dir) if train else None,
-                             cutoff, policy, cache_dir, device, say, train)
+                             cutoff, policy, cache_dir, device, say, train, prices=(px, div))
     say("scoring today")
     at = P.build(data, policy.horizon, dates=pd.DatetimeIndex([cutoff]), macro=macro)
     today = score_today(bundle, at.xs(cutoff, level="date", drop_level=False))
-    stocks = list(data.stocks)
-    px, _ = executable_prices(data.close[stocks], data.actions)
     prices = px.loc[cutoff]
     from tradingagents.optimizer.data import latest_prices
 
@@ -466,7 +496,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                            json.dumps(record["account"], default=str), json.dumps(payload, default=str)))
     from .shadow import advance
 
-    record["shadow"] = advance(store, data, cutoff, decision_id, entry_lines, policy, snap)
+    record["shadow"] = advance(store, data, cutoff, decision_id, entry_lines, policy, snap, prices=(px, div))
     return record
 
 

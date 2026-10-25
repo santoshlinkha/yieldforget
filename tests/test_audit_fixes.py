@@ -52,3 +52,35 @@ def test_the_etf_backtest_trades_the_session_after_its_plan():
     assert lagged.iloc[-1] == pytest.approx(1.0)    # bought at the next close, after it
     assert _executed([(days[-1], {"X": 1.0})], days, 1) == []
     assert np.isfinite(lagged).all()
+
+
+def test_a_past_cutoff_never_reuses_a_model_fitted_later_that_week(tmp_path):
+    import pickle
+
+    from tradingagents.stocks import daily
+    from tradingagents.stocks import panel as P
+    from tradingagents.stocks.targets import Thresholds
+
+    policy = POLICIES["barrier_20"]
+    friday, wednesday = pd.Timestamp("2026-10-23"), pd.Timestamp("2026-10-21")
+    key = daily.bundle_key(friday, policy, P.features_for(), Thresholds())
+    assert key == daily.bundle_key(wednesday, policy, P.features_for(), Thresholds())    # same ISO week
+    (tmp_path / "decision_models").mkdir()
+    (tmp_path / "decision_models" / f"{key}.pkl").write_bytes(pickle.dumps({"meta": {"cutoff": "2026-10-23"}}))
+    bundle, art = daily.fit_bundle(None, None, friday, policy, tmp_path, train=False)
+    assert art["reused"] and bundle["meta"]["cutoff"] == "2026-10-23"
+    with pytest.raises(ValueError, match="not fitted"):
+        daily.fit_bundle(None, None, wednesday, policy, tmp_path, train=False)
+
+
+def test_as_of_data_drops_every_row_after_the_cutoff():
+    from tradingagents.stocks.daily import as_of_data
+    from tradingagents.stocks.data import StockData
+
+    days = pd.bdate_range("2026-10-19", "2026-10-23")
+    frame = pd.DataFrame({"AAA": range(5)}, index=days, dtype=float)
+    data = StockData(None, {"AAA": {}}, ["AAA"], {}, frame, frame, frame, frame,
+                     actions={"AAA": {"dividends": [["2026-10-22", 1.0]], "splits": []}})
+    cut = as_of_data(data, days[1])
+    assert all(f.index.max() == days[1] for f in (cut.close, cut.high, cut.low, cut.volume))
+    assert cut.actions == data.actions          # kept whole: undoing the adjustment needs every dividend

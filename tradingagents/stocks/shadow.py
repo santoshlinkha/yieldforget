@@ -48,14 +48,15 @@ def _dump(book: Book) -> dict:
 
 
 def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: list[dict], policy, capital_snapshot: dict,
-            rules: dict | None = None) -> dict:
+            rules: dict | None = None, prices=None) -> dict:
     from tradingagents.ledger.db import now_utc, transaction
 
     from .daily import rules as account_rules
 
     r = rules or account_rules(store)
     stocks = list(data.stocks)
-    px, div = executable_prices(data.close[stocks], data.actions)
+    # ``prices``: (executable prices, dividends) from the full history, cut at the cutoff by the caller.
+    px, div = prices if prices is not None else executable_prices(data.close[stocks], data.actions)
     sessions = px.index
     spy = data.close["SPY"]
     state = _load(store.con)
