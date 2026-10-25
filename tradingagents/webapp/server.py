@@ -129,6 +129,7 @@ class App:
         self.stocks = Job()  # a stock research batch
         self.decisions = Job()  # the daily stock decision (and, when asked, this week's model fit)
         self.screen = Job()     # the quality and Wall Street screen
+        self.analysis = Job()   # one ticker's agent run for a chosen day, on request
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -501,6 +502,10 @@ class App:
 
         names, sources = gather(self.store, body.get("tickers", ""), body.get("csv", ""),
                                 bool(body.get("watchlist")), bool(body.get("holdings")))
+        if body.get("sp500"):   # every current member, as the screener's "compute signals for all" asks
+            for t in get_sp500_members(self.cache_dir):
+                sources.setdefault(t, "sp500")
+            names = sorted(sources)
         if not names:
             raise ValueError("no tickers: paste some, send a CSV, or use the watchlist or holdings")
         horizons = tuple(int(h) for h in body.get("horizons") or (5, 20, 60))
@@ -561,6 +566,47 @@ class App:
         return {"shortlist": wanted[:limit], "readings": out}
 
     # --- capital: the three amounts, against what the books actually hold ---
+
+    def signals(self, ticker: str | None = None) -> dict:
+        """Saved trend, breakout and crash signals with the daily decision's actions: reads only."""
+        from tradingagents.stocks import daily, signals
+
+        return signals.board(self.store.con, daily.load(self.store.con), 20, ticker)
+
+    def analysis_state(self) -> dict:
+        return self.analysis.state()
+
+    def start_analysis(self, body: dict) -> bool:
+        """The agents' full analysis of one ticker as of a chosen day (paid: asked for by a click)."""
+        from tradingagents.dataflows.symbols import safe_ticker_component
+        from tradingagents.optimizer.ai_views import ANALYST_ROLES, analyze
+
+        g = self.store.settings("global")
+        ticker = str(body.get("ticker") or "").strip().upper()
+        if not ticker:
+            raise ValueError("no ticker")
+        day = str(body.get("date") or _today())
+        try:
+            when = date.fromisoformat(day)
+        except ValueError:
+            raise ValueError("the date must look like 2026-10-23") from None
+        if when > date.today():
+            raise ValueError("the agents can only analyze a day that has happened")
+        if when.weekday() >= 5:
+            raise ValueError(f"{day} is a weekend: pick a trading day")
+        analysts = [a for a in (body.get("analysts") or g["ai_analysts"]) if a in ANALYST_ROLES]
+        if not analysts:
+            raise ValueError("pick at least one analyst")
+        config = {**self.config, "agent_models": g["ai_agent_models"]}
+        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
+        est = g["ai_estimates"]["rating"] * max(1, len(analysts))
+
+        def work(job):
+            job.progress = f"agents analyzing {ticker} as of {day} ({', '.join(analysts)}); a few minutes"
+            result, how = analyze(ticker, day, config, analysts, self.gateway(), folder, est_usd=est, allow_paid=True)
+            return {**result, "how": how, "ticker": ticker}
+
+        return self.analysis.start(work)
 
     def screen_state(self) -> dict:
         from tradingagents.stocks import screen
@@ -788,9 +834,9 @@ class App:
                 for day in sorted(folder.iterdir(), reverse=True):
                     rep = day / "reports"
                     if rep.is_dir():
-                        found.append({"date": day.name, "files": [{"name": f.stem.replace("_", " "),
-                                                                   "path": str(f.resolve())}
-                                                                  for f in sorted(rep.glob("*.md"))]})
+                        found.append({"date": day.name, "files": [
+                            {"name": " / ".join(f.relative_to(rep).with_suffix("").parts).replace("_", " "),
+                             "path": str(f.resolve())} for f in sorted(rep.rglob("*.md"))]})
             from tradingagents.memory import TradingMemoryLog
             ratings = [{"date": e["date"], "rating": e["rating"]} for e in TradingMemoryLog(self.config).load_entries()
                        if e.get("ticker", "").upper() == symbol]
@@ -1109,6 +1155,10 @@ def make_handler(app: App):
                     self._json(app.combined_forecasts(int(query.get("horizon") or 20), query.get("universe") or "etf"))
                 elif url.path == "/api/screen/quality":
                     self._json(app.screen_state())
+                elif url.path == "/api/signals":
+                    self._json(app.signals(query.get("ticker")))
+                elif url.path == "/api/analyze":
+                    self._json(app.analysis_state())
                 elif url.path == "/api/decisions":
                     self._json(app.decisions_state())
                 elif url.path == "/api/capital":
@@ -1226,6 +1276,8 @@ def make_handler(app: App):
                     self._started(app.start_explain(), "The market explanation")
                 elif self.path == "/api/screen/quality":
                     self._started(app.start_screen(), "The quality screen")
+                elif self.path == "/api/analyze":
+                    self._started(app.start_analysis(body), "An agent analysis")
                 elif self.path == "/api/decisions/run":
                     self._started(app.start_decisions(body), "A decision run")
                 elif self.path == "/api/capital":

@@ -396,20 +396,24 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     </section>
 
     <section class="tab" id="scanTab">
-      <div class="page-head"><div><h2>Screener</h2><p><b>Score</b> is expected growth above cash for each unit of worst-case drop: what the risk budget is spent on. Chosen funds are marked on the left.</p></div></div>
-      <div class="card">
+      <div class="page-head"><div><h2>Screener</h2><p id="scrIntro"></p></div>
+        <div class="seg" role="group" aria-label="What to screen"><button data-scr="stocks">Stocks: quality, Wall Street, signals</button><button data-scr="funds">Funds for the plan</button></div></div>
+      <div class="card" id="fundsCard">
         <div class="row" style="margin:0 0 12px"><input type="text" id="scanFilter" placeholder="Filter by ticker, name or sector, e.g. MSFT, quantum, Technology" style="max-width:420px"></div>
         <div class="table-wrap"><table id="scanTable"></table></div>
         <div class="row" id="scanMore" style="display:none"><button class="ghost" id="scanToggle"></button></div>
       </div>
       <div class="card" id="qsCard">
-        <h3>Stocks: quality checklist and Wall Street</h3>
-        <p class="muted">For each S&amp;P 500 stock (and your watchlist): the ticker page's quality checklist (moat, financial strength, profitability) as one score, valuation kept apart, and Wall Street's consensus and price-target upside, combined into one rank. Facts and opinions as of today, not a tested forecast. Click a column to sort; click a ticker for its full page.</p>
+        <h3>Stocks: quality checklist, Wall Street and signals</h3>
+        <p class="muted">For each S&amp;P 500 stock (and your watchlist): the ticker page's quality checklist (moat, financial strength, profitability) as one score, valuation kept apart, and Wall Street's consensus and price-target upside, combined into one rank. <b>Signals and action</b> shows the stock models' trend, breakout and crash warnings and the daily decision's ENTER / WAIT / HOLD / EXIT. Click a column to sort; click a ticker for its full page.</p>
+        <div class="seg" role="group" aria-label="Columns" style="margin:0 0 10px"><button data-qv="quality">Quality and Wall Street</button><button data-qv="signals">Signals and action</button></div>
         <div class="row" style="margin:0 0 10px">
           <button id="qsBuild">Build or refresh the screen</button>
+          <button class="ghost" id="sgBuild" title="Fits this week's stock models if needed and scores every S&amp;P 500 stock: free, on this machine, a few minutes">Compute signals for all</button>
           <input type="text" id="qsFilter" placeholder="Filter by ticker, name or sector" style="max-width:300px">
           <span class="muted small" id="qsStatus"></span>
         </div>
+        <p class="muted small" id="sgStatus" style="margin:0 0 8px"></p>
         <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
         <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
         <details class="small"><summary><b>How the scores and ranks are measured</b></summary>
@@ -420,6 +424,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
             <li><b>Target upside</b>: the mean analyst price target ÷ the last close − 1.</li>
             <li><b>Combined score (0–100)</b>: each stock gets three percentiles among the stocks screened (quality score, consensus with stronger buys higher, target upside); the combined score is their average × 100. 100 would be the best on all three. Hover over a score to see its three parts. A stock missing one measure is averaged on the other two (noted next to its name).</li>
             <li><b>Combined rank</b>: stocks ordered by combined score, 1 = highest; ties go to the higher quality score, then the ticker.</li>
+            <li><b>Signals</b>: the stock models' probabilities over 20 sessions, each compared with how often it happened to any stock in training (the lift: 1.0× is ordinary) and with today's other stocks (a warning also needs the top fifth, so a market-wide shift does not flag everyone). Breakout likely: P(close above the recent range) ≥ 1.2× usual. Breakdown risk: P(close below it) ≥ 1.2× usual. Crash warning: P(a large loss while held) ≥ 1.5× usual and ≥ 10%. Deep drawdown warning: ≥ 1.5× usual and ≥ 20%. A model that gives nearly every stock the same probability raises no warning and says so. Trend: up, down or sideways when its probability is ≥ 1.15× its usual share and in today's top fifth; otherwise "no clear trend". Action: the latest daily decision (Decisions tab); only its top candidates and Trading holdings get one. None of it is validated for trading.</li>
             <li><b>Valuation</b> is shown but not in the score, so a good company and a cheap one stay distinguishable. None of these was tested for predicting returns; it is a screen of facts and opinions as of today.</li>
           </ul>
         </details>
@@ -985,12 +990,25 @@ $("fcUse").onchange = async () => {
 };
 
 // --- the quality and Wall Street screen ---
-let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false;
+let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false, qsView = store.get("qsView", "quality"), sgData = null;
 const QS_COLS = [["rank", "Combined rank"], ["ticker", "Ticker"], ["combined_score", "Combined score"],
   ["quality_rank", "Quality rank"], ["quality_score", "Quality score"], ["moat_passed", "Moat"],
   ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags (checks)"], ["implied_growth", "Implied growth"],
   ["forward_pe", "Fwd P/E"], ["analyst_mean", "Consensus"], ["analysts", "Analysts"], ["target_upside", "Target upside"]];
+const SG_COLS = [["rank", "Combined rank"], ["ticker", "Ticker"], ["action", "Action"], ["trend", "Trend (20 sessions)"],
+  ["lift_up", "Breakout lift"], ["lift_down", "Breakdown lift"], ["p_large_loss", "P(large loss)"], ["lift_crash", "Crash lift"],
+  ["warnings", "Warnings"], ["quality_score", "Quality score"], ["analyst_mean", "Consensus"]];
+const ACT_ORDER = {ENTER: 0, EXIT: 1, REDUCE: 2, HOLD: 3, WAIT: 4};
+function qsSignal(r) { return sgData ? sgData[r.ticker] : null; }
 function qsValue(r, k) {
+  const g = qsSignal(r), sg = g && g.signal && g.signal.status === "ok" ? g.signal : null;
+  if (k === "action") return g && g.decision ? ACT_ORDER[g.decision.action] ?? 5 : null;
+  if (k === "trend") return sg ? (sg.trend_p == null ? "~" : sg.trend + (1 - sg.trend_p).toFixed(3)) : null;
+  if (k === "lift_up") return sg ? sg.lifts.up_break : null;
+  if (k === "lift_down") return sg ? sg.lifts.down_break : null;
+  if (k === "lift_crash") return sg ? sg.lifts.large_loss : null;
+  if (k === "p_large_loss") return sg ? sg.forecast.p_large_loss : null;
+  if (k === "warnings") return sg ? sg.warnings.length : null;
   if (k === "strength_flags") return r.strength ? r.strength.flag : null;
   if (k === "valuation_flags") return r.valuation ? r.valuation.flag + 0.5 * r.valuation.warn : null;
   return r[k];
@@ -1013,6 +1031,8 @@ function renderScreen() {
   $("qsToggle").textContent = qsAll ? `Show the first ${SHOWN}` : `Show all ${rows.length}`;
   $("qsToggle").onclick = () => { qsAll = !qsAll; renderScreen(); };
   const arrow = c => qsSort.key === c ? (qsSort.dir < 0 ? " ▾" : " ▴") : "";
+  document.querySelectorAll("[data-qv]").forEach(b => b.setAttribute("aria-pressed", b.dataset.qv === qsView));
+  if (qsView === "signals") { renderSignals(shown, arrow); return; }
   $("qsTable").innerHTML = "<tr>" + QS_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${c === "ticker" ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
     shown.map(r => `<tr><td>${r.rank}</td><td class="l" style="max-width:190px"><b>${tk(r.ticker)}</b><div class="muted small">${esc(r.name || "")}${r.note ? ` (${esc(r.note)})` : ""}</div></td>
       <td title="${qsParts(r)}">${r.combined_score == null ? "–" : r.combined_score.toFixed(1)}</td>
@@ -1031,6 +1051,57 @@ function renderScreen() {
     renderScreen();
   });
 }
+const liftCell = (v, bad) => v == null ? "–" : `<span class="${v >= 1.2 ? (bad ? "neg" : "pos") : v <= 0.8 ? "muted" : ""}">${v.toFixed(2)}×</span>`;
+function renderSignals(shown, arrow) {
+  $("qsTable").innerHTML = "<tr>" + SG_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${["ticker", "warnings"].includes(c) ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
+    shown.map(r => {
+      const g = qsSignal(r) || {}, d = g.decision, sg = g.signal && g.signal.status === "ok" ? g.signal : null;
+      const act = d ? `<b class="${{ENTER: "pos", EXIT: "neg", REDUCE: "neg"}[d.action] || "muted"}">${esc(d.action)}</b>${d.paper_action ? ` <span class="muted small">${esc(d.paper_action)}</span>` : ""}` : "<span class='muted small'>–</span>";
+      return `<tr><td>${r.rank}</td><td class="l" style="max-width:190px"><b>${tk(r.ticker)}</b><div class="muted small">${esc(r.name || "")}</div></td>
+        <td title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}">${act}</td>
+        <td class="${sg && sg.trend_p == null ? "muted small" : ""}">${sg ? `${esc(sg.trend)}${sg.trend_p != null ? ` <span class="muted small">${pct(sg.trend_p, 0)}</span>` : ""}` : "–"}</td>
+        <td>${sg ? liftCell(sg.lifts.up_break, false) : "–"}</td><td>${sg ? liftCell(sg.lifts.down_break, true) : "–"}</td>
+        <td>${sg ? pct(sg.forecast.p_large_loss, 0) : "–"}</td><td>${sg ? liftCell(sg.lifts.large_loss, true) : "–"}</td>
+        <td class="l small">${sg ? (sg.warnings.length ? sg.warnings.map(w => `<div class="${w.level === "info" ? "pos" : "neg"}">${esc(w.text)}</div>`).join("") : "<span class='muted'>none</span>") : "<span class='muted'>no forecast saved</span>"}</td>
+        <td>${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td>
+        <td>${r.analyst_mean == null ? "–" : r.analyst_mean.toFixed(2)}</td></tr>`;
+    }).join("");
+  $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+    const c = th.dataset.k;
+    const natural = ["rank", "action", "trend", "analyst_mean", "ticker"].includes(c) ? 1 : -1;
+    qsSort = {key: c, dir: qsSort.key === c ? -qsSort.dir : natural};
+    renderScreen();
+  });
+}
+async function loadSignalsBoard() {
+  try {
+    const b = await api("/api/signals");
+    sgData = Object.fromEntries(b.rows.map(r => [r.ticker, r]));
+    const withSig = b.rows.filter(r => r.signal && r.signal.status === "ok"), n = withSig.length, dt = withSig[0]?.signal.data_to;
+    const flat = (withSig[0]?.signal.flat || []).filter(k => ["large_loss", "deep_drawdown"].includes(k));
+    $("sgStatus").textContent = n ? `Signals for ${n} stocks, data to ${dt}${b.decision ? `; actions from the decision for ${b.decision.executes} (${b.decision.mode})` : "; no daily decision yet"}.` +
+      (flat.length ? " The crash and deep-drawdown models give nearly every stock the same probability today, so they raise no stock-specific crash warning." : "") : "No signals saved yet: compute them.";
+  } catch (e) { $("sgStatus").textContent = e.message; }
+  renderScreen();
+}
+async function pollSignalRun() {
+  const d = await api("/api/stocks").catch(() => null), j = d && d.job;
+  if (j && j.running) { $("sgStatus").textContent = j.progress + "…"; $("sgBuild").disabled = true; setTimeout(pollSignalRun, 5000); return; }
+  $("sgBuild").disabled = false;
+  if (j && j.error) $("sgStatus").textContent = "Failed: " + j.error; else loadSignalsBoard();
+}
+$("sgBuild").onclick = async () => { try { await api("/api/stocks/run", {sp500: true, watchlist: true, horizons: [20], news: false}); pollSignalRun(); } catch (e) { showError(e.message); } };
+document.querySelectorAll("[data-qv]").forEach(b => b.onclick = () => { qsView = b.dataset.qv; store.set("qsView", qsView); qsSort = {key: "rank", dir: 1}; renderScreen(); });
+function showScreener(which) {
+  store.set("scr", which);
+  document.querySelectorAll("[data-scr]").forEach(b => b.setAttribute("aria-pressed", b.dataset.scr === which));
+  $("fundsCard").style.display = which === "funds" ? "" : "none";
+  $("qsCard").style.display = which === "stocks" ? "" : "none";
+  $("scrIntro").innerHTML = which === "funds" ? "<b>Score</b> is expected growth above cash for each unit of worst-case drop: what the risk budget is spent on. Chosen funds are marked on the left."
+    : "S&amp;P 500 stocks ranked on the quality checklist and Wall Street, with the stock models' trend, breakout and crash signals and the daily decision's action.";
+}
+document.querySelectorAll("[data-scr]").forEach(b => b.onclick = () => showScreener(b.dataset.scr));
+showScreener(store.get("scr", "stocks"));
 async function loadScreen() {
   try { qsData = await api("/api/screen/quality"); } catch (e) { $("qsStatus").textContent = e.message; return; }
   const j = qsData.job, l = qsData.latest;
@@ -1541,7 +1612,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); loadCapital(); loadDecisions(); loadScreen(); loadAgents(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); loadCapital(); loadDecisions(); loadScreen(); loadSignalsBoard(); loadAgents(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over

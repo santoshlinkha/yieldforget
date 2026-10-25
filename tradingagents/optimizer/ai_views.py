@@ -91,3 +91,37 @@ def collect_ratings(tickers, config: dict, analysts=DEFAULT_ANALYSTS, trade_date
         if rating and rating != RATING_REVIEW:
             ratings[ticker] = rating
     return ratings, failures
+
+
+def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, report_dir, est_usd: float = 0.30,
+            allow_paid: bool = False) -> tuple[dict, str]:
+    """One full TradingAgents run for ``ticker`` as of ``trade_date``, its reports saved under ``report_dir``.
+
+    Paid, so only on an explicit request (``allow_paid``), through the gateway: held to the budget,
+    every model priced, cached by its inputs (the same ticker, day, analysts and models runs once),
+    and its usage recorded. Returns ``(result, "cache" | "paid")``.
+    """
+    from pathlib import Path
+
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    analysts = tuple(analysts)
+    provider = config["llm_provider"]
+    moved = roles.validate(config.get("agent_models"))
+    used = roles.models_used(config, [r for r in roles.ROLES if r not in ANALYST_ROLES or r in analysts])
+
+    def work(callback):
+        graph = TradingAgentsGraph(analysts, config=config, callbacks=[callback])
+        state, rating = graph.propagate(ticker, trade_date)
+        folder = Path(report_dir)
+        graph.save_reports(state, ticker, folder)
+        return {"rating": rating, "date": trade_date, "folder": str(folder)}
+
+    return gateway.run(
+        task="analysis", provider=provider, model=config["deep_think_llm"], schema_version=RATING_SCHEMA,
+        info_cutoff=trade_date,
+        inputs={"ticker": ticker, "analysts": sorted(analysts), "quick": config["quick_think_llm"],
+                "deep": config["deep_think_llm"], "debate_rounds": config.get("max_debate_rounds"),
+                **({"agents": moved} if moved else {})},
+        also_priced=[(provider, config["quick_think_llm"]), *used], work=work, est_usd=est_usd,
+        est_requests=EST_REQUESTS_BASE + EST_REQUESTS_PER_ANALYST * len(analysts), allow_paid=allow_paid)

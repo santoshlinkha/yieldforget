@@ -121,10 +121,21 @@ h3.sec:first-of-type { border-top: 0; padding-top: 0; margin-top: 4px; }
       <div class="card"><h2>Dividends, splits and share count</h2><div id="corp"></div></div>
       <div class="card"><h2>Financial statements</h2><div id="fin"></div></div>
       <div class="card"><h2>About</h2><div id="about"></div></div>
-      <div class="card"><h2>Saved analysis reports</h2><div id="reports"></div></div>
     </div>
     <div>
       <div class="card"><h2>In your account</h2><div id="mine"></div></div>
+      <div class="card"><h2>Signals and action</h2><div id="sig"><p class="muted">Loading…</p></div></div>
+      <div class="card"><h2>Saved analysis reports</h2>
+        <div id="runAgents">
+          <p class="muted small">Run the TradingAgents team (analysts, bull/bear debate, trader, risk debate, portfolio manager) on this ticker as of a day you pick; they see only information up to that day. Paid: one full analysis held to your AI budget; a day already analyzed with the same settings is reused at no charge. Which model each agent uses: Settings → Agent models.</p>
+          <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin:6px 0">
+            <label class="small">Day <input type="date" id="agDate"></label>
+            <span class="small" id="agAnalysts"></span>
+            <button id="agRun">Run the agents</button>
+          </div>
+          <p class="small muted" id="agState"></p>
+        </div>
+        <div id="reports"></div></div>
       <div class="card"><h2>Expected return</h2><div id="fc"></div></div>
       <div class="card"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
     </div>
@@ -417,7 +428,7 @@ async function load() {
     let h = rp.ratings.length ? `<p class="small">AI ratings on record: ${rp.ratings.map(r => `${esc(r.date)} <b>${esc(r.rating)}</b>`).join(" · ")}</p>` : "";
     h += rp.runs.length ? rp.runs.map(run => `<details><summary>${esc(run.date)}: ${run.files.length} report(s)</summary>` +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}">${esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
-      : "<p class='muted'>No saved TradingAgents analysis for this ticker. Run one with the analyze command or the AI ratings button (paid, budgeted).</p>";
+      : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     $("reports").innerHTML = h;
     $("reports").querySelectorAll("a[data-path]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
@@ -426,7 +437,113 @@ async function load() {
     });
   }
 }
+// --- signals: the saved trend, breakout and crash forecasts, and today's decision for this stock ---
+const ACTION_CLS = {ENTER: "up", EXIT: "down", REDUCE: "down", HOLD: "", WAIT: "muted", REVIEW: "muted"};
+async function getJSON(url, body) {
+  const res = await fetch(url, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  const d = await res.json();
+  if (!res.ok) throw new Error(d.error || res.statusText);
+  return d;
+}
+function signalTable(sg) {
+  const f = sg.forecast, b = sg.base_rates, ev = sg.evidence || {};
+  const line = (name, key, p, base, kind) => {
+    const lift = sg.lifts[key];
+    const flat = (sg.flat || []).includes(key), rank = (sg.ranks || {})[key];
+    const cls = flat ? "muted" : lift >= 1.2 ? (kind === "good" ? "pos" : "neg") : lift != null && lift <= 0.8 ? "muted" : "";
+    return `<tr><td class="l">${name}</td><td>${pct(p, 0)}</td><td class="muted">${pct(base, 0)}</td>` +
+      `<td class="${cls}">${lift == null ? "–" : lift.toFixed(2) + "×"}</td>` +
+      `<td class="muted">${flat ? "same for all" : rank == null ? "–" : rank >= 0.5 ? `top ${Math.max(1, Math.round((1 - rank) * 100))}%` : `bottom ${Math.max(1, Math.round(rank * 100))}%`}</td><td class="muted small">${esc(ev[key] || "")}</td></tr>`;
+  };
+  return `<table><tr><th class="l">Within ${sg.horizon} sessions</th><th>Model</th><th>Usual</th><th>Lift</th><th>Among today's stocks</th><th>Evidence</th></tr>` +
+    line("Breakout above the recent range", "up_break", f.p_up_break, b.up_break, "good") +
+    line("Breakdown below the recent range", "down_break", f.p_down_break, b.down_break, "bad") +
+    line("Large loss during the position", "large_loss", f.p_large_loss, b.large_loss, "bad") +
+    line("Deep drawdown", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>`;
+}
+async function loadSignals() {
+  let s;
+  try { s = await getJSON("/api/signals?ticker=" + encodeURIComponent(symbol)); }
+  catch (e) { $("sig").innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+  const row = s.rows[0] || {}, dec = row.decision, sg = row.signal, head = s.decision;
+  let h = "";
+  if (dec) {
+    const why = (dec.blocked || dec.reasons || []).join("; ");
+    h += `<div class="consensus"><span class="big ${ACTION_CLS[dec.action] || ""}">${esc(dec.action)}</span>` +
+      `<span class="muted">${dec.paper_action ? esc(dec.paper_action) + " · " : ""}${dec.kind === "held" ? "held in Trading" : "today's candidate"}, ` +
+      `executes at the close of ${esc(head.executes)}${head.mode === "experimental" ? " · experimental mode" : ""}</span></div>`;
+    if (dec.expected_net != null)
+      h += `<p class="small">Expected net after costs ${spct(dec.expected_net, 2)}, P(profit) ${pct(dec.p_win, 0)}${dec.dollars ? `, size ${money(dec.dollars)}` : ""}` +
+        `${dec.tied_with ? ` <span class="muted">(${dec.tied_with} other stocks share this estimate: the score-to-P&amp;L map groups stocks in tenths)</span>` : ""}</p>`;
+    if (why) h += `<p class="small muted">Why not more: ${esc(why)}</p>`;
+  } else {
+    h += `<p class="small muted">${head ? `Not among the candidates or holdings of the decision for ${esc(head.executes)} (data to ${esc(head.data_to)}): only the top-ranked stocks and Trading holdings get an action.`
+      : "No daily decision made yet: Decisions → Make today's decision."}</p>`;
+  }
+  if (sg && sg.status === "ok") {
+    const f = sg.forecast;
+    const tp = [["up", f.trend_up], ["down", f.trend_down], ["sideways", f.trend_sideways], ["unclear", f.trend_unclear]];
+    h += `<h3 class="sec">Trend over ${sg.horizon} sessions</h3><p class="small">Trend: <b>${esc(sg.trend)}</b>${sg.trend_p != null ? ` (${pct(sg.trend_p, 0)}, ${(sg.trend_lifts[sg.trend] || 0).toFixed(2)}× its usual share)` : ""} · ` +
+      tp.map(([n, v]) => `${n} ${pct(v, 0)}`).join(" · ") + `</p>`;
+    h += signalTable(sg);
+    h += sg.warnings.length ? `<ul class="small">${sg.warnings.map(w => `<li class="${w.level === "high" ? "down" : w.level === "warn" ? "neg" : "pos"}">${esc(w.text)}</li>`).join("")}</ul>`
+      : `<p class="small muted">No breakout, breakdown or crash warning for this stock today.</p>`;
+    const flatNames = {large_loss: "large-loss (crash)", deep_drawdown: "deep-drawdown", up_break: "breakout", down_break: "breakdown"};
+    const flat = (sg.flat || []).filter(k => flatNames[k]);
+    if (flat.length) h += `<p class="small note">The ${flat.map(k => flatNames[k]).join(" and ")} model${flat.length > 1 ? "s give" : " gives"} nearly every stock the same probability today, so ${flat.length > 1 ? "they have" : "it has"} no view on this stock in particular: no stock-specific warning can come from ${flat.length > 1 ? "them" : "it"}. A crash can still happen; this only says the model cannot tell which stocks are more exposed.</p>`;
+    h += `<p class="small muted">From the stock models, data to ${esc(sg.data_to)}. "Usual" is how often it happened to any stock in training; a warning needs a lift of ${s.rules.lift_break}× (breakouts) or ${s.rules.lift_crash}× (crashes) and the top fifth of today's stocks, so a market-wide shift does not flag every stock. Evidence says whether the walk-forward study backed that signal ("untested": not checked yet). Not validated for trading.</p>`;
+  } else {
+    h += `<p class="small muted">${sg ? esc((sg.reasons || []).join("; ") || sg.status) : "No trend, breakout or crash forecast saved for this stock yet."}</p>`;
+  }
+  h += `<div class="row"><button class="ghost" id="sigRun">${sg ? "Refresh" : "Compute"} signals for ${esc(symbol)}</button><span class="muted small" id="sigState"></span></div>`;
+  $("sig").innerHTML = h;
+  $("sigRun").onclick = async () => {
+    try { await getJSON("/api/stocks/run", {tickers: symbol, horizons: [20], news: false}); pollStocks(); }
+    catch (e) { $("sigState").textContent = e.message; }
+  };
+}
+async function pollStocks() {
+  const d = await getJSON("/api/stocks").catch(() => null);
+  const j = d && d.job;
+  if (j && j.running) {
+    $("sigState").textContent = `${j.progress}… (free, on this machine; the first run of the week fits the models: a few minutes)`;
+    setTimeout(pollStocks, 4000);
+  } else if (j && j.error) $("sigState").textContent = "Failed: " + j.error;
+  else loadSignals();
+}
+
+// --- the agents' analysis for a chosen day ---
+const ANALYSTS = [["market", "price"], ["social", "sentiment"], ["news", "news"], ["fundamentals", "fundamentals"]];
+function lastWeekday() {
+  const d = new Date();
+  if (d.getHours() < 17) d.setDate(d.getDate() - 1);
+  while ([0, 6].includes(d.getDay())) d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+$("agDate").value = lastWeekday();
+$("agDate").max = lastWeekday();
+$("agAnalysts").innerHTML = "Analysts: " + ANALYSTS.map(([k, l]) => `<label class="small"><input type="checkbox" value="${k}" ${k === "market" ? "checked" : ""}> ${l}</label>`).join(" ");
+async function pollAnalysis(first) {
+  const j = await getJSON("/api/analyze").catch(() => null);
+  if (!j) return;
+  $("agRun").disabled = j.running;
+  if (j.running) { $("agState").textContent = j.progress + "…"; setTimeout(() => pollAnalysis(false), 5000); return; }
+  if (j.error) $("agState").innerHTML = `<span class="neg">${esc(j.error)}</span>`;
+  else if (j.result && j.result.ticker === symbol) {
+    $("agState").innerHTML = `Done: <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} (${j.result.how === "cache" ? "reused, no charge" : "paid"}). The reports are below.`;
+    if (!first) load();
+  }
+}
+$("agRun").onclick = async () => {
+  const analysts = [...$("agAnalysts").querySelectorAll("input:checked")].map(x => x.value);
+  if (!confirm(`Run the agents on ${symbol} as of ${$("agDate").value} with ${analysts.length} analyst(s)? This is a paid AI run, held to your budget.`)) return;
+  try { await getJSON("/api/analyze", {ticker: symbol, date: $("agDate").value, analysts}); pollAnalysis(false); }
+  catch (e) { $("agState").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+};
+
 load();
+loadSignals();
+pollAnalysis(true);
 </script>
 </body>
 </html>
