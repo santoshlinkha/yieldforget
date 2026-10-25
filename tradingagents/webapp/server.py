@@ -762,28 +762,16 @@ class App:
         from tradingagents.agents.manual import build_prompt
         from tradingagents.dataflows.config import set_config
         from tradingagents.dataflows.vendors.yahoo import history as yh
-        from tradingagents.stocks.daily import CASH_FUNDS
 
         ticker, day = ticker.strip().upper(), self._check_day(day)
         set_config(self.config)
-        held = bool(self.store.ledger.state("combined", _today()).positions.get(ticker)) and ticker not in CASH_FUNDS
         profile = {}
         try:
             profile = yh.profile(ticker, self.cache_dir) or {}
         except Exception:  # the name is a nicety
             pass
-        row = (self.signals(ticker)["rows"] or [{}])[0]
-        ev = []
-        if row.get("verdict"):
-            ev.append(f"Rule verdict: {row['verdict']['verdict']} ({row['verdict']['summary']})")
-            ev += [f"- {c['name']}: {c['detail']}" for c in row["verdict"]["checks"]]
-        sg = row.get("signal")
-        if sg and sg.get("status") == "ok":
-            f, b = sg["forecast"], sg["base_rates"]
-            ev.append(f"Stock models, next 20 sessions (data to {sg['data_to']}): P(breakout above the recent range) "
-                      f"{f['p_up_break']:.0%} vs {b['up_break']:.0%} usual; P(breakdown below it) {f['p_down_break']:.0%} vs "
-                      f"{b['down_break']:.0%} usual; trend: {sg['trend']}. These signals are untested.")
-        prompt = build_prompt(ticker, day, profile.get("longName") or profile.get("shortName") or "", held, "\n".join(ev))
+        # Raw data only: the app's verdict, model rank and signals stay out, so the chat's view is its own.
+        prompt = build_prompt(ticker, day, profile.get("longName") or profile.get("shortName") or "")
         return {"ticker": ticker, "date": day, "prompt": prompt, "chars": len(prompt), "tokens_est": len(prompt) // 4}
 
     def manual_answer(self, body: dict) -> dict:

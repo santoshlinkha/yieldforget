@@ -1,9 +1,10 @@
 """Run the analysis by hand in a chat app (ChatGPT, Gemini, Claude): one prompt out, one answer back.
 
 ``build_prompt`` gathers what the agents' tools would fetch, as of the analysis day (prices, indicators,
-the verified snapshot, fundamentals, company and global news, a few macro series), adds the app's own
-evidence, and asks the chat model to play the whole team and end with the portfolio manager's decision
-as a JSON block. ``parse_answer`` reads that block back. No API is called by either: the data comes from
+the verified snapshot, fundamentals, company and global news, a few macro series) and asks the chat
+model to play the whole team and end with the portfolio manager's decision as a JSON block. It carries
+raw data only: not whether the stock is held, and none of the app's own verdicts, ranks or signals, so the
+chat's judgment is independent of the app's. ``parse_answer`` reads that block back. No API is called by either: the data comes from
 the same cached vendors the agents use, and the model runs in the user's own chat subscription.
 """
 
@@ -35,7 +36,7 @@ def _fetch(label: str, fn) -> str:
         return f"({label} unavailable: {str(exc)[:160]})"
 
 
-def build_prompt(ticker: str, day: str, company: str = "", held: bool = False, app_evidence: str = "") -> str:
+def build_prompt(ticker: str, day: str, company: str = "") -> str:
     from tradingagents.dataflows.router import route_to_vendor
     from tradingagents.dataflows.vendors.yahoo.snapshot import build_verified_market_snapshot
 
@@ -52,7 +53,9 @@ def build_prompt(ticker: str, day: str, company: str = "", held: bool = False, a
     macro = "\n\n".join(_cut(_fetch(m, lambda m=m: route_to_vendor("get_macro_indicators", m, day, 365)), LIMITS["macro"])
                         for m in MACRO)
     who = f"{ticker}" + (f" ({company})" if company else "")
-    return f"""You are a trading research team analyzing {who} as of the market close on {day}. Treat {day} as today: use only the data below, which stops at that date, and never invent a number that is not in it. When the data does not support a claim, say so. The person you are advising {"already holds this stock" if held else "does not hold this stock"}, in a long-only retirement account (no shorting, no leverage, no day trading).
+    # Raw data only: no holding status and none of the app's own verdicts, ranks or signals, so the chat
+    # model's judgment is its own and can be compared with the app's rather than echo it.
+    return f"""You are a trading research team analyzing {who} as of the market close on {day}. Treat {day} as today: use only the data below, which stops at that date, and never invent a number that is not in it. When the data does not support a claim, say so. Judge it as an investment for a long-only retirement account (no shorting, no leverage, no day trading), without assuming whether it is already owned.
 
 Work through these roles in order, writing each as its own section:
 1. Technical analyst: trend, momentum, support and resistance from the prices and indicators; quote exact values from the data.
@@ -92,9 +95,6 @@ End your answer with the portfolio manager's decision as one JSON code block, ex
 
 === MACRO DATA (FRED) ===
 {macro}
-
-=== THE APP'S OWN EVIDENCE (rule checks and model signals; none is a tested forecast) ===
-{app_evidence or "(none)"}
 """
 
 
