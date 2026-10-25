@@ -124,6 +124,10 @@ def build_default_config() -> dict:
         "max_recur_limit": 100,
         # Rounds of tool calls an analyst may make before it is asked for its report.
         "max_tool_rounds": 20,
+        # Tool output trimmed for tokens: prices to the cent, no placeholder or all-zero columns, the
+        # last tool_max_price_rows sessions of the price table. False sends the vendors' output as is.
+        "compact_tool_output": True,
+        "tool_max_price_rows": 60,
         # News / data fetching parameters
         # Increase for longer lookback strategies or to broaden macro coverage;
         # decrease to reduce token usage in agent prompts.

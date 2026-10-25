@@ -4,15 +4,59 @@ Each dated tool takes the run's ``trade_date`` from graph state (``InjectedState
 and never serves data past it, whatever date the model asks for.
 """
 
+import re
 from typing import Annotated
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.date_window import as_of, as_of_window
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.router import no_data_available, route_to_vendor, vendor_unavailable
 from tradingagents.dataflows.vendors.yahoo.snapshot import build_verified_market_snapshot
+
+
+_LONG_DECIMAL = re.compile(r"(-?\d+\.\d{2})\d+")
+_NO_SESSION = re.compile(r"^\d{4}-\d{2}-\d{2}: N/A: Not a trading day.*$\n?", re.M)
+
+
+def _compact() -> bool:
+    return bool(get_config().get("compact_tool_output", True))
+
+
+def compact_prices(text: str, max_rows: int) -> str:
+    """The price table as the model needs it: cents, no all-zero dividend / split columns, the last
+    ``max_rows`` sessions (a note says how many were left out). Tokens, not information, are dropped:
+    the indicator tools cover the longer trend."""
+    lines = text.splitlines()
+    head = [ln for ln in lines if ln.startswith("#") or not ln.strip()]
+    rows = [ln for ln in lines if ln.strip() and not ln.startswith("#")]
+    if len(rows) < 2:
+        return text
+    header, data = rows[0].split(","), [r.split(",") for r in rows[1:]]
+    drop = {i for i, name in enumerate(header) if name.strip() in ("Dividends", "Stock Splits")
+            and all(len(r) > i and float(r[i] or 0) == 0 for r in data if _is_number(r[i] if len(r) > i else ""))}
+    keep = [i for i in range(len(header)) if i not in drop]
+    left_out = max(0, len(data) - max_rows)
+    data = data[-max_rows:] if max_rows else data
+    body = [",".join(header[i] for i in keep)] + [",".join(r[i] for i in keep if i < len(r)) for r in data]
+    note = [f"# Showing the last {len(data)} sessions ({left_out} earlier left out to save tokens; "
+            f"the indicators cover the longer trend)"] if left_out else []
+    return _LONG_DECIMAL.sub(r"\1", "\n".join([*[h for h in head if h.strip()], *note, "", *body]))
+
+
+def _is_number(x: str) -> bool:
+    try:
+        float(x)
+        return True
+    except ValueError:
+        return False
+
+
+def compact_indicator(text: str) -> str:
+    """Indicator values to two decimals, without the weekend and holiday placeholder lines."""
+    return _LONG_DECIMAL.sub(r"\1", _NO_SESSION.sub("", text))
 
 
 @tool
@@ -32,7 +76,10 @@ def get_stock_data(
         str: A formatted dataframe containing the price data for the instrument over the date range.
     """
     start_date, end_date = as_of_window(start_date, end_date, trade_date)
-    return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+    out = route_to_vendor("get_stock_data", symbol, start_date, end_date)
+    if _compact() and isinstance(out, str):
+        out = compact_prices(out, int(get_config().get("tool_max_price_rows", 60)))
+    return out
 
 
 @tool
@@ -44,10 +91,11 @@ def get_indicators(
     trade_date: Annotated[str, InjectedState("trade_date")] = "",
 ) -> str:
     """
-    Retrieve a single technical indicator for the instrument under analysis.
+    Retrieve technical indicators for the instrument under analysis.
     Uses the configured technical_indicators vendor.
     Args:
-        indicator (str): A single technical indicator name, e.g. 'rsi', 'macd'. Call this tool once per indicator.
+        indicator (str): One indicator name, or several separated by commas, e.g. 'rsi,macd,close_50_sma'.
+            Ask for all the indicators you need in one call.
         curr_date (str): The current trading date you are trading on, YYYY-mm-dd
         look_back_days (int): How many days to look back, default is 30
     Returns:
@@ -63,7 +111,8 @@ def get_indicators(
             results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
         except ValueError as e:
             results.append(str(e))
-    return "\n\n".join(results)
+    out = "\n\n".join(results)
+    return compact_indicator(out) if _compact() else out
 
 
 @tool
