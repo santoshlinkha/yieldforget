@@ -484,7 +484,7 @@ async function load() {
   if (failed(rp)) $("reports").innerHTML = failed(rp);
   else {
     let h = rp.ratings.length ? `<p class="small">AI ratings on record: ${rp.ratings.map(r => `${esc(r.date)} <b>${esc(r.rating)}</b>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details><summary>${esc(run.date)}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+    h += rp.runs.length ? rp.runs.map(run => `<details><summary>${run.decision ? `<span class="verdict ${run.decision}" style="font-size:11px;padding:1px 8px;margin-right:6px">${run.decision}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents: ${esc(run.rating)}` : ""}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
       (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}">${esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
@@ -641,7 +641,8 @@ async function pollAnalysis(first) {
   costHint();
   if (j.error) $("agState").innerHTML = `<span class="neg">${esc(j.error)}</span>`;
   else if (j.result && j.result.ticker === symbol) {
-    $("agState").innerHTML = `Done: <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +
+    $("agState").innerHTML = (j.result.final ? `Final decision: <span class="verdict ${j.result.final.action}">${j.result.final.action}</span> · ` : "") +
+      `agents' rating <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +
       ` (${j.result.how === "cache" ? "reused, no charge" : "paid"}${j.result.fell_back ? "; the first provider failed, so Gemini ran it" : ""}). The reports are below.`;
     if (!first) { load(); loadSignals(); }
   }

@@ -558,7 +558,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <h3>Recurring buys</h3>
           <div class="table-wrap"><table class="editor" id="schedule"></table></div>
           <div class="row"><button class="ghost" id="addBuy">Add ticker</button><button id="saveSchedule">Save buys</button></div>
-          <p class="muted">The optimizer keeps your daily total but moves it to the funds that are under target.</p>
+          <p class="muted">Buys happen on market days only: never on weekends or market holidays. A weekly buy counts as a fifth of its amount each market day. The optimizer keeps your market-day total but moves it to the funds that are under target.</p>
         </div>
         <div class="card" id="riskCard">
           <h3>Risk and goals</h3>
@@ -790,8 +790,8 @@ function renderOverviewExtras(r) {
       a.schedule.map(x => `<tr><td>${tk(x.ticker)} <span class="muted">${esc(x.name || "")}</span></td><td>${usd(x.amount)}</td><td>${esc(x.frequency)}</td><td>${pct(x.weight, 0)}</td></tr>`).join("");
     const verb = {cancel: "Cancel", add: "Add", change: "Change"};
     $("autoChanges").innerHTML = a.changes.length ? `<h4>Changes from your current recurring buys</h4><ul class="change-list">` +
-      a.changes.map(c => `<li><b>${verb[c.action]}</b> ${esc(c.ticker)}` + (c.action === "cancel" ? ` (now ${usd(c.now_per_day)} a day)` :
-        `: ${usd(c.amount)} ${esc(c.frequency)}` + (c.now_per_day ? ` (now ${usd(c.now_per_day)} a day)` : "")) + `</li>`).join("") + "</ul>" : "<p class='muted'>Your recurring buys already match.</p>";
+      a.changes.map(c => `<li><b>${verb[c.action]}</b> ${esc(c.ticker)}` + (c.action === "cancel" ? ` (now ${usd(c.now_per_day)} a market day)` :
+        `: ${usd(c.amount)} ${esc(c.frequency)}` + (c.now_per_day ? ` (now ${usd(c.now_per_day)} a market day)` : "")) + `</li>`).join("") + "</ul>" : "<p class='muted'>Your recurring buys already match.</p>";
     $("autoNotes").innerHTML = a.notes.map(n => `<p>${esc(n)}</p>`).join("");
   } else {
     $("aiBudget").textContent = "";
@@ -1333,7 +1333,9 @@ $("capSave").onclick = async () => {
 // --- settings editors ---
 function editorRows(table, rows, cols) {
   table.innerHTML = "<tr>" + cols.map(c => `<th>${c.label}</th>`).join("") + "<th></th></tr>" +
-    rows.map((r, i) => "<tr>" + cols.map(c => `<td><input type="${c.type}" step="any" data-k="${c.key}" value="${esc(r[c.key] ?? "")}"></td>`).join("") +
+    rows.map((r, i) => "<tr>" + cols.map(c => c.type === "select"
+      ? `<td><select data-k="${c.key}">${c.options.map(([v, l]) => `<option value="${v}" ${(r[c.key] || c.options[0][0]) === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>`
+      : `<td><input type="${c.type}" step="any" data-k="${c.key}" value="${esc(r[c.key] ?? "")}"></td>`).join("") +
       `<td><button class="ghost" data-del="${i}" aria-label="Remove">✕</button></td></tr>`).join("");
 }
 function readRows(table) {
@@ -1341,12 +1343,16 @@ function readRows(table) {
   table.querySelectorAll("tr").forEach((tr, n) => {
     if (!n) return; const r = {};
     tr.querySelectorAll("input").forEach(inp => r[inp.dataset.k] = inp.type === "number" ? (inp.value === "" ? null : +inp.value) : inp.value.trim().toUpperCase());
+    tr.querySelectorAll("select").forEach(sel => r[sel.dataset.k] = sel.value);
     if (r.ticker) rows.push(r);
   });
   return rows;
 }
 const HOLD_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "quantity", label: "Shares", type: "number"}];
-const BUY_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "amount", label: "Amount", type: "number"}, {key: "period", label: "daily / weekly", type: "text"}];
+// Recurring buys happen on market days only (as Robinhood's "every market day"): never on weekends or
+// market holidays. The file keeps its "daily" / "weekly" keys; "daily" means every market day.
+const BUY_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "amount", label: "Amount", type: "number"},
+  {key: "period", label: "How often", type: "select", options: [["daily", "Every market day"], ["weekly", "Every week"]]}];
 function toSchedule(rows) {
   const s = {daily: {}, weekly: {}};
   rows.forEach(r => { const p = (r.period || "daily").toLowerCase() === "weekly" ? "weekly" : "daily"; if (r.amount) s[p][r.ticker] = r.amount; });

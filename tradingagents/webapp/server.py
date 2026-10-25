@@ -375,6 +375,8 @@ class App:
         g = g or self.store.settings("global")
         primary = g.get("ai_primary") or {}
         config = {**self.config, "agent_models": g["ai_agent_models"]}
+        # Free tiers answer "slow down" (429) under load; more retries ride that out instead of failing the run.
+        config["llm_max_retries"] = max(int(config.get("llm_max_retries") or 0), 6)
         if primary.get("provider"):
             same = primary["provider"] == self.config["llm_provider"]
             config.update(llm_provider=primary["provider"], quick_think_llm=primary["quick"],
@@ -697,10 +699,42 @@ class App:
                 errors.append(f"{who}: {str(exc)[:200]}")
             else:
                 job.log += [f"{ticker}: {e} -> moved on" for e in errors]
-                return {**result, "how": how, "ticker": ticker, "provider": cfg["llm_provider"],
-                        "model": cfg["deep_think_llm"], "fell_back": bool(errors)}
+                out = {**result, "how": how, "ticker": ticker, "provider": cfg["llm_provider"],
+                       "model": cfg["deep_think_llm"], "fell_back": bool(errors)}
+                out["final"] = self._write_decision(ticker, day, folder, out, cfg)
+                return out
             job.log.append(f"{ticker}: {errors[-1]}")
         raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
+
+    def _write_decision(self, ticker: str, day: str, folder: Path, result: dict, cfg: dict) -> dict:
+        """The run's final decision as one action, written first in its reports (0_FINAL_DECISION.md)."""
+        from tradingagents.llm_clients import roles
+        from tradingagents.stocks.daily import CASH_FUNDS
+        from tradingagents.stocks.verdict import ai_decision
+
+        held = bool(self.store.ledger.state("combined", _today()).positions.get(ticker)) and ticker not in CASH_FUNDS
+        ai = ai_decision({"rating": result["rating"], "date": day}, held)
+        row = (self.signals(ticker)["rows"] or [{}])[0]
+        rule = (row.get("verdict") or {})
+        used = sorted({f"{p}/{m}" for p, m in roles.resolve(cfg).values()})
+        pm = folder / "5_portfolio" / "decision.md"
+        why = {"BUY": "the agents favour buying", "HOLD": "the agents say keep what you hold",
+               "SELL": "the agents say reduce or exit", "AVOID": "the agents are bearish and you do not hold it",
+               "WATCH": "the agents say hold, and you do not own it: nothing to buy yet"}.get(ai["action"], "")
+        lines = [f"# FINAL DECISION: {ai['action']}", "",
+                 f"**{ticker}**, analyzed as of {day}. {why[0].upper() + why[1:]} (rating **{result['rating']}**; "
+                 f"{'you hold it' if held else 'you do not hold it'}).", "",
+                 f"- **Agents' rating**: {result['rating']} (Buy / Overweight -> BUY, Hold -> HOLD or WATCH, "
+                 f"Underweight / Sell -> SELL or AVOID)",
+                 f"- **App's rule verdict**: {rule.get('verdict', 'none')}" + (f" ({rule['summary']})" if rule.get("summary") else "")
+                 + (f"; {'agrees' if rule.get('verdict') == ai['action'] else 'disagrees'}" if rule.get("verdict") else ""),
+                 f"- **Models**: {', '.join(used)}" + (" (after a fallback)" if result.get("fell_back") else ""),
+                 "- An AI rating is an LLM's judgment on the evidence it read, not a tested forecast. You place any order.", ""]
+        if pm.is_file():
+            lines += ["## The portfolio manager's decision", "", pm.read_text(encoding="utf-8")]
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "0_FINAL_DECISION.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return {"action": ai["action"], "rating": result["rating"], "held": held, "rule": rule.get("verdict")}
 
     def start_analysis(self, body: dict) -> bool:
         """The agents' full analysis of one ticker as of a chosen day (paid: asked for by a click)."""
@@ -1060,8 +1094,16 @@ class App:
                             {"name": " / ".join(f.relative_to(rep).with_suffix("").parts).replace("_", " "),
                              "path": str(f.resolve())} for f in sorted(rep.rglob("*.md"))]})
             from tradingagents.memory import TradingMemoryLog
+            from tradingagents.stocks.verdict import ai_decision
+
             ratings = [{"date": e["date"], "rating": e["rating"]} for e in TradingMemoryLog(self.config).load_entries()
                        if e.get("ticker", "").upper() == symbol]
+            held = bool(self.store.ledger.state("combined", _today()).positions.get(symbol))
+            by_date = {r["date"]: r for r in ratings}
+            for run in found:
+                if run["date"] in by_date:
+                    run["decision"] = ai_decision(by_date[run["date"]], held)["action"]
+                    run["rating"] = by_date[run["date"]]["rating"]
             return {"runs": found, "ratings": ratings}
 
         section("price", price)
