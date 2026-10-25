@@ -484,10 +484,16 @@ async function load() {
   if (failed(rp)) $("reports").innerHTML = failed(rp);
   else {
     let h = rp.ratings.length ? `<p class="small">AI ratings on record: ${rp.ratings.map(r => `${esc(r.date)} <b>${esc(r.rating)}</b>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details><summary>${esc(run.date)}: ${run.files.length} report(s)</summary>` +
+    h += rp.runs.length ? rp.runs.map(run => `<details><summary>${esc(run.date)}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+      (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}">${esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     $("reports").innerHTML = h;
+    $("reports").querySelectorAll("a[data-calls]").forEach(a => a.onclick = async ev => {
+      ev.preventDefault();
+      const r = await getJSON(`/api/requests?ticker=${encodeURIComponent(symbol)}&date=${a.dataset.calls}`).catch(e => ({error: e.message}));
+      $("reportView").innerHTML = r.error ? `<p class="neg">${esc(r.error)}</p>` : callsView(r.requests);
+    });
     $("reports").querySelectorAll("a[data-path]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
       const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
@@ -495,6 +501,19 @@ async function load() {
     });
   }
 }
+// --- what each agent sent to the model and what came back ---
+function callsView(calls) {
+  const tin = calls.reduce((a, c) => a + (c.input_tokens || 0), 0), tout = calls.reduce((a, c) => a + (c.output_tokens || 0), 0);
+  const msg = m => `<div style="margin:6px 0"><span class="flabel">${esc(m.role)}${m.name ? " · " + esc(m.name) : ""}</span>` +
+    (m.content ? `<div class="report" style="max-height:260px;overflow:auto">${esc(m.content)}</div>` : "") +
+    (m.tool_calls ? `<div class="small">asks for: ${m.tool_calls.map(t => `<code>${esc(t.name)}(${esc(JSON.stringify(t.args))})</code>`).join(", ")}</div>` : "") + `</div>`;
+  return `<p class="small muted">${calls.length} requests · ${tin.toLocaleString()} tokens sent · ${tout.toLocaleString()} received. Each request repeats the agent's instructions and the conversation so far; the reply is either tool calls (fetch data) or the agent's text.</p>` +
+    calls.map(c => `<details style="margin:4px 0"><summary class="small"><b>#${c.n} ${esc(c.agent || "agent")}</b> · ${esc(c.model || "")} · ${c.input_tokens ?? "?"} in / ${c.output_tokens ?? "?"} out · ${c.seconds ?? "?"} s${c.error ? ` · <span class="neg">error</span>` : ""}${c.received && c.received.tool_calls ? " · tool calls" : ""}</summary>` +
+      (c.tools_offered.length ? `<p class="small muted">Tools offered: ${c.tools_offered.map(esc).join(", ")}</p>` : "") +
+      `<h4 class="small" style="margin:8px 0 2px">Sent</h4>${c.sent.map(msg).join("")}` +
+      `<h4 class="small" style="margin:8px 0 2px">Came back</h4>${c.error ? `<p class="neg small">${esc(c.error)}</p>` : msg(c.received || {})}</details>`).join("");
+}
+
 // --- signals: the saved trend, breakout and crash forecasts, and today's decision for this stock ---
 const ACTION_CLS = {ENTER: "up", EXIT: "down", REDUCE: "down", HOLD: "", WAIT: "muted", REVIEW: "muted"};
 async function getJSON(url, body) {

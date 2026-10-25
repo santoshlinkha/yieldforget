@@ -733,6 +733,35 @@ def stocks_decisions(decision: str = typer.Option(None, help="One decision id (d
                       f"paper enters {h['paper_enters']} (settings v{h['settings_version']})")
 
 
+@stocks_app.command("calls")
+def stocks_calls(ticker: str, day: str = typer.Argument(..., help="The analyzed day, e.g. 2026-10-23"),
+                 full: bool = typer.Option(False, "--full", help="Print every message in full")):
+    """What an agent run sent to the AI model, request by request, and what came back."""
+    from pathlib import Path
+
+    from tradingagents.llm_clients.request_log import read
+
+    calls = read(Path(DEFAULT_CONFIG["results_dir"]) / ticker.upper() / day / "reports")
+    if not calls:
+        console.print(f"No recorded requests for {ticker.upper()} on {day} (runs before the request log have none).")
+        return
+    cut = (lambda t: t) if full else (lambda t: t if len(t) <= 600 else t[:600] + f" ... [{len(t) - 600} more chars]")
+    for c in calls:
+        console.rule(f"#{c['n']} {c.get('agent')} | {c.get('model')} | {c.get('input_tokens')} in / {c.get('output_tokens')} out")
+        if c.get("tools_offered"):
+            console.print(f"[dim]tools offered: {', '.join(c['tools_offered'])}[/dim]")
+        for m in c["sent"]:
+            console.print(f"[bold cyan]SENT {m['role']}[/bold cyan]{' ' + m['name'] if m.get('name') else ''}:", markup=True)
+            console.print(cut(m.get("content") or ""), markup=False, highlight=False)
+            for t in m.get("tool_calls") or []:
+                console.print(f"  -> {t['name']}({t['args']})", markup=False)
+        r = c.get("received") or {}
+        console.print("[bold green]CAME BACK[/bold green]:" if not c.get("error") else f"[red]ERROR: {c['error']}[/red]")
+        console.print(cut(r.get("content") or ""), markup=False, highlight=False)
+        for t in r.get("tool_calls") or []:
+            console.print(f"  -> asks for {t['name']}({t['args']})", markup=False)
+
+
 @stocks_app.command("screen")
 @_book_errors
 def stocks_screen(build: bool = typer.Option(False, "--build", help="Fetch (cached) and rebuild the screen first"),

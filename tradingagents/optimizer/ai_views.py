@@ -111,9 +111,12 @@ def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, repor
     used = roles.models_used(config, [r for r in roles.ROLES if r not in ANALYST_ROLES or r in analysts])
 
     def work(callback):
-        graph = TradingAgentsGraph(analysts, config=config, callbacks=[callback])
-        state, rating = graph.propagate(ticker, trade_date)
+        from tradingagents.llm_clients.request_log import FILE, RequestLog
+
         folder = Path(report_dir)
+        (folder / FILE).unlink(missing_ok=True)   # this run's requests only
+        graph = TradingAgentsGraph(analysts, config=config, callbacks=[callback, RequestLog(folder)])
+        state, rating = graph.propagate(ticker, trade_date)
         graph.save_reports(state, ticker, folder)
         return {"rating": rating, "date": trade_date, "folder": str(folder)}
 

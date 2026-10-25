@@ -804,6 +804,15 @@ class App:
 
         return self.analysis.start(work)
 
+    def request_log(self, ticker: str, day: str) -> dict:
+        """Every model request of a saved agent run and its reply (read from the run's folder)."""
+        from tradingagents.dataflows.symbols import safe_ticker_component
+        from tradingagents.llm_clients.request_log import read
+
+        self._check_day(day)
+        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker.upper()) / day / "reports"
+        return {"ticker": ticker.upper(), "date": day, "requests": read(folder)}
+
     def set_ai_budget(self, body: dict) -> dict:
         budget = dict(self.store.get("global", "ai_budget"))
         for k in ("daily_usd", "monthly_usd"):
@@ -1043,7 +1052,11 @@ class App:
                 for day in sorted(folder.iterdir(), reverse=True):
                     rep = day / "reports"
                     if rep.is_dir():
-                        found.append({"date": day.name, "files": [
+                        from tradingagents.llm_clients.request_log import FILE
+
+                        calls = rep / FILE
+                        found.append({"date": day.name, "requests": sum(1 for _ in calls.open(encoding="utf-8")) if calls.is_file() else 0,
+                                      "files": [
                             {"name": " / ".join(f.relative_to(rep).with_suffix("").parts).replace("_", " "),
                              "path": str(f.resolve())} for f in sorted(rep.rglob("*.md"))]})
             from tradingagents.memory import TradingMemoryLog
@@ -1370,6 +1383,8 @@ def make_handler(app: App):
                     self._json(app.analysis_state())
                 elif url.path == "/api/ai-decisions":
                     self._json(app.ai_decisions())
+                elif url.path == "/api/requests":
+                    self._json(app.request_log(query.get("ticker", ""), query.get("date", "")))
                 elif url.path == "/api/decisions":
                     self._json(app.decisions_state())
                 elif url.path == "/api/capital":
