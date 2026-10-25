@@ -40,6 +40,7 @@ table, .num { font-variant-numeric: tabular-nums; }
 .title h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
 .title .name { color: var(--muted); font-size: 15px; }
 .title .px { font-size: 22px; font-weight: 600; margin-left: auto; }
+#vbadge:empty { display: none; }
 .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .title .px { margin-left: 0; } }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; margin-bottom: 16px; min-width: 0; }
@@ -142,12 +143,26 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } button { transition: none; } }
+.verdict { display: inline-flex; align-items: center; font-size: 13px; font-weight: 700; letter-spacing: .06em; padding: 4px 12px;
+  border-radius: 999px; border: 1px solid currentColor; }
+.verdict.BUY { color: var(--buy); background: color-mix(in srgb, var(--buy) 12%, transparent); }
+.verdict.SELL, .verdict.AVOID { color: var(--sell); background: color-mix(in srgb, var(--sell) 12%, transparent); }
+.verdict.HOLD { color: var(--accent); background: var(--accent-soft); }
+.verdict.WATCH { color: #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }
+.verdict.big { font-size: 20px; padding: 6px 18px; }
+.vbox { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2); margin-bottom: 12px; }
+.vbox .why { font-size: 13.5px; flex: 1; min-width: 200px; }
+.vchecks { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12.5px; }
+.vchecks li { display: flex; gap: 8px; padding: 3px 0; }
+.vchecks .mk { width: 16px; flex: none; text-align: center; font-weight: 700; }
+.vchecks .mk.ok { color: var(--buy); } .vchecks .mk.no { color: var(--sell); } .vchecks .mk.na { color: var(--faint); }
 </style>
 </head>
 <body>
 <header class="appbar"><div class="wrap"><a href="/">← Portfolio Optimizer</a><span class="muted small" id="asof"></span></div></header>
 <main class="wrap">
-  <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span></div>
+  <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span><span id="vbadge"></span></div>
   <p class="muted small" id="desc"></p>
   <div id="err"></div>
   <div class="grid">
@@ -165,7 +180,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
     </div>
     <div>
       <div class="card"><h2>In your account</h2><div id="mine"></div></div>
-      <div class="card"><h2>Signals and action</h2><div id="sig"><p class="muted">Loading…</p></div></div>
+      <div class="card"><h2>Verdict, signals and action</h2><div id="sig"><p class="muted">Loading…</p></div></div>
       <div class="card"><h2>Saved analysis reports</h2>
         <div id="runAgents">
           <p class="muted small">Run the TradingAgents team (analysts, bull/bear debate, trader, risk debate, portfolio manager) on this ticker as of a day you pick; they see only information up to that day. Paid: one full analysis held to your AI budget; a day already analyzed with the same settings is reused at no charge. Which model each agent uses: Settings → Agent models.</p>
@@ -508,8 +523,16 @@ async function loadSignals() {
   let s;
   try { s = await getJSON("/api/signals?ticker=" + encodeURIComponent(symbol)); }
   catch (e) { $("sig").innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
-  const row = s.rows[0] || {}, dec = row.decision, sg = row.signal, head = s.decision;
+  const row = s.rows[0] || {}, dec = row.decision, sg = row.signal, head = s.decision, vd = row.verdict;
   let h = "";
+  if (vd) {
+    const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
+    h += `<div class="vbox"><span class="verdict big ${vd.verdict}">${vd.verdict}</span><div class="why"><b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.</div></div>` +
+      `<details${vd.verdict === "WATCH" ? " open" : ""}><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
+      vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>` +
+      `<p class="small muted">BUY needs every test to pass (or the daily decision's ENTER). AVOID: an Underweight/Sell agent rating, a crash warning, quality under ${vd.rules.min_quality} or consensus ${vd.rules.max_consensus}+. A held stock is SELL on the decision's EXIT/REDUCE, or on a bearish agent rating together with a breakdown or crash warning; otherwise HOLD. Agent ratings count for ${vd.rules.rating_days} days: run the agents above for a fresh one. None of these inputs is validated as a trading signal: this summarizes the evidence; you decide.</p></details>`;
+    $("vbadge").innerHTML = `<span class="verdict ${vd.verdict}" title="${esc(vd.summary)}">${vd.verdict}</span>`;
+  }
   if (dec) {
     const why = (dec.blocked || dec.reasons || []).join("; ");
     h += `<div class="consensus"><span class="big ${ACTION_CLS[dec.action] || ""}">${esc(dec.action)}</span>` +
@@ -601,7 +624,7 @@ async function pollAnalysis(first) {
   else if (j.result && j.result.ticker === symbol) {
     $("agState").innerHTML = `Done: <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +
       ` (${j.result.how === "cache" ? "reused, no charge" : "paid"}${j.result.fell_back ? "; the first provider failed, so Gemini ran it" : ""}). The reports are below.`;
-    if (!first) load();
+    if (!first) { load(); loadSignals(); }
   }
 }
 $("agRun").onclick = async () => {

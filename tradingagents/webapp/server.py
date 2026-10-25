@@ -600,10 +600,51 @@ class App:
     # --- capital: the three amounts, against what the books actually hold ---
 
     def signals(self, ticker: str | None = None) -> dict:
-        """Saved trend, breakout and crash signals with the daily decision's actions: reads only."""
-        from tradingagents.stocks import daily, signals
+        """Saved trend, breakout and crash signals with the daily decision's actions, and each stock's
+        verdict (BUY / WATCH / HOLD / SELL / AVOID): reads only."""
+        from tradingagents.memory import TradingMemoryLog
+        from tradingagents.stocks import daily, screen, signals
+        from tradingagents.stocks.verdict import verdict
 
-        return signals.board(self.store.con, daily.load(self.store.con), 20, ticker)
+        out = signals.board(self.store.con, daily.load(self.store.con), 20, ticker)
+        held = {t for t, q in self.store.ledger.state("combined", _today()).positions.items() if q}
+        latest = screen.latest(Path(self.config["results_dir"])) or {}
+        rows = {r["ticker"]: r for r in latest.get("rows", [])}
+        ratings = {}
+        for e in TradingMemoryLog(self.config).load_entries():   # oldest first: the newest wins
+            if e.get("rating"):
+                ratings[e["ticker"].upper()] = {"rating": e["rating"], "date": e["date"]}
+        if ticker and not out["rows"]:
+            out["rows"] = [{"ticker": ticker.upper(), "signal": None, "decision": None}]
+        for r in out["rows"]:
+            t = r["ticker"]
+            row = rows.get(t) or (self._screen_row(t) if ticker else None)
+            r["screen"] = row and {k: row.get(k) for k in ("quality_score", "quality_rank", "analyst_mean",
+                                                            "analyst_label", "target_upside", "rank")}
+            r["rating"] = ratings.get(t)
+            # Nothing on record (a fund, or a stock never screened or forecast): no verdict rather than a guess.
+            known = row or r["signal"] or r["decision"] or t in held
+            r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t)) if known else None
+        return out
+
+    def _screen_row(self, symbol: str) -> dict | None:
+        """The screen's row for a stock outside the saved screen, from the cached data its page already read."""
+        from tradingagents.dataflows.vendors.yahoo import history as yh
+        from tradingagents.research.prices import bars
+        from tradingagents.stocks import screen
+
+        try:
+            profile = yh.profile(symbol, self.cache_dir) or {}
+            if profile.get("quoteType") not in (None, "EQUITY"):
+                return None
+            closes = bars([symbol], self.cache_dir)["Close"]
+            return screen.score_row(symbol, profile, yh.financials(symbol, self.cache_dir),
+                                    closes[symbol] if symbol in closes else None,
+                                    yh.actions(symbol, self.cache_dir).get("dividends") or [],
+                                    yh.current_analysts(symbol, self.cache_dir))
+        except Exception as exc:  # the verdict then says what it lacked
+            logger.info("no screen row for %s: %s", symbol, exc)
+            return None
 
     def analysis_state(self) -> dict:
         return self.analysis.state()
