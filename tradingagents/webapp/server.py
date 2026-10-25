@@ -127,6 +127,7 @@ class App:
         self.moat_jobs: dict[str, Job] = {}
         self.daily = Job()   # the daily Chronos-2 record, apart from the runs started on the page
         self.stocks = Job()  # a stock research batch
+        self.decisions = Job()  # the daily stock decision (and, when asked, this week's model fit)
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -543,6 +544,28 @@ class App:
         return {"shortlist": wanted[:limit], "readings": out}
 
     # --- capital: the three amounts, against what the books actually hold ---
+
+    def decisions_state(self) -> dict:
+        """The latest saved decision, the history, the shadow record and the capital view: reads only."""
+        from tradingagents.stocks import daily
+
+        shadow = self.store.con.execute("SELECT as_of, state_json FROM shadow_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        rec = json.loads(shadow["state_json"]).get("record") if shadow else None
+        return {"latest": daily.load(self.store.con), "history": daily.history(self.store.con),
+                "shadow": rec, "capital": self.capital_state(), "job": self.decisions.state()}
+
+    def start_decisions(self, body: dict) -> bool:
+        from tradingagents.stocks import daily
+
+        train = bool(body.get("train"))
+
+        def work(job):
+            def say(stage):
+                job.progress = stage
+            rec = daily.run(self.store, self.cache_dir, date.today(), body.get("policy") or "barrier_20", train, say)
+            return {"id": rec["id"], "mode": rec["mode"], "summary": rec["summary"]}
+
+        return self.decisions.start(work)
 
     def capital_state(self) -> dict:
         from tradingagents.optimizer.data import latest_prices
@@ -1047,6 +1070,8 @@ def make_handler(app: App):
                     self._json(app.ai_usage())
                 elif url.path == "/api/forecasts/combined":
                     self._json(app.combined_forecasts(int(query.get("horizon") or 20), query.get("universe") or "etf"))
+                elif url.path == "/api/decisions":
+                    self._json(app.decisions_state())
                 elif url.path == "/api/capital":
                     self._json(app.capital_state())
                 elif url.path == "/api/stocks":
@@ -1160,6 +1185,8 @@ def make_handler(app: App):
                     self._json({"ok": True})
                 elif self.path == "/api/market/explain":
                     self._started(app.start_explain(), "The market explanation")
+                elif self.path == "/api/decisions/run":
+                    self._started(app.start_decisions(body), "A decision run")
                 elif self.path == "/api/capital":
                     with app.lock:
                         capital.update(app.store, body.get("values") or {}, source="user")

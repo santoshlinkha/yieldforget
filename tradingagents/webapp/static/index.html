@@ -244,6 +244,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <button role="tab" data-tab="plan">Allocation</button>
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
+        <button role="tab" data-tab="decisions">Decisions</button>
         <button role="tab" data-tab="settings">Settings</button>
       </nav>
       <div class="status" id="subtitle">Loading…</div>
@@ -400,6 +401,28 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div class="row" style="margin:0 0 12px"><input type="text" id="scanFilter" placeholder="Filter by ticker, name or sector, e.g. MSFT, quantum, Technology" style="max-width:420px"></div>
         <div class="table-wrap"><table id="scanTable"></table></div>
         <div class="row" id="scanMore" style="display:none"><button class="ghost" id="scanToggle"></button></div>
+      </div>
+    </section>
+
+    <section class="tab" id="decisions">
+      <div class="page-head"><div><h2>Stock decisions</h2><p>Daily, after the close, for the Trading sleeve: ENTER, WAIT, HOLD, REDUCE or EXIT, each with its size, execution date, expected net benefit, uncertainty and reasons. Saved before any outcome is known; nothing is sent to the broker. Opening this page only reads saved decisions.</p></div></div>
+      <div class="card">
+        <div class="row" style="margin-top:0">
+          <button id="dcRun">Make today's decision</button>
+          <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="dcTrain"> fit models if needed</label>
+          <span class="muted" id="dcStatus"></span>
+        </div>
+        <div id="dcHead"></div>
+        <div id="dcCapital"></div>
+        <h3 style="margin:14px 0 6px">Positions</h3>
+        <div class="table-wrap"><table id="dcLots" class="compact"></table></div>
+        <h3 style="margin:14px 0 6px">Candidates</h3>
+        <div class="table-wrap"><table id="dcEntries" class="compact"></table></div>
+        <div id="dcNotes"></div>
+      </div>
+      <div class="split">
+        <div class="card"><h3>Prospective shadow account</h3><div id="dcShadow"></div></div>
+        <div class="card"><h3>Action history</h3><div class="table-wrap"><table id="dcHistory" class="compact"></table></div></div>
       </div>
     </section>
 
@@ -930,6 +953,39 @@ $("fcUse").onchange = async () => {
   catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }
 };
 
+// --- daily stock decisions ---
+const ACT = {ENTER: "pos", EXIT: "neg", REDUCE: "neg", HOLD: "", WAIT: "muted", REVIEW: "neg"};
+async function loadDecisions() {
+  let d;
+  try { d = await api("/api/decisions"); } catch (e) { $("dcHead").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+  const j = d.job;
+  $("dcStatus").textContent = j.running ? j.progress + "…" : j.error ? "Failed: " + j.error : "";
+  $("dcRun").disabled = j.running;
+  if (j.running) setTimeout(loadDecisions, 3000);
+  const c = d.capital, st = c.settings, tr = c.proposal.sleeves.trading;
+  $("dcCapital").innerHTML = `<p class="muted small">Configured: Trading capital ${usd(st.trading_capital_usd)}, Investing capital ${usd(st.investing_capital_usd)}, daily investment ${usd(st.daily_investment_usd)} (settings v${st.version}). Actual Trading: equity ${tr.equity == null ? "–" : usd(tr.equity)}, settled ${usd(tr.settled_cash)}, reserved ${usd(tr.reserved)}, unsettled ${usd(tr.unsettled)}.</p>`;
+  const r = d.latest;
+  if (!r) { $("dcHead").innerHTML = "<p class='muted'>No decision yet. Make one (fit models the first time).</p>"; $("dcLots").innerHTML = $("dcEntries").innerHTML = ""; }
+  else {
+    const ev = r.model.evidence;
+    $("dcHead").innerHTML = `<p><b class="${r.mode === "validated" ? "pos" : ""}">${r.mode.toUpperCase()}</b> · data to ${esc(r.info_cutoff)} (${r.freshness_days} days old) · executes at the close of ${esc(r.execution_date)} · policy ${esc(r.model.policy.name)} (${esc(r.model.policy_version)}) · evidence: development ${esc(ev.development)}, prospective ${ev.prospective && ev.prospective.round_trips != null ? ev.prospective.round_trips + " round trips" : "none yet"}${ev.validated ? "" : " → validated mode says WAIT; buys show as PAPER ENTER"}</p>` +
+      `<p class="muted small">Summary: ${Object.entries(r.summary).filter(([, n]) => n).map(([a, n]) => `${a} ${n}`).join(", ") || "nothing"}; paper enters ${r.paper_enters}. Settings v${r.settings.capital.version} (${esc(r.settings.capital.hash)}).</p>`;
+    $("dcLots").innerHTML = "<tr><th class='l'>Ticker</th><th>Action</th><th>Shares</th><th>Entered</th><th>Entry</th><th>Now</th><th>Unrealized</th><th>Levels (risk / profit)</th><th>Deadline</th><th class='l'>Reason</th></tr>" +
+      (r.lots.length ? r.lots.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"><b>${x.action}</b>${x.fraction ? ` ${pct(x.fraction, 0)}` : ""}</td><td>${(+x.shares).toFixed(4)}</td><td>${esc(x.entry_date)}</td><td>${x.entry_px ? usd(x.entry_px) : "–"}</td><td>${isFinite(x.price) ? usd(x.price) : "–"}</td><td>${x.unrealized == null ? "–" : spct(x.unrealized)}</td><td>${spct(x.risk_level)} / ${spct(x.profit_level)}</td><td>${esc(x.deadline)}</td><td class="l small">${esc(x.reasons.join("; "))}${x.execute ? ` (at the close of ${esc(x.execute)})` : ""}</td></tr>`).join("")
+        : "<tr><td colspan='10' class='l muted'>No Trading positions.</td></tr>");
+    $("dcEntries").innerHTML = "<tr><th class='l'>Ticker</th><th>Action</th><th>Paper</th><th>Size</th><th>Expected net (± sd)</th><th>vs SPY</th><th>P(profit)</th><th>P(large loss)</th><th>Cost</th><th class='l'>Blocked by</th></tr>" +
+      r.entries.slice(0, 15).map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"><b>${x.action}</b></td><td>${x.paper_action ? "PAPER ENTER" : "–"}</td><td>${x.dollars ? usd(x.dollars) : "–"}</td><td>${spct(x.expected_net)} <span class="muted">± ${pct(x.net_sd, 1)}</span></td><td>${spct(x.expected_excess_vs_spy)}</td><td>${pct(x.p_win, 0)}</td><td>${isFinite(x.p_risk) ? pct(x.p_risk, 0) : "missing"}</td><td>${pct(x.cost_rt, 2)}</td><td class="l small">${esc((x.blocked || []).join("; "))}</td></tr>`).join("");
+    $("dcNotes").innerHTML = r.limitations.map(n => `<p class="muted small">${esc(n)}</p>`).join("");
+  }
+  const sh = d.shadow;
+  $("dcShadow").innerHTML = sh ? `<p>Since ${esc(sh.since)} with ${usd(sh.capital)}: value ${usd(sh.value)} vs SPY ${usd(sh.spy_value)} (same capital, same day). Round trips ${sh.round_trips}; average excess per trade ${sh.excess_vs_spy == null ? "–" : spct(sh.excess_vs_spy)}; win rate ${sh.win_rate == null ? "–" : pct(sh.win_rate, 0)}.</p><p class="muted small">Follows the frozen PAPER ENTER decisions with the same execution rules. This record, not the backtest, is what can validate the policy.</p>` : "<p class='muted'>Starts with the first decision.</p>";
+  $("dcHistory").innerHTML = "<tr><th class='l'>Data to</th><th>Executes</th><th>Mode</th><th class='l'>Actions</th><th>Settings</th></tr>" +
+    d.history.map(h => `<tr><td class="l">${esc(h.info_cutoff)}</td><td>${esc(h.execution_date)}</td><td>${esc(h.mode)}</td><td class="l small">${Object.entries(h.summary || {}).filter(([, n]) => n).map(([a, n]) => `${a} ${n}`).join(", ")}${h.paper_enters ? `, paper ${h.paper_enters}` : ""}</td><td>v${h.settings_version}</td></tr>`).join("");
+}
+$("dcRun").onclick = async () => {
+  try { await api("/api/decisions/run", {train: $("dcTrain").checked}); loadDecisions(); } catch (e) { showError(e.message); }
+};
+
 // --- capital: the three amounts and the books ---
 async function loadCapital() {
   let c;
@@ -1341,7 +1397,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); loadCapital(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); loadCapital(); loadDecisions(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over

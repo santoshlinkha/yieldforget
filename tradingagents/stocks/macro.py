@@ -130,6 +130,8 @@ def features(dates: pd.DatetimeIndex, cache_dir: Path) -> pd.DataFrame:
             continue
         s = pd.Series({pd.Timestamp(r["date"]): r["value"] for r in rows}).sort_index()
         s.index = s.index + pd.offsets.BDay(LAG_BDAYS[series])    # usable at the close after publication
+        # Weekend observations (DFF has them) land on the same business day: the latest one is what is known.
+        s = s[~s.index.duplicated(keep="last")]
         daily = s.reindex(s.index.union(dates)).ffill()
         out[name] = daily.reindex(dates).to_numpy()
         if name == "credit_spread":

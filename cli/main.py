@@ -680,5 +680,70 @@ def stocks_outcomes(portfolio: str = PORTFOLIO_OPT):
                              indent=1, default=str))
 
 
+@stocks_app.command("today")
+@_book_errors
+def stocks_today(train: bool = typer.Option(False, "--train", help="Fit this week's models if they are missing"),
+                 policy: str = typer.Option("barrier_20"), as_of: str = typer.Option(None, "--as-of"),
+                 portfolio: str = PORTFOLIO_OPT):
+    """Today's decision for the Trading sleeve: ENTER / WAIT / HOLD / REDUCE / EXIT (saved, never executed)."""
+    from datetime import date
+
+    from tradingagents.stocks import daily
+
+    store = _book_store(portfolio)
+    rec = daily.run(store, _stock_cache(), date.fromisoformat(as_of) if as_of else date.today(), policy, train,
+                    lambda stage: console.print(f"[dim]{stage}[/dim]"))
+    _print_decision(rec)
+
+
+def _print_decision(rec):
+    console.print(f"Decision {rec['id'][:8]} - {rec['mode'].upper()} - data to {rec['info_cutoff']} "
+                  f"({rec['freshness_days']} days old), executes {rec['execution_date']}; capital settings "
+                  f"v{rec['settings']['capital']['version']}; Trading ${rec['account']['sleeve_value']:,.2f}, "
+                  f"settled ${rec['account']['settled_cash']:,.2f}, reserved ${rec['account']['reserved']:,.2f}")
+    for x in rec["lots"]:
+        console.print(f"  {x['action']:7} {x['ticker']:6} entered {x['entry_date']} deadline {x['deadline']}: "
+                      + "; ".join(x["reasons"]))
+    for x in rec["entries"][:10]:
+        extra = f" (paper: {x['paper_action']} ${x['dollars']:.2f})" if x.get("paper_action") else ""
+        console.print(f"  {x['action']:7} {x['ticker']:6} expected net {x['expected_net']:+.2%} "
+                      f"(+/- {x['net_sd']:.1%}), P(win) {x['p_win']:.0%}, P(large loss) {x['p_risk']:.0%}{extra}"
+                      + (f" - blocked: {'; '.join(x['blocked'])}" if x["blocked"] else ""))
+    for note in rec["limitations"]:
+        console.print(f"[dim]{note}[/dim]")
+
+
+@stocks_app.command("decisions")
+@_book_errors
+def stocks_decisions(decision: str = typer.Option(None, help="One decision id (default: the history)"),
+                     portfolio: str = PORTFOLIO_OPT):
+    """Saved decisions (the action history), or one in full."""
+    from tradingagents.stocks import daily
+
+    store = _book_store(portfolio)
+    if decision:
+        ids = [r["id"] for r in store.con.execute("SELECT id FROM stock_decisions") if r["id"].startswith(decision)]
+        if len(ids) != 1:
+            raise ValueError(f"{decision} matches {len(ids)} decisions")
+        _print_decision(daily.load(store.con, ids[0]))
+        return
+    for h in daily.history(store.con):
+        console.print(f"{h['id'][:8]} {h['info_cutoff']} -> {h['execution_date']} {h['mode']:12} {h['summary']} "
+                      f"paper enters {h['paper_enters']} (settings v{h['settings_version']})")
+
+
+@stocks_app.command("shadow")
+@_book_errors
+def stocks_shadow(portfolio: str = PORTFOLIO_OPT):
+    """The prospective shadow account's record against cash-flow-matched SPY."""
+    import json
+
+    store = _book_store(portfolio)
+    row = store.con.execute("SELECT as_of, state_json FROM shadow_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    if not row:
+        raise ValueError("no shadow record yet: run `stocks today`")
+    console.print(json.dumps({"as_of": row["as_of"], **json.loads(row["state_json"])["record"]}, indent=1, default=str))
+
+
 if __name__ == "__main__":
     app()

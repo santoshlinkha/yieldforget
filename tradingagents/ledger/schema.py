@@ -360,4 +360,28 @@ CREATE TABLE stock_outcomes (
 );
 """ + "".join(_guards(t) for t in ("stock_runs", "stock_forecasts", "stock_news", "stock_ideas",
                                    "stock_idea_decisions", "stock_outcomes")),
+    5: """
+-- Daily stock decisions (ENTER / WAIT / HOLD / REDUCE / EXIT), frozen before any outcome is known.
+CREATE TABLE stock_decisions (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    info_cutoff TEXT NOT NULL,
+    execution_date TEXT NOT NULL,          -- the earliest executable close for every action in it
+    sleeve TEXT NOT NULL,
+    mode TEXT NOT NULL,                    -- validated | experimental (what the evidence allows)
+    settings_json TEXT NOT NULL,           -- capital snapshot (values, version, hash) and the limits used
+    model_json TEXT NOT NULL,              -- policy, model artifact hashes, evidence trial and its status
+    account_json TEXT NOT NULL,            -- sleeve equity, settled cash, reservations, lots, at the cutoff
+    payload_json TEXT NOT NULL             -- every action with size, levels, deadline, benefit, reasons, blocks
+);
+-- The prospective shadow account: one capital-constrained book following the frozen experimental
+-- decisions, with a cash-flow-matched SPY benchmark. One snapshot per update, never edited.
+CREATE TABLE shadow_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    as_of TEXT NOT NULL,
+    decision_id TEXT REFERENCES stock_decisions(id),
+    state_json TEXT NOT NULL
+);
+""" + _guards("stock_decisions") + _guards("shadow_snapshots"),
 }

@@ -212,3 +212,8 @@ def build(data: StockData, horizon: int, dates: pd.DatetimeIndex | None = None, 
     year = raw_vol.reindex(dates).stack(future_stack=True).reindex(idx).notna().to_numpy() & \
         close.shift(252).reindex(dates).stack(future_stack=True).reindex(idx).notna().to_numpy()
     return panel[have & year]
+
+
+def decision_dates_for(sessions: pd.DatetimeIndex, cutoff: pd.Timestamp, every: int = 5) -> pd.DatetimeIndex:
+    """Training decision dates through ``cutoff`` (every ``every`` sessions from 2006)."""
+    return decision_dates(sessions[sessions <= cutoff], start="2006-01-01", every=every)
