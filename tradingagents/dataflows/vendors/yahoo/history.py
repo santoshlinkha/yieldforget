@@ -214,6 +214,35 @@ def financials(symbol: str, cache_dir=None) -> dict:
     return store.snapshot(symbol, "financials-v3", fetch, ttl=HISTORY_TTL) if store else fetch()
 
 
+def ohlcv(tickers: list[str], cache_dir) -> dict:
+    """Daily open, high, low, close and volume (split- and dividend-adjusted) per ticker, for the few
+    models that need opens; each ticker downloaded once and saved under ``ohlcv/``."""
+    from pathlib import Path
+
+    import yfinance as yf
+
+    folder = Path(cache_dir) / "ohlcv"
+    folder.mkdir(parents=True, exist_ok=True)
+    out, missing = {}, []
+    for t in tickers:
+        p = folder / f"{t}.pkl"
+        if p.exists():
+            out[t] = pd.read_pickle(p)
+        else:
+            missing.append(t)
+    if missing:
+        raw = yf.download(missing, start="2000-01-01", auto_adjust=True, progress=False, group_by="ticker", threads=True)
+        for t in missing:
+            try:
+                f = raw[t].rename(columns=str.lower)[["open", "high", "low", "close", "volume"]].dropna()
+            except KeyError:
+                continue
+            f.index = pd.to_datetime(f.index).tz_localize(None)
+            f.to_pickle(folder / f"{t}.pkl")
+            out[t] = f
+    return out
+
+
 def actions(symbol: str, cache_dir=None) -> dict:
     """Dividends (split-adjusted, per share) and splits only, as ``[date, value]`` pairs oldest
     first: one light request per stock, refetched weekly. ``corporate_actions`` adds share counts."""

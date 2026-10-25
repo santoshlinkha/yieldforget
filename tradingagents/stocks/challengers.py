@@ -344,30 +344,11 @@ def availability(cache_dir: Path) -> dict:
 
 
 def fetch_opens(tickers: list[str], cache_dir: Path) -> dict[str, pd.DataFrame]:
-    """Daily OHLCV with real opens (split- and dividend-adjusted, Yahoo), for the challenger sample only,
-    downloaded once and saved; the main price cache has no opens."""
-    import yfinance as yf
+    """Daily OHLCV with real opens for the challenger sample (the main price cache has no opens);
+    downloaded once and saved by the data layer (``yahoo.history.ohlcv``)."""
+    from tradingagents.dataflows.vendors.yahoo import history as yh
 
-    folder = Path(cache_dir) / "ohlcv"
-    folder.mkdir(parents=True, exist_ok=True)
-    out, missing = {}, []
-    for t in tickers:
-        p = folder / f"{t}.pkl"
-        if p.exists():
-            out[t] = pd.read_pickle(p)
-        else:
-            missing.append(t)
-    if missing:
-        raw = yf.download(missing, start="2000-01-01", auto_adjust=True, progress=False, group_by="ticker", threads=True)
-        for t in missing:
-            try:
-                f = raw[t].rename(columns=str.lower)[["open", "high", "low", "close", "volume"]].dropna()
-            except KeyError:
-                continue
-            f.index = pd.to_datetime(f.index).tz_localize(None)
-            f.to_pickle(folder / f"{t}.pkl")
-            out[t] = f
-    return out
+    return yh.ohlcv(tickers, cache_dir)
 
 
 def describe_all(adapters) -> str:
