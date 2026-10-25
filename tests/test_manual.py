@@ -20,13 +20,18 @@ def test_a_plain_rating_line_is_a_fallback_and_nonsense_is_refused():
         parse_answer('```json\n{"rating": "Strong maybe"}\n```')
 
 
-def test_the_prompt_carries_raw_data_only(monkeypatch):
-    from tradingagents.agents import manual
+def test_the_prompt_carries_data_only(monkeypatch):
+    import pandas as pd
 
-    monkeypatch.setattr("tradingagents.dataflows.router.route_to_vendor", lambda *a, **k: "data row 1.23")
-    monkeypatch.setattr("tradingagents.dataflows.vendors.yahoo.snapshot.build_verified_market_snapshot",
-                        lambda *a, **k: "snapshot row")
-    p = manual.build_prompt("TPR", "2026-10-23", "Tapestry, Inc.")
-    assert "PRICES" in p and "snapshot row" in p and '"rating"' in p
+    from tradingagents.agents import manual, packet
+
+    idx = pd.bdate_range(end="2026-10-23", periods=260)
+    close = pd.Series(range(100, 360), index=idx, dtype=float)
+    inputs = {"ticker": "TPR", "cutoff": "2026-10-23", "ohlcv": None, "facts": None, "macro": {}, "news": [],
+              "bars": pd.DataFrame({"Close": close, "High": close + 1, "Low": close - 1, "Volume": 1e6}),
+              "profile": {"quoteType": "EQUITY", "longName": "Tapestry, Inc."}, "profile_fetched": None}
+    monkeypatch.setattr(packet, "load_inputs", lambda *a, **k: inputs)
+    p = manual.build_prompt("TPR", "2026-10-23", cache_dir=None)
+    assert "EVIDENCE PACKET" in p and '"PX1"' in p and '"rating"' in p and manual.PROMPT_VERSION in p
     for leak in ("verdict", "model rank", "already holds", "does not hold", "APP'S OWN"):
         assert leak.lower() not in p.lower()

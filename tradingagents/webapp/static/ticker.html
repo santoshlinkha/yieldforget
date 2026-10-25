@@ -212,7 +212,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
           </div>
           <details class="runbox" style="display:block" id="manualBox"><summary><b>Or use ChatGPT Plus (no API cost)</b> <span class="muted small">copy one prompt, paste the answer back</span></summary>
             <ol class="small muted" style="margin:8px 0 8px 18px;padding:0">
-              <li>Click <b>Copy the prompt</b>: it holds the prices, indicators, fundamentals, news and economy as of the day above, and asks the chat to play the whole team. It carries raw data only: not whether you hold it, and none of the app's verdicts, model ranks or signals, so the chat's view is independent.</li>
+              <li>Click <b>Copy the prompt</b>: it holds one compact evidence packet as of the day above (price snapshot and comparisons, company or fund facts, dated news, economic data with their vintages, the data checks run and what is missing), each item with an ID the chat must cite. It carries data only: not whether you hold it, and none of the app's verdicts, model ranks or signals, so the chat's view is independent.</li>
               <li>Paste it into ChatGPT (or Gemini or Claude in your browser) and send it.</li>
               <li>Copy the whole answer, paste it below and click <b>Save the answer</b>. It must end with the JSON block the prompt asks for.</li>
             </ol>
@@ -832,7 +832,7 @@ $("mpCopy").onclick = async () => {
     $("mpPrompt").value = p.prompt; $("mpPrompt").style.display = "";
     let copied = false;
     try { await navigator.clipboard.writeText(p.prompt); copied = true; } catch (e) { $("mpPrompt").select(); }
-    $("mpInfo").textContent = `${copied ? "Copied" : "Select the text below and copy it"}: ${p.chars.toLocaleString()} characters (about ${p.tokens_est.toLocaleString()} tokens), as of ${p.date}.`;
+    $("mpInfo").textContent = `${copied ? "Copied" : "Select the text below and copy it"}: ${p.chars.toLocaleString()} characters, ${p.tokens_est.toLocaleString()} tokens (${p.tokens_how}), as of ${p.date}; format ${p.version}.`;
   } catch (e) { $("mpInfo").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
   $("mpCopy").disabled = false;
 };

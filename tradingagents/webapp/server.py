@@ -759,20 +759,21 @@ class App:
 
     def manual_prompt(self, ticker: str, day: str) -> dict:
         """The prompt for running the analysis in a chat app; builds from cached data, calls no AI."""
-        from tradingagents.agents.manual import build_prompt
+        from tradingagents.agents.manual import PROMPT_VERSION, build_prompt
         from tradingagents.dataflows.config import set_config
-        from tradingagents.dataflows.vendors.yahoo import history as yh
 
         ticker, day = ticker.strip().upper(), self._check_day(day)
         set_config(self.config)
-        profile = {}
+        # The evidence packet: local caches only; the app's verdict, model rank and signals stay out.
+        prompt = build_prompt(ticker, day, self.cache_dir)
         try:
-            profile = yh.profile(ticker, self.cache_dir) or {}
-        except Exception:  # the name is a nicety
-            pass
-        # Raw data only: the app's verdict, model rank and signals stay out, so the chat's view is its own.
-        prompt = build_prompt(ticker, day, profile.get("longName") or profile.get("shortName") or "")
-        return {"ticker": ticker, "date": day, "prompt": prompt, "chars": len(prompt), "tokens_est": len(prompt) // 4}
+            import tiktoken
+
+            tokens, how = len(tiktoken.get_encoding("o200k_base").encode(prompt)), "o200k_base tokenizer"
+        except Exception:
+            tokens, how = len(prompt) // 4, "estimate (characters / 4)"
+        return {"ticker": ticker, "date": day, "prompt": prompt, "chars": len(prompt), "tokens_est": tokens,
+                "tokens_how": how, "version": PROMPT_VERSION}
 
     def manual_answer(self, body: dict) -> dict:
         """A chat app's answer to the manual prompt: saved as a report, its rating recorded, the final decision written."""
@@ -789,7 +790,12 @@ class App:
         decision = parse_answer(text)
         folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
         (folder / "5_portfolio").mkdir(parents=True, exist_ok=True)
-        (folder / "chat_answer.md").write_text(f"# Answer from {source}\n\n{text}\n", encoding="utf-8")
+        from tradingagents.agents.manual import PROMPT_VERSION
+
+        # The prompt format the answer replied to, so answers to different input formats stay apart.
+        (folder / "chat_answer.md").write_text(f"# Answer from {source}\n\nPrompt format: {PROMPT_VERSION}"
+                                               f"{'; the analysis abstained (insufficient evidence)' if decision.get('insufficient_evidence') else ''}"
+                                               f"\n\n{text}\n", encoding="utf-8")
         md = decision_markdown(decision)
         pm = folder / "5_portfolio" / "decision.md"
         if not pm.is_file():   # an agent run's own decision for that day is kept
