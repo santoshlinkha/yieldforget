@@ -42,22 +42,28 @@ Use exactly these sections, in this order:
 6. **Models.** Are the model choices sensible for the data size and signal-to-noise? Is
    anything over- or under-engineered? Comment on the pooled design, ranking within date,
    missing-as-zero, the ensemble weighting, probability calibration (no isotonic/Platt step),
-   the Chronos-2 stacking and contamination handling, GJR-GARCH vs EWMA.
+   the Chronos-2 stacking and contamination handling, GJR-GARCH vs EWMA. Use the inventory in section 14.
 7. **Portfolio integration and risk.** Are the recommendation rules (net expected return > 0,
    evidence backed, P(large loss) <= 15%, at most 5 names, <= 25% of the sleeve each, settled
    cash only, no shorts, hold through the horizon) sound for a $1,000 Trading sleeve inside a
    Roth IRA? What would you change? How should stock picks interact with the ETF optimizer?
-8. **Data.** What free or cheap data would most improve point-in-time correctness or signal
+8. **Decision layer and AI (sections 13-14).** Is a verdict that comes only from the 20-session ranker
+   (BUY = top fifth with gates; AVOID = bottom fifth) defensible given section 12's evidence, the score ties
+   and the non-monotone score-to-P&L map? Are the signal warnings (lift plus top-fifth plus flat-model test)
+   sound? Is the entry plan (dip quantiles, barrier exits) a reasonable use of the drawdown model? How should
+   the LLM agents' ratings be evaluated against the model before either is trusted, and is the evidence
+   packet (13.7) adequate for grounded LLM analysis? Should leveraged ETFs be allowed under the account rules?
+9. **Data.** What free or cheap data would most improve point-in-time correctness or signal
    (point-in-time index membership, analyst revisions with timestamps, earnings calendars,
    options-implied volatility, short interest, insider transactions)? Be specific about sources
    and their point-in-time properties; say when you are not sure a source is point-in-time.
-9. **Next experiments, ranked** by expected value of information per hour of work, each with
+10. **Next experiments, ranked** by expected value of information per hour of work, each with
    a hypothesis, the exact test, and the decision it would change. Include whether a compact
    sequence model (PatchTST, VSN+LSTM) or a pretrained model (Chronos-2 fine-tuning, TimesFM)
    is worth testing next given the measured results, and why.
-10. **Engineering.** Reproducibility, caching, failure isolation, append-only records, cost
+11. **Engineering.** Reproducibility, caching, failure isolation, append-only records, cost
     controls: anything fragile or missing?
-11. **Questions for the owner** that would change your advice.
+12. **Questions for the owner** that would change your advice.
 
 Rules for your answer: be concrete and cite sections (e.g. "6.2 Trend state") or function
 names. Do not invent numbers; if you estimate, label it an estimate. If something cannot be
@@ -86,7 +92,17 @@ the risk. Assume the owner is technical and will implement your suggestions.
     representative of the deployed model?
 11. News: collected prospectively, not used in training; sentiment from FinBERT on headlines.
 12. Analyst data: excluded from stock training because Yahoo's lists are today's versions.
-13. Thresholds: defined in code before the study, versioned (`thr-14adb1ddde`), not tuned.
+13. Thresholds: defined in code before the study, versioned (now `thr-016cb9da59`), not tuned.
+14. Verdict scores come from the daily decision fitted on rows whose labels ended by the cutoff; stocks
+    outside the index are ranked against members without changing members' ranks. Any leak?
+15. Fund verdicts use the ETF engine's combined forecast; its weights come from walk-forward ICs. Any
+    look-ahead in choosing the weights?
+16. The evidence packet cuts every series at the cutoff before computing; news needs a known publication
+    time by the cutoff's end of day (New York); SEC facts count from the day after filing; FRED uses
+    vintages published before the cutoff or the series' lag. Any remaining leak (e.g. a profile or analyst
+    value that is today's, or first_seen after the cutoff)?
+17. Agent runs analyze a past day with tools that withhold present-day profile values; is anything in
+    their tool data from after the analysis day?
 
 ---
 
@@ -658,6 +674,173 @@ Full detail: `docs/DECISIONS.md`. In brief:
   +9.9%). **Not validated**: the app is in experimental mode (WAIT; PAPER ENTER feeds the shadow account).
 - **Challengers** on 150 stocks: no ranking skill for PatchTST, Chronos-2, TimesFM 2.5; Kronos-mini
   0.041 (0.016, 0.067) in development but likely contaminated and 0.014 (not significant) after.
+
+## 13. Screener, signals, model verdicts, AI agents and the evidence packet (added 2026-10-24 to 2026-10-25)
+
+### 13.1 Quality and Wall Street screen (`stocks/screen.py`; Screener tab; `stocks screen`)
+
+Every S&P 500 stock (503) plus the watchlist; built on request only, every fetch cached.
+- **Quality score (0-100)**: share of the ticker page's tests passed: the moat checks (`research/moat.py`:
+  pricing power, returns on capital, profitability, cash generation, steady growth, with sector bars and
+  bank-specific checks) plus the checklist's financial-strength items (debt to equity, interest coverage
+  flag < 3, current ratio flag < 1.0, a high-rate downturn test) and profitability items (FCF, ROIC > 15%,
+  gross/operating/net margin trends) (`research/quality.py`). Pass = 1, "check" = 0.5, flag = 0; tests
+  without data left out. **Quality rank**: by quality score, ties share a rank.
+- **Wall Street**: this month's analyst counts as a consensus score 1 (strong buy) to 5 (strong sell), the
+  number of analysts, upside to the mean price target. Yahoo, as of today: not point-in-time.
+- **Valuation** (forward P/E vs its own history, EV/EBITDA, FCF yield, reverse-DCF implied growth): shown,
+  not scored.
+- **Combined score / rank**: mean of three within-screen percentiles (quality, consensus with stronger buys
+  higher, target upside) x 100; a stock missing one is ranked on the rest. Untested for returns.
+
+### 13.2 Stock signals (`stocks/signals.py`; ticker page and the Screener's "Signals and action" view)
+
+From the latest saved stock-model forecast per stock (horizon 20 sessions; `stocks/pipeline.py`): P(trend
+up / down / sideways / unclear), P(breakout above the prior 20-session range), P(breakdown below it: any low
+in t+1..t+20 below the lowest low of the last 20 sessions), P(large loss), P(deep drawdown), drawdown
+quantiles (dd_q05, dd_q50).
+- **Lift** = probability / base rate in training; **peer rank** among today's stocks.
+- **Warnings**: breakout likely / breakdown risk need lift >= 1.2 and today's top fifth; crash warning lift
+  >= 1.5, P >= 10%, top fifth; deep drawdown lift >= 1.5, P >= 20%, top fifth. The top-fifth rule exists
+  because a market-wide move raised every stock's breakdown lift (234 of 499 stocks flagged without it).
+- **Flat-model detection**: a 10th-90th percentile spread across stocks below 2 points means the model does
+  not tell stocks apart, and it raises no warning. Today the large-loss model gives every stock about 6.9%
+  and the deep-drawdown model about 17%: both flat. Trend up/down are flat too; only sideways varies.
+- Every signal's evidence status is **untested** for the current thresholds version.
+- Example (ANET, 2026-10-23): close $172.37, 20-day low $168.24 (2.4% below), P(breakdown) 78% vs 42% usual
+  (top 8%): largely a consequence of sitting near the range floor with about 3% daily moves.
+
+### 13.3 The verdict (`stocks/verdict.py`): BUY / WATCH / HOLD / SELL / AVOID
+
+**Decided only by the internal 20-session quant model** (the owner's instruction: AI ratings must not
+decide). The daily decision (`stocks/daily.py`) saves every ranked stock's score: rank (ties broken by
+P(profit), then ticker), rank_pct, score_pct, expected net after costs (from the binned score-to-P&L map),
+net sd, P(profit) (trade-quality model), P(large loss) (risk model), cost.
+- Not held: **BUY** = the daily decision says ENTER, or top fifth by rank AND expected net > 0 AND
+  P(profit) >= 50% AND P(large loss) <= 15%. **AVOID** = bottom fifth or expected net < 0. **WATCH** otherwise.
+- Held: **SELL** = the daily decision says EXIT/REDUCE, or bottom fifth with expected net < 0. **HOLD**
+  otherwise (top fifth: a candidate to add to; middle; bottom fifth: weakest, no sell signal).
+- **Context only** (shown, never decides): breakdown/crash warnings, quality score, Wall Street, agents' rating.
+- Today: 100 BUY, 307 WATCH, 96 AVOID among S&P 500 stocks; #1 is TPR (the top five tie on score).
+- **Funds**: a fund's score is its rank among the 41 funds the ETF forecast engine covers, by the combined
+  20-session forecast (`research/engine.combine_runs`: return above cash, P(gain); no large-loss figure).
+- **Stocks outside the S&P 500** that are held or watched (ARR, OKLO) are scored by the same stock model and
+  ranked against that day's members (members keep their ranks).
+- Known properties: many tied scores (32 stocks share one value); the binned map is **not monotone** (top bin
+  +0.58%, next bin +0.70%); expected net is positive for every stock (+0.29% to +0.70%: market drift), so
+  "expected loss" never fires and AVOID comes from rank only. Decision candidates were re-ordered by score
+  (they had been sorted by the binned expected net, which left out the #1 stock). Validation (section 12):
+  ranking IC 0.020 in development; trading on it did not beat SPY.
+
+### 13.4 Entry plan (`signals.entry_plan`; ticker page)
+
+Limit-entry levels, each with the model's chance of being reached within 20 sessions: the 20-day low
+(P(breakdown)), the median dip close x (1 + dd_q50) (about 50%), the deep dip close x (1 + dd_q05) (about
+5%), and "buy at the next close". Each entry E gets the barrier policy's exits: stop E x (1 + expm1(-sigma_h)),
+take-profit E x (1 + expm1(+sigma_h)), deadline 20 sessions (`positions.POLICIES["barrier_20"]`, the exit rule
+the decision study tested). Experimental. Example AVGO: next close $321.68 (stop $289.05, target $358.00);
+median dip $307.13; 20-day low $320.23 (83%); deep dip $265.63.
+
+### 13.5 Decisions page
+
+- **AI decisions card**: shortlist = holdings, stocks the agents analyzed in the last 30 days, model-verdict
+  BUYs (model-rank order), the quant decision's PAPER ENTERs; the latest economic brief (an LLM summary of
+  macro data and headlines); analyst toggles; an editable AI budget. "Agents' view (not used)" (rating mapped:
+  Buy/Overweight -> BUY, Hold -> HOLD or WATCH, Underweight/Sell -> SELL or AVOID) beside "Model verdict",
+  with agreement and a link to the run's report.
+- **Quant model decision** (section 12): candidates in model-rank order; all WAIT (experimental mode; the
+  Trading sleeve's $1,000 sits in SGOV, so settled cash is $0), PAPER ENTER feeding the shadow account.
+
+### 13.6 AI agents (the TradingAgents graph): providers, roles, cost controls, records
+
+- **Graph**: market (technical), sentiment, news & economy and fundamentals analysts (each a tool-calling
+  loop over local data tools), a bull and a bear researcher (one round), a research manager (structured
+  ResearchPlan), a trader (TraderProposal), aggressive / conservative / neutral risk analysts (one round), a
+  portfolio manager (PortfolioDecision: rating Buy/Overweight/Hold/Underweight/Sell, executive summary,
+  thesis, optional price target and horizon), and a reflector that writes lessons to a memory log.
+- **Providers**: default Google **Gemini 3.8 Flash** on a verified free-tier key (no charge; Google may use
+  free-tier content); fallbacks Gemini 3.8 Flash then **Gemini 3.5 Flash-Lite** on provider failure or a model
+  without a price; budget refusals stop. The free 3.8 Flash quota ran out after about two full runs a day.
+  OpenAI key present (gpt-6-luna $0.10/$0.50, gpt-6-sol $2/$10 per M tokens); Groq (gpt-oss-120b $0.15/$0.60;
+  free plan about 8K tokens/minute, too small for analyst requests); the DeepSeek key was rejected as invalid.
+- **Per-role models** (`llm_clients/roles.py`; Settings > Agent models): 13 roles; currently bear,
+  conservative, neutral, research manager and portfolio manager on Groq gpt-oss-120b and the rest on Gemini,
+  so opposing debate sides use different models; fallbacks keep roles assigned to other providers.
+- **Gateway** (`ledger/ai_gateway.py`): every model priced or refused; budget reserved per run and checked
+  before each request ($5/day, $50/month, 600/6,000 requests, counted at paid rates even on the free tier);
+  usage recorded per request under the provider that answered; results cached by inputs (ticker, day,
+  analysts, models, roles). Page loads never trigger paid AI.
+- **Token reductions** in tool output (`agents/tools.py`): prices to the cent, no all-zero columns, last 60
+  sessions; indicators to 2 decimals without weekend placeholders; all indicators in one call. A one-analyst
+  run fell from 98k to 51k input tokens and from 15 to 12 requests.
+- **Records**: every request and reply is logged (`llm_clients/request_log.py`, `requests.jsonl` per run;
+  ticker page "what was sent"; `stocks calls`; `docs/AGENT_API_IO.txt`). Each run writes
+  `0_FINAL_DECISION.md` with the model's verdict (deciding) and the agents' view (not used).
+
+### 13.7 Manual chat route and the evidence packet (`agents/manual.py`, `agents/packet.py`)
+
+"Copy the prompt" -> paste into ChatGPT / Gemini / Claude -> paste the answer back -> parsed, saved as a
+report, the rating recorded (one rating per ticker and day), the final decision written. The prompt
+(`evidence-packet-v1`) is grounded instructions followed by one JSON evidence packet read from local caches
+only (no downloads):
+- instrument and type (Yahoo quoteType), cutoff and timezone, latest session;
+- one price snapshot `PX1` computed after cutting at the cutoff (EMA 10, SMA 50/200, RSI 14 Wilder, MACD
+  12/26/9, Bollinger 20/2, ATR 14, 20-day high/low, 250-session high and drawdown, 20-day realized
+  volatility, volume); comparisons at 5/20/60/250 sessions; the last 10 bars;
+- stocks: SEC facts filed before the cutoff (period end, filed, available-from, form, value) and derived
+  ratios; ETFs: cached-profile fund facts flagged "not point-in-time", a leverage flag, holdings / NAV /
+  premium listed as missing;
+- news: stored headlines with a known publication time on or before the cutoff's end of day (New York),
+  duplicates merged, relevance-ranked, with ID, publisher, published, first seen, URL, "headline only" or summary;
+- macro: FRED/ALFRED as known at the cutoff (vintages or lags), units, observation dates, 1- and 12-month
+  comparisons in percentage points or percent change, a true 12-month CPI figure;
+- the checks actually run (date order, missing closes, OHLC consistency, price basis, coverage), discrepancy
+  flags (precedence: local store > OHLCV cache > profile), one missing-data list, portfolio context "unknown";
+- size limits that drop whole items (old bars, the 250-session comparison, quarterly items, news beyond five);
+- no app verdicts, ranks or holdings (model forecasts optional, off by default).
+The answer contract keeps rating / executive_summary / investment_thesis / price_target / time_horizon and
+adds optional `evidence_ids` and `insufficient_evidence` (the five-value rating cannot abstain; abstention is
+recorded). Measured: TPR prompt 11,541 -> 4,953 tokens, TQQQ 7,047 -> 3,197 (o200k_base). Not yet evaluated on
+answer quality. Agent (API) runs still assemble their input through tools, not the packet.
+
+### 13.8 Open problems found while building this layer
+
+1. Verdicts come from a model that has not beaten SPY; about 100 stocks are BUY on any day.
+2. A coarse, non-monotone score-to-P&L map; heavy score ties; expected net positive for every stock.
+3. Crash and deep-drawdown models are flat across stocks today; trend up/down nearly flat.
+4. Signals' evidence status is "untested" for the current thresholds version.
+5. Leveraged ETFs (TQQQ, SOXL) rank top among funds and are held, while the account rule says "no leverage"
+   (meant as no margin): an unresolved policy question.
+6. Analyst and profile data are today's values (not point-in-time); the screen is a snapshot.
+7. LLM ratings disagree with the model (TPR: model #1 BUY, ChatGPT Sell); there is no evaluation yet of whose
+   calls are better.
+8. Free-tier quotas limit agent runs to a few a day; Groq's per-minute token cap blocks analyst requests.
+
+## 14. Inventory: every model, its inputs, outputs, training and evidence
+
+| # | Model | Where | Inputs (data, features) | Output | Training / method | Evidence |
+|---|---|---|---|---|---|---|
+| 1 | Standard rule (default expected return) | `optimizer` | 10+ years of daily adjusted closes per fund | expected growth = shrunk Sharpe x volatility, per year | closed form; no fitting | the plan's default; models below did not beat it in the portfolio after costs |
+| 2 | Portfolio optimizer | `optimizer/plan.py` | expected growth, worst historical drop per fund (or past crashes replayed), risk level 1-10, growth target | target mix, orders, recurring buys | maximize expected growth subject to a stress-loss cap (worst-case or scenarios), per-fund cap of a quarter of the budget | 2008-2026 backtest: scenarios mode exceeded its cap by up to 1.5x, so worst-case is default |
+| 3 | ETF forecast models (Elastic Net, XGBoost, XGBoost ranking, XGBoost quantiles, momentum) | `research/engine.py`, `forecast.py` | 41 funds; PRICE_FEATURES (momentum 1/3/6/12-1 m, reversal, volatility, downside vol, beta, distance from 52-week high, MA200 gap, drawdown, range, dollar volume, volume trend, Amihud), MARKET (VIX, VIX slope, 10y change, 3m bill, SPY momentum and vol), MACRO (CPI 12m, unemployment change, payrolls, NFCI, curve, credit spread and change, fed funds) | log return above cash over 5/20/60 sessions, quantiles, P(gain) | walk-forward with purging; within-date ranking; ensemble weighted by significant walk-forward IC (Holm) | ranked funds better than chance; did not beat the standard rule after costs |
+| 4 | "+chronos" variants and stacking | `research/foundation.py` | the above plus Chronos-2 forecast features | as above | XGBoost on stacked inputs | as above; Chronos contamination risk |
+| 5 | Chronos-2 (pretrained) | `research/engine.py` | price history | return forecast | zero-shot (amazon/chronos-2) | given no weight: pretraining may include the prices; scored only on a live record |
+| 6 | Volatility: GJR-GARCH vs EWMA | `research` | daily returns | volatility forecast | GJR-GARCH(1,1) vs RiskMetrics EWMA (0.94) | GJR-GARCH beat EWMA on volatility |
+| 7 | Stock event models: BaseRate, Logit, XGBEvent | `stocks/models.py`, `pipeline.py` | S&P 500 panel (point-in-time membership): technical group (the price features plus MA slopes, range positions, relative to SPY and sector, volume change, current trend), market, fundamental (SEC point-in-time: growth, margins, ROA, leverage, dilution, yields, filing age), macro (ALFRED vintages) | P(breakout up / down), P(large loss), P(deep drawdown) over 5/20/60 sessions | pooled across stocks; walk-forward folds shared across stocks; purged by label end | breakouts showed skill in the stock study; under the current thresholds: untested |
+| 8 | Trend, Severity, Relative models | `stocks/models.py` | same panel | trend class probabilities, drawdown quantiles, return relative to the market | multinomial / quantile / regression | no return skill in the stock study |
+| 9 | Stock return models (Elastic Net, XGBoost quantiles) | `stocks/pipeline.py` | same panel | mean / median / 5-95% return, P(gain), net after costs | walk-forward | no return skill; P(gain) is about 60-66% for every stock (drift) |
+| 10 | Decision ranker (XGBoost learning-to-rank) | `stocks/adapters.py`, `daily.py` | same panel; date groups | within-date score -> rank | LambdaMART-style ranking by date, fitted weekly, cached by code hash | IC 0.020 (0.005, 0.036) development, 0.037 exploratory; heavy score ties |
+| 11 | Score-to-net map | `adapters.score_to_net` | ranker percentile | expected net P&L, sd, 10% quantile | 10 bins, shrunk | top decile realized -0.5% in the study; not monotone today |
+| 12 | Trade-quality model | `adapters.TradeQuality` | panel + score | P(trade profitable after costs) | logistic / XGBoost, optional sigmoid calibration, cross-fitted | worse than the base log loss (0.69) |
+| 13 | Risk model | `daily` bundle | panel | P(large loss while held) | classifier | flat across stocks today (about 7%) |
+| 14 | Position engine and policies | `stocks/positions.py` | prices, dividends | trades for fixed 5/20/60 and barrier 20/60 policies | rule-based; T+1, next-close fills, no same-day exits | best development policy +210% vs SPY +358%; exploratory +5% vs SPY +43% |
+| 15 | Challengers: PatchTST, Chronos-2, TimesFM 2.5, Kronos-mini | `stocks/challengers.py` | price sequences, 150 stocks | return scores | compact PatchTST trained locally; others pretrained | no skill except Kronos-mini in development (0.041), likely contaminated; 0.014 after |
+| 16 | News sentiment (FinBERT) | `stocks/news.py` | stored headlines and summaries | sentiment score, relevance (about / mentions / other), events | pretrained FinBERT, local GPU or CPU | collected prospectively; not used in training |
+| 17 | Moat and quality checklists | `research/moat.py`, `quality.py` | Yahoo annual statements, profile, prices, dividends, analysts | pass / check / flag per test, verdict counts | fixed rules with sector bars | untested for returns |
+| 18 | Moat sources (AI reading of the 10-K) | `research/moat_ai.py` | the latest 10-K text | switching costs, network effects, cost advantages, intangibles, efficient scale, with quotes | one paid LLM call per filing, cached | qualitative |
+| 19 | Market brief | `optimizer/market.py` | macro data and headlines | summary and trends | one LLM call per day, cached | qualitative |
+| 20 | TradingAgents multi-agent graph | `tradingagents/graph` | tool data (prices, indicators, news, statements, macro), memory of past lessons | rating Buy..Sell with thesis | LLM agents (13 roles), one debate round each | shown as the agents' view; not used for decisions; no evaluation yet |
+| 21 | Verdict and entry plan | `stocks/verdict.py`, `signals.py` | items 10-13 (stocks), item 3 (funds), item 7 (dips, breakdown) | BUY / WATCH / HOLD / SELL / AVOID; limit entries with stops and targets | fixed rules on model outputs | inherits items 10-13: experimental |
 
 ---
 
@@ -1315,45 +1498,55 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
             ira: dict, prices: pd.Series, validated: bool, cutoff, execute) -> list[dict]:
     """ENTER (validated) or PAPER ENTER (experimental) and WAIT, with sizes and blocked constraints."""
     out = []
-    cand = today[today["in_index"]].sort_values("expected_net", ascending=False)
+    # The model's own order: its score, then P(profit), then the ticker (the same order as the saved ranks),
+    # so the input order never decides which tied stock comes first. Not the expected net: that comes from
+    # a binned map that need not rise with the score, and would put lower-ranked stocks first. Ties of the
+    # expected net are still marked, since tied stocks share one estimate.
+    cand = today[today["in_index"]].reset_index().rename(columns={"index": "ticker"})
+    cand = cand.sort_values(["score_pct", "p_win", "ticker"], ascending=[False, False, True])
+    ties = cand.groupby("expected_net")["ticker"].transform("count")
+    cand = cand.assign(tied_with=ties - 1).set_index("ticker")
     active = (held - exiting)
     slots = max(0, r["max_names"] - len(active))
     budget = spendable
     for t, row in cand.head(25).iterrows():
-        blocks, reasons = [], []
+        # Model gates decide whether the signal is good enough at all (they also decide PAPER ENTER, which
+        # the shadow account sizes on its own cash); account gates decide whether this account can act.
+        model_blocks, account_blocks = [], []
         risk = row["p_risk"]
         if not (isinstance(risk, float) and np.isfinite(risk)):
-            blocks.append("risk estimate missing or invalid")
+            model_blocks.append("risk estimate missing or invalid")
         elif risk > r["max_large_loss_prob"]:
-            blocks.append(f"P(large loss during the position) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
+            model_blocks.append(f"P(large loss during the position) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
         if not np.isfinite(row["expected_net"]) or row["expected_net"] < r["min_expected_net"]:
-            blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
+            model_blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
         if not np.isfinite(row["p_win"]) or row["p_win"] < r["min_p_win"]:
-            blocks.append(f"P(profitable after costs) {row['p_win']:.0%} below {r['min_p_win']:.0%}")
-        if t in held:
-            blocks.append("already held")
+            model_blocks.append(f"P(profitable after costs) {row['p_win']:.0%} below {r['min_p_win']:.0%}")
         price = float(prices.get(t, np.nan))
         if not np.isfinite(price):
-            blocks.append("no current price")
+            model_blocks.append("no current price")
+        if t in held:
+            account_blocks.append("already held")
         dollars = min(r["max_position_share"] * sleeve_value, budget / max(slots, 1)) if slots else 0.0
         if not slots:
-            blocks.append(f"name limit: {r['max_names']} names including holdings")
+            account_blocks.append(f"name limit: {r['max_names']} names including holdings")
         if dollars < r["min_order"]:
-            blocks.append(f"settled cash: ${budget:,.2f} available after reservations")
+            account_blocks.append(f"settled cash: ${budget:,.2f} available after reservations")
         ira_total = ira["total"] or 1.0
         if (ira["by_ticker"].get(t, 0.0) + dollars) / ira_total > r["combined_name_cap"]:
-            blocks.append(f"IRA concentration: would exceed {r['combined_name_cap']:.0%} of the whole IRA in {t}")
+            account_blocks.append(f"IRA concentration: would exceed {r['combined_name_cap']:.0%} of the whole IRA in {t}")
         line = {"ticker": t, "expected_net": row["expected_net"], "net_sd": row["net_sd"], "net_q10": row["net_q10"],
                 "expected_excess_vs_spy": row["expected_excess"], "p_win": row["p_win"], "p_risk": risk,
                 "cost_rt": row["cost_rt"], "score_pct": row["score_pct"], "sigma": row["sigma"], "price": price,
-                "blocked": blocks,
-                "execute": str(execute)}
-        if blocks:
+                "tied_with": int(row["tied_with"]), "blocked": model_blocks + account_blocks, "execute": str(execute)}
+        if not model_blocks:
+            line["paper_action"] = "PAPER ENTER"           # the shadow account sizes it on its own cash
+        if model_blocks or account_blocks:
             line["action"] = "WAIT"
         else:
             line.update({"dollars": round(dollars, 2), "shares": round(dollars / price, 6),
                          "expected_benefit_usd": round(dollars * row["expected_net"], 2),
-                         "action": "ENTER" if validated else "WAIT", "paper_action": "PAPER ENTER"})
+                         "action": "ENTER" if validated else "WAIT"})
             if not validated:
                 line["blocked"] = ["evidence: not validated (experimental mode shows PAPER ENTER)"]
             budget -= dollars
@@ -1419,4 +1612,586 @@ def daily_plan(store, as_of, reserved_today: float = 0.0) -> dict:
     return {"session": str(day), "next_session": str(next_session(day)), "planned": cap.daily_investment_usd,
             "settled_available": round(available, 2), "buy": buy, "shortfall": round(cap.daily_investment_usd - buy, 2),
             "notes": notes}
+```
+
+## The verdict (tradingagents/stocks/verdict.py)
+
+```python
+def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict | None, rating: dict | None,
+            today: date | None = None, score: dict | None = None, horizon: int = 20) -> dict:
+    """``{"verdict", "summary", "checks", "context", "held", "model"}``. ``checks`` decide the verdict;
+    ``context`` is shown beside it and changes nothing. ``ok`` None means no data."""
+    today = today or date.today()
+    screen, rating = screen or {}, _fresh(rating, today)
+    action = (decision or {}).get("action")
+    s = score or {}
+    # The position among today's stocks (ties broken), not the tied score, decides the fifths.
+    pct = s.get("rank_pct", s.get("score_pct"))
+    net, p_win, p_risk = s.get("expected_net"), s.get("p_win"), s.get("p_risk")
+
+    checks = []
+    if s:
+        fund = s.get("kind") == "fund"
+        peers = "funds" if fund else "S&P 500 stocks" + ("" if s.get("member", True) else ", where it would stand")
+        checks = [
+            _check("Model rank", pct >= TOP, f"#{s['rank']} of {s['of']} {peers} (ahead of {pct:.0%}; "
+                                             f"BUY needs the top fifth, AVOID is the bottom fifth)"),
+            _check("Expected return", net > 0,
+                   f"{net:+.2%} above cash over {horizon} sessions (BUY needs above zero)" if fund else
+                   f"{net:+.2%} over {horizon} sessions after costs of {s.get('cost_rt') or 0:.2%} (BUY needs above zero)"),
+            _check("Chance of profit", p_win >= MIN_P_WIN, f"{p_win:.0%} (BUY needs {MIN_P_WIN:.0%}+)"),
+        ]
+        if p_risk is not None:
+            checks.append(_check("Chance of a large loss", p_risk <= MAX_P_RISK,
+                                 f"{p_risk:.0%} while held (BUY needs {MAX_P_RISK:.0%} or less)"))
+    if action:
+        checks.append(_check("Daily decision", action not in ("EXIT", "REDUCE"),
+                             f"{action}{' (' + decision['paper_action'] + ')' if decision.get('paper_action') else ''}"))
+
+    warnings = {w["kind"]: w["text"] for w in (signal or {}).get("warnings", [])} \
+        if signal and signal.get("status") == "ok" else {}
+    bad = [v for k, v in warnings.items() if k in BAD_SIGNALS]
+    q, c, u = screen.get("quality_score"), screen.get("analyst_mean"), screen.get("target_upside")
+    context = [
+        _check("Breakdown or crash warning", None if not signal or signal.get("status") != "ok" else not bad,
+               "no signals saved" if not signal or signal.get("status") != "ok" else ("; ".join(bad) or "none"), False),
+        _check("Quality score", None if q is None else q >= MIN_QUALITY_BUY,
+               "not screened" if q is None else f"{q:.0f} of 100", False),
+        _check("Wall Street", None if c is None else c <= MAX_CONSENSUS_BUY,
+               "no analysts" if c is None else f"consensus {c:.2f} (1 strong buy to 5 strong sell)"
+               + (f", target {u:+.0%}" if u is not None else ""), False),
+        _check("Agents' rating", None if not rating else None,
+               "no recent agent analysis" if not rating else f"{rating['rating']} on {rating['date']} "
+                                                             f"({rating['age_days']} days ago); not used", False),
+    ]
+
+    if held:
+        if action in ("EXIT", "REDUCE"):
+            v, why = "SELL", f"the daily decision says {action}"
+        elif s and pct <= BOTTOM and net < 0:
+            v, why = "SELL", f"the model ranks it #{s['rank']} of {s['of']} and expects {net:+.2%} after costs"
+        else:
+            v = "HOLD"
+            if not s:
+                why = "held; no model view (the model has not scored this ticker), so nothing says to sell"
+            else:
+                peers = "funds" if s.get("kind") == "fund" else "stocks"
+                where = f"ranks #{s['rank']} of {s['of']} {peers}"
+                why = (f"held; the model {where}, in the top fifth: a candidate to add to" if pct >= TOP else
+                       f"held; the model {where}, in the bottom fifth, but still expects {net:+.2%}: "
+                       f"weakest of what you hold, though no sell signal" if pct <= BOTTOM else
+                       f"held; the model {where}, in the middle: no reason to sell or add")
+    elif action == "ENTER":
+        v, why = "BUY", "the daily decision says ENTER"
+    elif not s:
+        v, why = "WATCH", "no model view: the model has not scored this ticker"
+    elif pct <= BOTTOM or net < 0:
+        v = "AVOID"
+        why = (f"the model ranks it in the bottom fifth (#{s['rank']} of {s['of']})" if pct <= BOTTOM
+               else f"the model expects {net:+.2%} after costs over {horizon} sessions")
+    elif all(x["ok"] for x in checks):
+        v, why = "BUY", f"the model ranks it #{s['rank']} of {s['of']} and every test passes"
+    else:
+        missing = [x["name"].lower() for x in checks if x["ok"] is False]
+        v, why = "WATCH", "the model's view is not strong enough: " + ", ".join(missing)
+    return {"verdict": v, "summary": why, "checks": checks, "context": context, "held": held,
+            "model": {"horizon": horizon, **s} if s else None,
+            "rules": {"top": TOP, "bottom": BOTTOM, "min_p_win": MIN_P_WIN, "max_p_risk": MAX_P_RISK,
+                      "rating_days": RATING_DAYS}}
+```
+
+```python
+def ai_decision(rating: dict, held: bool) -> dict:
+    """The agents' rating as an action: Buy / Overweight -> BUY, Hold -> HOLD, Underweight / Sell -> SELL
+    when held (AVOID when not), with the rating's age. Shown as the agents' view; it decides nothing."""
+    r = rating.get("rating")
+    action = AI_DECISIONS.get(r, "REVIEW")
+    if action == "SELL" and not held:
+        action = "AVOID"
+    if action == "HOLD" and not held:
+        action = "WATCH"
+    try:
+        age = (date.today() - date.fromisoformat(str(rating.get("date"))[:10])).days
+    except ValueError:
+        age = None
+    return {"action": action, "rating": r, "date": rating.get("date"), "age_days": age,
+            "stale": age is None or age > RATING_DAYS}
+```
+
+## Signals and the entry plan (tradingagents/stocks/signals.py)
+
+```python
+def peers(forecasts: list[dict]) -> dict:
+    """Today's spread of each probability across stocks: sorted values, and whether the model tells stocks apart."""
+    out = {}
+    for k, col in [*((k, f"p_{k}") for k in EVENTS), *((n, k) for k, n, _ in TRENDS)]:
+        v = np.sort([f[col] for f in forecasts if f.get(col) is not None])
+        enough = len(v) >= MIN_PEERS
+        spread = float(np.percentile(v, 90) - np.percentile(v, 10)) if enough else None
+        out[k] = {"values": v if enough else None, "spread": spread,
+                  "flat": bool(enough and spread < FLAT_SPREAD), "n": int(len(v))}
+    return out
+```
+
+```python
+def describe(forecast: dict, base_rates: dict, peer: dict | None = None) -> dict:
+    """Trend, lifts, peer ranks and warnings from one saved forecast's numbers (pure arithmetic)."""
+    f, b, peer = forecast or {}, base_rates or {}, peer or {}
+    mix = b.get("trend_mix") or []
+    shares = [m / sum(mix) for m in mix] if mix and sum(mix) else []
+    trend_lifts = {name: _lift(f.get(k), shares[i] if i < len(shares) else None) for k, name, i in TRENDS}
+    # Only a class the model tells stocks apart on, high for this stock among today's, counts as its trend.
+    usable = [n for _, n, _ in TRENDS if not (peer.get(n) or {}).get("flat")]
+    best = max(((trend_lifts[n], n) for n in usable if trend_lifts[n] is not None
+                and (_rank(f.get(f"trend_{n}"), peer.get(n)) or 1.0) >= TOP_SHARE), default=(None, None))
+    if not usable:
+        trend = "no stock-specific view"
+    else:
+        trend = best[1] if best[0] is not None and best[0] >= LIFT_TREND else "no clear trend"
+    trend_p = f.get(f"trend_{best[1]}") if best[1] and trend == best[1] else None
+    lifts = {k: _lift(f.get(f"p_{k}"), b.get(k)) for k in EVENTS}
+    ranks = {k: _rank(f.get(f"p_{k}"), peer.get(k)) for k in EVENTS}
+    flat = [k for k in EVENTS if (peer.get(k) or {}).get("flat")]
+
+    def top(k):
+        return ranks[k] is None or ranks[k] >= TOP_SHARE
+
+    warnings = []
+    if (lifts["up_break"] or 0) >= LIFT_BREAK and top("up_break") and "up_break" not in flat:
+        warnings.append({"kind": "breakout", "level": "info",
+                         "text": f"breakout likely: {f['p_up_break']:.0%} vs {b['up_break']:.0%} usual"})
+    if (lifts["down_break"] or 0) >= LIFT_BREAK and top("down_break") and "down_break" not in flat:
+        warnings.append({"kind": "breakdown", "level": "warn",
+                         "text": f"breakdown risk: {f['p_down_break']:.0%} vs {b['down_break']:.0%} usual"})
+    if (lifts["large_loss"] or 0) >= LIFT_CRASH and f.get("p_large_loss", 0) >= MIN_CRASH and top("large_loss") \
+            and "large_loss" not in flat:
+        warnings.append({"kind": "crash", "level": "high",
+                         "text": f"crash warning: {f['p_large_loss']:.0%} chance of a large loss vs {b['large_loss']:.0%} usual"})
+    if (lifts["deep_drawdown"] or 0) >= LIFT_CRASH and f.get("p_deep_drawdown", 0) >= MIN_DEEP and top("deep_drawdown") \
+            and "deep_drawdown" not in flat:
+        warnings.append({"kind": "drawdown", "level": "high",
+                         "text": f"deep drawdown warning: {f['p_deep_drawdown']:.0%} vs {b['deep_drawdown']:.0%} usual"})
+    return {"trend": trend, "trend_p": trend_p, "trend_lifts": trend_lifts, "current_trend": f.get("current_trend"),
+            "lifts": lifts, "ranks": ranks, "flat": flat, "warnings": warnings}
+```
+
+```python
+def entry_plan(forecast: dict, close: float, horizon: int = 20) -> dict | None:
+    """Where to buy, and the exits that go with it, from the stock models' own numbers (pure arithmetic).
+
+    Limit prices, each with the model's chance it is reached within ``horizon`` sessions:
+    - the 20-day low (reached when the stock breaks down: P(breakdown)),
+    - the median dip (the model's median drawdown from today's close: about an even chance),
+    - a deep dip (its 5% drawdown quantile: about a 1-in-20 chance).
+    Exits for an entry E follow the barrier policy the decision study uses: stop-loss at
+    E * expm1(-sigma_h) below, take-profit at E * expm1(+sigma_h) above (sigma_h = the stock's
+    volatility over the horizon), with the deadline of ``horizon`` sessions.
+    """
+    f = forecast or {}
+    if not close or not (close > 0) or f.get("sigma_h") is None:
+        return None
+    import math
+
+    sigma = float(f["sigma_h"])
+    levels = []
+    if f.get("lower") and f["lower"] < close:
+        levels.append({"name": "At the 20-day low", "price": float(f["lower"]), "chance": f.get("p_down_break")})
+    if f.get("dd_q50") is not None and f["dd_q50"] < 0:
+        levels.append({"name": "Median dip", "price": close * (1 + float(f["dd_q50"])), "chance": 0.5})
+    if f.get("dd_q05") is not None and f["dd_q05"] < 0:
+        levels.append({"name": "Deep dip", "price": close * (1 + float(f["dd_q05"])), "chance": 0.05})
+    levels.sort(key=lambda x: -x["price"])
+
+    def exits(entry):
+        return {"stop": entry * (1 + math.expm1(-sigma)), "profit": entry * (1 + math.expm1(sigma))}
+
+    rows = [{"name": "Buy at the next close", "price": close, "chance": 1.0, **exits(close)},
+            *({**lv, **exits(lv["price"])} for lv in levels)]
+    for r in rows:
+        r["vs_close"] = r["price"] / close - 1
+    return {"close": close, "horizon": horizon, "sigma_h": sigma, "rows": rows}
+```
+
+## The evidence packet (tradingagents/agents/packet.py)
+
+```python
+def assemble(inputs: dict, limits: dict | None = None, include_model_forecasts: bool = False,
+             forecasts: list[dict] | None = None, portfolio: dict | None = None) -> dict:
+    """The packet, from already-loaded inputs. Deterministic: the same inputs give the same packet."""
+    lim = {**LIMITS, **(limits or {})}
+    ticker, cutoff = inputs["ticker"].upper(), inputs["cutoff"]
+    cut = pd.Timestamp(cutoff)
+    missing: list[dict] = []
+    quality: list[dict] = []
+    profile = inputs.get("profile") or {}
+
+    kind_raw = profile.get("quoteType")
+    kind = {"EQUITY": "stock", "ETF": "etf", "MUTUALFUND": "fund"}.get(kind_raw, "unknown")
+    instrument = {"symbol": ticker, "type": kind,
+                  "type_source": "Yahoo quoteType in the cached profile" if kind_raw else None,
+                  "name": profile.get("longName") or profile.get("shortName")}
+    if kind == "unknown":
+        missing.append({"field": "instrument.type", "reason": "no cached profile with a quote type"})
+
+    # Prices: cut at the cutoff before computing anything.
+    bars = inputs.get("bars")
+    bars = bars[bars.index <= cut].dropna(how="all") if bars is not None and len(bars) else pd.DataFrame()
+    packet = {"version": PACKET_VERSION, "instrument": instrument,
+              "cutoff": {"date": cutoff, "exchange_timezone": "America/New_York",
+                         "latest_session": _d(bars.index[-1]) if len(bars) else None,
+                         "rule": "only data observed and available on or before the cutoff's end of day"},
+              "portfolio": portfolio or {"holding": "unknown", "position_size": "unknown", "cash": "unknown",
+                                         "note": "portfolio context not supplied"}}
+    if not len(bars) or "Close" not in bars:
+        missing.append({"field": "prices", "reason": "no stored daily bars on or before the cutoff"})
+        packet["snapshot"] = None
+    else:
+        packet.update(_prices(bars, inputs.get("ohlcv"), profile, cut, lim, missing, quality))
+    if kind == "etf":
+        packet["fund"] = _fund(profile, inputs.get("profile_fetched"), ticker, bars, missing)
+    elif kind == "stock":
+        packet["fundamentals"] = _fundamentals(inputs.get("facts"), cutoff, missing)
+    packet["news"] = _news(inputs.get("news") or [], ticker, instrument.get("name"), cutoff, lim, missing)
+    packet["macro"] = _macro(inputs.get("macro") or {}, cutoff, missing)
+    packet["macro_availability"] = {"vintage": "the latest vintage published before the cutoff (ALFRED); "
+                                               "revisions after it are not used",
+                                    "lag_Nbd": "an unrevised daily series, usable N business days after its "
+                                               "observation date"}
+    if include_model_forecasts:
+        packet["model_forecasts"] = [{"id": f"MF{i + 1}", **f} for i, f in enumerate(forecasts or [])] or None
+        if not forecasts:
+            missing.append({"field": "model_forecasts", "reason": "no saved model forecast for this instrument"})
+    packet["checks"] = quality
+    packet["missing"] = missing
+    packet["trimmed"] = []
+    return _fit(packet, lim)
+```
+
+```python
+def _prices(bars, ohlcv, profile, cut, lim, missing, quality) -> dict:
+    close, high, low = bars["Close"].astype(float), bars.get("High"), bars.get("Low")
+    vol = bars.get("Volume")
+    n = int(close.notna().sum())
+    # Checks actually run on the cut series.
+    order_ok = bool(bars.index.is_monotonic_increasing and not bars.index.duplicated().any())
+    gaps = int(close.isna().sum())
+    ohlc_bad = None
+    if high is not None and low is not None:
+        ohlc_bad = int(((close > high * 1.0001) | (close < low * 0.9999) | (low > high)).sum())
+    quality.append({"id": "Q1", "check": "date order", "result": "ascending, no duplicates" if order_ok else "FAILED"})
+    quality.append({"id": "Q2", "check": "missing closes", "result": f"{gaps} of {len(bars)} rows"})
+    quality.append({"id": "Q3", "check": "OHLC consistency (low <= close <= high)",
+                    "result": "not run: no highs/lows" if ohlc_bad is None else f"{ohlc_bad} inconsistent rows"})
+    quality.append({"id": "Q4", "check": "price basis", "result": "closes, highs and lows split- and dividend-"
+                    "adjusted (total-return basis) in the local store; volume as reported"})
+
+    def at(series, back):
+        s = series.dropna()
+        return (None, None) if len(s) <= back else (_d(s.index[-1 - back]), _r(s.iloc[-1 - back]))
+
+    ema10, sma50, sma200 = _ema(close, 10), close.rolling(50).mean(), close.rolling(200).mean()
+    rsi = _rsi(close)
+    macd = _ema(close, 12) - _ema(close, 26)
+    signal = _ema(macd, 9)
+    mid, sd = close.rolling(20).mean(), close.rolling(20).std()
+    atr = None
+    if high is not None and low is not None:
+        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        atr = tr.ewm(alpha=1 / 14, adjust=False).mean()
+    last = close.index[-1]
+    rets = close.pct_change()
+    hi250 = close.rolling(250, min_periods=1).max()
+    indicators = {
+        "close": _r(close.iloc[-1]), "ema_10": _r(ema10.iloc[-1]),
+        "sma_50": _r(sma50.iloc[-1]) if n >= 50 else None, "sma_200": _r(sma200.iloc[-1]) if n >= 200 else None,
+        "rsi_14": _r(rsi.iloc[-1], 1) if n >= 15 else None,
+        "macd_12_26": _r(macd.iloc[-1], 3), "macd_signal_9": _r(signal.iloc[-1], 3),
+        "macd_hist": _r((macd - signal).iloc[-1], 3),
+        "boll_mid_20": _r(mid.iloc[-1]) if n >= 20 else None,
+        "boll_upper_20_2sd": _r((mid + 2 * sd).iloc[-1]) if n >= 20 else None,
+        "boll_lower_20_2sd": _r((mid - 2 * sd).iloc[-1]) if n >= 20 else None,
+        "atr_14": _r(atr.iloc[-1]) if atr is not None and n >= 15 else None,
+        "high_20d": _r(high.iloc[-20:].max()) if high is not None and n >= 20 else None,
+        "low_20d": _r(low.iloc[-20:].min()) if low is not None and n >= 20 else None,
+        "high_250d_close": _r(close.iloc[-250:].max()) if n >= 250 else None,
+        "drawdown_from_250d_high_pct": _r(100 * (close.iloc[-1] / hi250.iloc[-1] - 1), 1) if n >= 250 else None,
+        "realized_vol_20d_annualized_pct": _r(100 * rets.iloc[-20:].std() * math.sqrt(252), 1) if n >= 21 else None,
+        "avg_volume_20d": _r(vol.iloc[-20:].mean(), 0) if vol is not None and n >= 20 else None,
+    }
+    for k, v in indicators.items():
+        if v is None:
+            missing.append({"field": f"snapshot.{k}", "reason": f"needs more history (have {n} sessions) or the "
+                                                                f"input series"})
+    for k, w in (("sma_200", 200), ("sma_50", 50)):
+        quality.append({"id": f"Q{len(quality) + 1}", "check": f"{k} coverage",
+                        "result": f"{min(n, w)} of {w} sessions" + ("" if n >= w else ": not computed")})
+    opens = None
+    if ohlcv is not None and len(ohlcv):
+        o = ohlcv[ohlcv.index <= cut]
+        if len(o) and o.index[-1] == last:
+            opens = _r(o["open"].iloc[-1])
+            other = float(o["close"].iloc[-1])
+            gap = abs(other / float(close.iloc[-1]) - 1)
+            quality.append({"id": f"Q{len(quality) + 1}", "check": "close cross-check (local store vs OHLCV cache)",
+                            "result": f"differ by {100 * gap:.2f}%" + (" -> DISCREPANCY; the local store's value "
+                                                                       "is used" if gap > lim["discrepancy_tol"] else "")})
+    if opens is None:
+        missing.append({"field": "snapshot.open", "reason": "no opens cached for this session"})
+    # The cached profile's moving averages are today's, so they are compared only when the cutoff is today's data.
+    if profile.get("fiftyDayAverage") and indicators["sma_50"] and cut == last:
+        gap = abs(profile["fiftyDayAverage"] / indicators["sma_50"] - 1)
+        if gap > lim["discrepancy_tol"]:
+            quality.append({"id": f"Q{len(quality) + 1}", "check": "50-day average cross-check (computed vs profile)",
+                            "result": f"differ by {100 * gap:.2f}% -> DISCREPANCY; the value computed from the "
+                                      f"stored closes is used (precedence: local store)"})
+    snapshot = {"id": "PX1", "session": _d(last), "source": "local price store (Yahoo daily bars)",
+                "lookbacks": "EMA 10, SMA 50/200, RSI 14 (Wilder), MACD 12/26/9, Bollinger 20 / 2 sd, ATR 14, "
+                             "20-day high/low, 250-session high, 20-day realized volatility",
+                "history_sessions": n, "open": opens, **indicators}
+    comps = []
+    for back in lim["comparisons"]:
+        d_c, v_c = at(close, back)
+        if d_c is None:
+            continue
+        row = {"id": f"CMP{len(comps) + 1}", "sessions_back": back, "date": d_c, "close": v_c,
+               "change_pct": _r(100 * (close.iloc[-1] / close.dropna().iloc[-1 - back] - 1), 2)}
+        if n >= 50 + back:
+            row["sma_50"] = _r(sma50.dropna().iloc[-1 - back]) if len(sma50.dropna()) > back else None
+        if n >= 200 + back:
+            row["sma_200"] = _r(sma200.dropna().iloc[-1 - back]) if len(sma200.dropna()) > back else None
+        comps.append(row)
+    recent = []
+    tail = bars.iloc[-lim["recent_bars"]:] if lim["recent_bars"] else bars.iloc[:0]
+    for i, (ts, r) in enumerate(tail.iterrows()):
+        recent.append({"id": f"BAR{i + 1}", "date": _d(ts), "close": _r(r.get("Close")), "high": _r(r.get("High")),
+                       "low": _r(r.get("Low")), "volume": _r(r.get("Volume"), 0)})
+    return {"snapshot": snapshot, "comparisons": comps, "recent_bars": recent}
+```
+
+```python
+def _news(rows, ticker, name, cutoff, lim, missing) -> list[dict]:
+    from tradingagents.stocks.news import _jaccard, _norm, relevance
+
+    end = _cutoff_end(cutoff)
+    start = end - timedelta(days=lim["news_days"])
+    unknown, future, kept = 0, 0, []
+    for r in rows:
+        if not r.get("pub_date"):
+            unknown += 1
+            continue
+        pub = datetime.fromisoformat(r["pub_date"])
+        pub = pub if pub.tzinfo else pub.replace(tzinfo=ZoneInfo("UTC"))
+        if pub > end:
+            future += 1
+            continue
+        if pub < start:
+            continue
+        kept.append((r, pub))
+    # Duplicates (the same story from two feeds) collapse to the earliest copy.
+    kept.sort(key=lambda x: (x[1], x[0].get("title") or ""))
+    unique = []
+    for r, pub in kept:
+        if any(_jaccard(_norm(r["title"] or ""), _norm(u[0]["title"] or "")) >= 0.8 for u in unique):
+            continue
+        unique.append((r, pub))
+    rank = {"about": 0, "mentions": 1, "other": 2}
+    scored = sorted(unique, key=lambda x: (rank.get(relevance(x[0]["title"] or "", x[0].get("summary"), ticker, name), 3),
+                                           -x[1].timestamp()))
+    out = []
+    for i, (r, pub) in enumerate(scored[:lim["news_items"]]):
+        rel = relevance(r["title"] or "", r.get("summary"), ticker, name)
+        summary = (r.get("summary") or "").strip()
+        out.append({"id": f"N{i + 1}", "headline": r["title"], "publisher": r.get("publisher"),
+                    "published_at": pub.astimezone(ZoneInfo("UTC")).isoformat(timespec="minutes"),
+                    "first_seen_at": r.get("first_seen"), "url": r.get("link"), "relevance": rel,
+                    "text_available": "feed summary only (no article body)" if summary else "headline only",
+                    "summary": summary or None})
+    if unknown:
+        missing.append({"field": "news", "reason": f"{unknown} stored headline(s) with no publication time were "
+                                                   f"left out (cannot pass a point-in-time check)"})
+    if future:
+        missing.append({"field": "news", "reason": f"{future} headline(s) published after the cutoff were left out"})
+    if not out:
+        missing.append({"field": "news", "reason": f"no stored headline for {ticker} in the {lim['news_days']} days "
+                                                   f"to the cutoff"})
+    return out
+```
+
+```python
+def _known_at(series: str, rows: list[dict], cutoff: str) -> pd.Series | None:
+    """The series as known on the cutoff: vintages published before it, or (unrevised series) observations
+    whose availability lag has passed."""
+    if not rows:
+        return None
+    if MACRO[series][4] and any(r.get("from") for r in rows):
+        best = {}
+        for r in rows:
+            if r.get("from") and r["from"] < cutoff and r["date"] <= cutoff:
+                if r["date"] not in best or r["from"] >= best[r["date"]][0]:
+                    best[r["date"]] = (r["from"], r["value"])
+        s = pd.Series({pd.Timestamp(d): v for d, (_f, v) in best.items()}).sort_index()
+        return s if len(s) else None
+    lag = LAG_BDAYS.get(series, 1)
+    s = pd.Series({pd.Timestamp(r["date"]): r["value"] for r in rows}).sort_index()
+    usable = [d for d in s.index if (d + pd.offsets.BDay(lag)) <= pd.Timestamp(cutoff)]
+    return s.loc[usable] if usable else None
+```
+
+```python
+def _macro(macro, cutoff, missing) -> list[dict]:
+    out = []
+    for series, (title, units, change, freq, revised) in MACRO.items():
+        s = _known_at(series, macro.get(series), cutoff)
+        if s is None or not len(s):
+            missing.append({"field": f"macro.{series}", "reason": "not in the local FRED cache on or before the cutoff"})
+            continue
+        last_d, last_v = s.index[-1], float(s.iloc[-1])
+        item = {"id": f"M{len(out) + 1}", "series": series, "title": title, "units": units, "frequency": freq,
+                "observation_date": _d(last_d), "value": _r(last_v, 3),
+                "availability": "vintage" if revised else f"lag_{LAG_BDAYS.get(series, 1)}bd",
+                "comparisons": []}
+        months = (1, 12) if freq != "daily" else None
+        targets = [("1 month earlier", last_d - pd.DateOffset(months=1)), ("12 months earlier", last_d - pd.DateOffset(years=1))]
+        for label, target in targets:
+            prior = s[s.index <= target]
+            if not len(prior):
+                continue
+            pd_, pv = prior.index[-1], float(prior.iloc[-1])
+            if months and (target - pd_).days > 40:   # a monthly series must have that month
+                continue
+            comp = {"label": label, "observation_date": _d(pd_), "value": _r(pv, 3)}
+            if change == "pp":
+                comp["change"] = _r(last_v - pv, 3)
+                comp["change_unit"] = "percentage points"
+            elif change == "pct":
+                comp["change"] = _r(100 * (last_v / pv - 1), 2)
+                comp["change_unit"] = "percent change in the level"
+            else:
+                comp["change"] = _r(last_v - pv, 3)
+                comp["change_unit"] = "index points"
+            comp["period"] = f"{_d(pd_)} to {_d(last_d)}"
+            item["comparisons"].append(comp)
+        if series == "CPIAUCSL":
+            yoy = next((c for c in item["comparisons"] if c["label"] == "12 months earlier"), None)
+            item["inflation_12m_pct"] = yoy["change"] if yoy else None
+            item["inflation_note"] = ("12-month CPI inflation is the change from the observation 12 months earlier; "
+                                      "other spans are not year-over-year rates")
+        out.append(item)
+    return out
+```
+
+```python
+def _fit(packet: dict, lim: dict) -> dict:
+    """Drop whole low-priority items until the packet fits ``max_chars``; required parts stay intact."""
+    def size():
+        return len(render(packet))
+
+    if size() <= lim["max_chars"]:
+        return packet
+    # Lowest value first: old daily bars (the comparisons carry the trend), the 250-session comparison,
+    # quarterly statement items (annual figures and balances stay), then news beyond the five most relevant.
+    bars = packet.get("recent_bars") or []
+    while size() > lim["max_chars"] and len(bars) > 3:
+        bars.pop(0)
+        _note(packet, "recent_bars", f"kept the last {len(bars)} bars")
+    comps = packet.get("comparisons") or []
+    if size() > lim["max_chars"] and comps and comps[-1].get("sessions_back", 0) >= 250:
+        comps.pop()
+        _note(packet, "comparisons_250", "dropped the 250-session comparison")
+    f = packet.get("fundamentals") or {}
+    if size() > lim["max_chars"] and f.get("items"):
+        f["items"] = [i for i in f["items"] if i["period"] != "quarter"]
+        _note(packet, "quarterly", "dropped quarterly statement items (annual and balances kept)")
+    news = packet.get("news") or []
+    while size() > lim["max_chars"] and len(news) > 5:
+        news.pop()
+        _note(packet, "news", f"kept the {len(news)} most relevant headlines")
+    if size() > lim["max_chars"]:
+        _note(packet, "over_limit", f"required parts alone exceed {lim['max_chars']} characters; nothing cut mid-field")
+    return packet
+```
+
+## Per-role agent models (tradingagents/llm_clients/roles.py)
+
+```python
+def resolve(config: dict) -> dict[str, tuple[str, str]]:
+    """(provider, model) for every role."""
+    default = config["llm_provider"].lower()
+    overrides = validate(config.get("agent_models"))
+    out = {}
+    for role, (_, _, tier) in ROLES.items():
+        spec = overrides.get(role)
+        out[role] = (spec["provider"], spec["model"]) if spec else \
+            (default, config["deep_think_llm" if tier == "deep" else "quick_think_llm"])
+    return out
+```
+
+```python
+def suggest(default_provider: str, providers: list[str]) -> dict[str, dict[str, str]]:
+    """A split of the debates across the providers given (those with keys), the default first.
+
+    Each debate puts its opposing sides on different providers (bull vs bear; aggressive vs
+    conservative) so one model does not argue with itself; a third provider, when there is one,
+    takes the neutral seat and the research manager, so the judge of the bull/bear debate is
+    neither side. The analysts, trader and portfolio manager stay on the default. One provider:
+    nothing to split.
+    """
+    order = [p for p in dict.fromkeys([default_provider.lower(), *providers])
+             if p in providers and first_model(p, "quick")]
+    if len(order) < 2:
+        return {}
+    a, b = order[0], order[1]
+    c = order[2] if len(order) > 2 else None
+    seats = {"bull": (a, "quick"), "bear": (b, "quick"), "aggressive": (a, "quick"), "conservative": (b, "quick")}
+    if c:
+        seats |= {"neutral": (c, "quick"), "research_manager": (c, "deep")}
+    return {role: {"provider": p, "model": first_model(p, tier) or first_model(p, "quick")}
+            for role, (p, tier) in seats.items()}
+```
+
+## AI gateway: budget, prices, cache (tradingagents/ledger/ai_gateway.py)
+
+```python
+    def run(self, *, task: str, provider: str, model: str, schema_version: str, info_cutoff: str, inputs: dict,
+            work: Callable[[UsageCallback], Any], est_usd: float, est_requests: int,
+            allow_paid: bool = False, also_priced: list[tuple[str, str]] = ()) -> tuple[Any, str]:
+        """``(result, "cache" | "paid")``. ``work`` receives the callback to hand to the LLM client;
+        ``also_priced`` lists any other models the work calls, which need a price too."""
+        key = cache_key(task, provider, model, schema_version, info_cutoff, inputs)
+        hit = self.cached(key)
+        if hit is not None:
+            return hit, "cache"
+        if os.environ.get("TRADINGAGENTS_NO_PAID_AI") == "1":
+            raise AIBlocked("paid AI is switched off (TRADINGAGENTS_NO_PAID_AI=1)")
+        if not allow_paid:
+            raise AIBlocked(f"{task} is not cached and paid AI was not requested")
+        for p, m in [(provider, model), *also_priced]:
+            self.price(p, m)
+        self._claim(key, task, est_usd, est_requests)
+        callback = UsageCallback(self, key, task, provider, model, models=[(provider, model), *also_priced])
+        try:
+            result = work(callback)
+        except BaseException as exc:
+            self._finish(key, "failed", str(exc)[:500])
+            raise
+        with transaction(self.con):
+            self.con.execute("INSERT OR REPLACE INTO ai_cache VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (key, task, provider, model, schema_version, info_cutoff, stable_hash(inputs),
+                              json.dumps(result, default=str), now_utc()))
+            self._finish(key, "done", None)
+        return result, "paid"
+```
+
+```python
+    def _which(self, *names) -> tuple[str, str]:
+        """The (provider, model) a request belongs to, from the model names it reported; a versioned
+        name ("deepseek-v4-flash-2026-07-01") matches its base ID. Unknown: the job's own model."""
+        for name in filter(None, names):
+            for p, m in self.models:
+                if name == m:
+                    return p, m
+            for p, m in sorted(self.models, key=lambda pm: -len(pm[1])):
+                if name.startswith(m) or name.endswith("/" + m):
+                    return p, m
+        return self.provider, self.model
 ```

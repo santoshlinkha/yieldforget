@@ -54,22 +54,28 @@ Use exactly these sections, in this order:
 6. **Models.** Are the model choices sensible for the data size and signal-to-noise? Is
    anything over- or under-engineered? Comment on the pooled design, ranking within date,
    missing-as-zero, the ensemble weighting, probability calibration (no isotonic/Platt step),
-   the Chronos-2 stacking and contamination handling, GJR-GARCH vs EWMA.
+   the Chronos-2 stacking and contamination handling, GJR-GARCH vs EWMA. Use the inventory in section 14.
 7. **Portfolio integration and risk.** Are the recommendation rules (net expected return > 0,
    evidence backed, P(large loss) <= 15%, at most 5 names, <= 25% of the sleeve each, settled
    cash only, no shorts, hold through the horizon) sound for a $1,000 Trading sleeve inside a
    Roth IRA? What would you change? How should stock picks interact with the ETF optimizer?
-8. **Data.** What free or cheap data would most improve point-in-time correctness or signal
+8. **Decision layer and AI (sections 13-14).** Is a verdict that comes only from the 20-session ranker
+   (BUY = top fifth with gates; AVOID = bottom fifth) defensible given section 12's evidence, the score ties
+   and the non-monotone score-to-P&L map? Are the signal warnings (lift plus top-fifth plus flat-model test)
+   sound? Is the entry plan (dip quantiles, barrier exits) a reasonable use of the drawdown model? How should
+   the LLM agents' ratings be evaluated against the model before either is trusted, and is the evidence
+   packet (13.7) adequate for grounded LLM analysis? Should leveraged ETFs be allowed under the account rules?
+9. **Data.** What free or cheap data would most improve point-in-time correctness or signal
    (point-in-time index membership, analyst revisions with timestamps, earnings calendars,
    options-implied volatility, short interest, insider transactions)? Be specific about sources
    and their point-in-time properties; say when you are not sure a source is point-in-time.
-9. **Next experiments, ranked** by expected value of information per hour of work, each with
+10. **Next experiments, ranked** by expected value of information per hour of work, each with
    a hypothesis, the exact test, and the decision it would change. Include whether a compact
    sequence model (PatchTST, VSN+LSTM) or a pretrained model (Chronos-2 fine-tuning, TimesFM)
    is worth testing next given the measured results, and why.
-10. **Engineering.** Reproducibility, caching, failure isolation, append-only records, cost
+11. **Engineering.** Reproducibility, caching, failure isolation, append-only records, cost
     controls: anything fragile or missing?
-11. **Questions for the owner** that would change your advice.
+12. **Questions for the owner** that would change your advice.
 
 Rules for your answer: be concrete and cite sections (e.g. "6.2 Trend state") or function
 names. Do not invent numbers; if you estimate, label it an estimate. If something cannot be
@@ -98,7 +104,17 @@ the risk. Assume the owner is technical and will implement your suggestions.
     representative of the deployed model?
 11. News: collected prospectively, not used in training; sentiment from FinBERT on headlines.
 12. Analyst data: excluded from stock training because Yahoo's lists are today's versions.
-13. Thresholds: defined in code before the study, versioned (`thr-14adb1ddde`), not tuned.
+13. Thresholds: defined in code before the study, versioned (now `thr-016cb9da59`), not tuned.
+14. Verdict scores come from the daily decision fitted on rows whose labels ended by the cutoff; stocks
+    outside the index are ranked against members without changing members' ranks. Any leak?
+15. Fund verdicts use the ETF engine's combined forecast; its weights come from walk-forward ICs. Any
+    look-ahead in choosing the weights?
+16. The evidence packet cuts every series at the cutoff before computing; news needs a known publication
+    time by the cutoff's end of day (New York); SEC facts count from the day after filing; FRED uses
+    vintages published before the cutoff or the series' lag. Any remaining leak (e.g. a profile or analyst
+    value that is today's, or first_seen after the cutoff)?
+17. Agent runs analyze a past day with tools that withhold present-day profile values; is anything in
+    their tool data from after the analysis day?
 
 ---
 
@@ -120,7 +136,10 @@ and mismatches with the reference above.
 def excerpts() -> str:
     from tradingagents.research import walkforward
     from tradingagents.ledger import capital
-    from tradingagents.stocks import daily, fundamentals, ideas, macro, panel, positions, targets
+    from tradingagents.agents import packet
+    from tradingagents.ledger import ai_gateway
+    from tradingagents.llm_clients import roles
+    from tradingagents.stocks import daily, fundamentals, ideas, macro, panel, positions, signals, targets, verdict
 
     parts = [("Targets and labels (tradingagents/stocks/targets.py)", [targets.Thresholds, targets.labels,
                                                                      targets.current_trend]),
@@ -134,7 +153,15 @@ def excerpts() -> str:
              ("Position engine (tradingagents/stocks/positions.py)", [positions.Policy, positions.trades]),
              ("Daily decision gates and exits (tradingagents/stocks/daily.py)", [daily.evidence, daily.review_lot,
                                                                                 daily.entries]),
-             ("Capital settings (tradingagents/ledger/capital.py)", [capital.reallocation, capital.daily_plan])]
+             ("Capital settings (tradingagents/ledger/capital.py)", [capital.reallocation, capital.daily_plan]),
+             ("The verdict (tradingagents/stocks/verdict.py)", [verdict.verdict, verdict.ai_decision]),
+             ("Signals and the entry plan (tradingagents/stocks/signals.py)", [signals.peers, signals.describe,
+                                                                             signals.entry_plan]),
+             ("The evidence packet (tradingagents/agents/packet.py)", [packet.assemble, packet._prices, packet._news,
+                                                                      packet._known_at, packet._macro, packet._fit]),
+             ("Per-role agent models (tradingagents/llm_clients/roles.py)", [roles.resolve, roles.suggest]),
+             ("AI gateway: budget, prices, cache (tradingagents/ledger/ai_gateway.py)", [ai_gateway.Gateway.run,
+                                                                                         ai_gateway.UsageCallback._which])]
     out = []
     for title, fns in parts:
         out.append(f"## {title}\n")
@@ -147,7 +174,13 @@ def main():
     reference = (HERE / "SYSTEM_REFERENCE.md").read_text(encoding="utf-8")
     text = INTRO + reference + OUTRO + excerpts()
     (HERE / "REVIEW_PROMPT.md").write_text(text, encoding="utf-8")
-    print("wrote", HERE / "REVIEW_PROMPT.md", f"({len(text):,} characters, about {len(text) // 4:,} tokens)")
+    try:
+        import tiktoken
+
+        tokens = f"{len(tiktoken.get_encoding('o200k_base').encode(text)):,} tokens (o200k_base)"
+    except ImportError:
+        tokens = f"about {len(text) // 4:,} tokens (estimate)"
+    print("wrote", HERE / "REVIEW_PROMPT.md", f"({len(text):,} characters, {tokens})")
 
 
 if __name__ == "__main__":

@@ -564,3 +564,170 @@ Full detail: `docs/DECISIONS.md`. In brief:
   +9.9%). **Not validated**: the app is in experimental mode (WAIT; PAPER ENTER feeds the shadow account).
 - **Challengers** on 150 stocks: no ranking skill for PatchTST, Chronos-2, TimesFM 2.5; Kronos-mini
   0.041 (0.016, 0.067) in development but likely contaminated and 0.014 (not significant) after.
+
+## 13. Screener, signals, model verdicts, AI agents and the evidence packet (added 2026-10-24 to 2026-10-25)
+
+### 13.1 Quality and Wall Street screen (`stocks/screen.py`; Screener tab; `stocks screen`)
+
+Every S&P 500 stock (503) plus the watchlist; built on request only, every fetch cached.
+- **Quality score (0-100)**: share of the ticker page's tests passed: the moat checks (`research/moat.py`:
+  pricing power, returns on capital, profitability, cash generation, steady growth, with sector bars and
+  bank-specific checks) plus the checklist's financial-strength items (debt to equity, interest coverage
+  flag < 3, current ratio flag < 1.0, a high-rate downturn test) and profitability items (FCF, ROIC > 15%,
+  gross/operating/net margin trends) (`research/quality.py`). Pass = 1, "check" = 0.5, flag = 0; tests
+  without data left out. **Quality rank**: by quality score, ties share a rank.
+- **Wall Street**: this month's analyst counts as a consensus score 1 (strong buy) to 5 (strong sell), the
+  number of analysts, upside to the mean price target. Yahoo, as of today: not point-in-time.
+- **Valuation** (forward P/E vs its own history, EV/EBITDA, FCF yield, reverse-DCF implied growth): shown,
+  not scored.
+- **Combined score / rank**: mean of three within-screen percentiles (quality, consensus with stronger buys
+  higher, target upside) x 100; a stock missing one is ranked on the rest. Untested for returns.
+
+### 13.2 Stock signals (`stocks/signals.py`; ticker page and the Screener's "Signals and action" view)
+
+From the latest saved stock-model forecast per stock (horizon 20 sessions; `stocks/pipeline.py`): P(trend
+up / down / sideways / unclear), P(breakout above the prior 20-session range), P(breakdown below it: any low
+in t+1..t+20 below the lowest low of the last 20 sessions), P(large loss), P(deep drawdown), drawdown
+quantiles (dd_q05, dd_q50).
+- **Lift** = probability / base rate in training; **peer rank** among today's stocks.
+- **Warnings**: breakout likely / breakdown risk need lift >= 1.2 and today's top fifth; crash warning lift
+  >= 1.5, P >= 10%, top fifth; deep drawdown lift >= 1.5, P >= 20%, top fifth. The top-fifth rule exists
+  because a market-wide move raised every stock's breakdown lift (234 of 499 stocks flagged without it).
+- **Flat-model detection**: a 10th-90th percentile spread across stocks below 2 points means the model does
+  not tell stocks apart, and it raises no warning. Today the large-loss model gives every stock about 6.9%
+  and the deep-drawdown model about 17%: both flat. Trend up/down are flat too; only sideways varies.
+- Every signal's evidence status is **untested** for the current thresholds version.
+- Example (ANET, 2026-10-23): close $172.37, 20-day low $168.24 (2.4% below), P(breakdown) 78% vs 42% usual
+  (top 8%): largely a consequence of sitting near the range floor with about 3% daily moves.
+
+### 13.3 The verdict (`stocks/verdict.py`): BUY / WATCH / HOLD / SELL / AVOID
+
+**Decided only by the internal 20-session quant model** (the owner's instruction: AI ratings must not
+decide). The daily decision (`stocks/daily.py`) saves every ranked stock's score: rank (ties broken by
+P(profit), then ticker), rank_pct, score_pct, expected net after costs (from the binned score-to-P&L map),
+net sd, P(profit) (trade-quality model), P(large loss) (risk model), cost.
+- Not held: **BUY** = the daily decision says ENTER, or top fifth by rank AND expected net > 0 AND
+  P(profit) >= 50% AND P(large loss) <= 15%. **AVOID** = bottom fifth or expected net < 0. **WATCH** otherwise.
+- Held: **SELL** = the daily decision says EXIT/REDUCE, or bottom fifth with expected net < 0. **HOLD**
+  otherwise (top fifth: a candidate to add to; middle; bottom fifth: weakest, no sell signal).
+- **Context only** (shown, never decides): breakdown/crash warnings, quality score, Wall Street, agents' rating.
+- Today: 100 BUY, 307 WATCH, 96 AVOID among S&P 500 stocks; #1 is TPR (the top five tie on score).
+- **Funds**: a fund's score is its rank among the 41 funds the ETF forecast engine covers, by the combined
+  20-session forecast (`research/engine.combine_runs`: return above cash, P(gain); no large-loss figure).
+- **Stocks outside the S&P 500** that are held or watched (ARR, OKLO) are scored by the same stock model and
+  ranked against that day's members (members keep their ranks).
+- Known properties: many tied scores (32 stocks share one value); the binned map is **not monotone** (top bin
+  +0.58%, next bin +0.70%); expected net is positive for every stock (+0.29% to +0.70%: market drift), so
+  "expected loss" never fires and AVOID comes from rank only. Decision candidates were re-ordered by score
+  (they had been sorted by the binned expected net, which left out the #1 stock). Validation (section 12):
+  ranking IC 0.020 in development; trading on it did not beat SPY.
+
+### 13.4 Entry plan (`signals.entry_plan`; ticker page)
+
+Limit-entry levels, each with the model's chance of being reached within 20 sessions: the 20-day low
+(P(breakdown)), the median dip close x (1 + dd_q50) (about 50%), the deep dip close x (1 + dd_q05) (about
+5%), and "buy at the next close". Each entry E gets the barrier policy's exits: stop E x (1 + expm1(-sigma_h)),
+take-profit E x (1 + expm1(+sigma_h)), deadline 20 sessions (`positions.POLICIES["barrier_20"]`, the exit rule
+the decision study tested). Experimental. Example AVGO: next close $321.68 (stop $289.05, target $358.00);
+median dip $307.13; 20-day low $320.23 (83%); deep dip $265.63.
+
+### 13.5 Decisions page
+
+- **AI decisions card**: shortlist = holdings, stocks the agents analyzed in the last 30 days, model-verdict
+  BUYs (model-rank order), the quant decision's PAPER ENTERs; the latest economic brief (an LLM summary of
+  macro data and headlines); analyst toggles; an editable AI budget. "Agents' view (not used)" (rating mapped:
+  Buy/Overweight -> BUY, Hold -> HOLD or WATCH, Underweight/Sell -> SELL or AVOID) beside "Model verdict",
+  with agreement and a link to the run's report.
+- **Quant model decision** (section 12): candidates in model-rank order; all WAIT (experimental mode; the
+  Trading sleeve's $1,000 sits in SGOV, so settled cash is $0), PAPER ENTER feeding the shadow account.
+
+### 13.6 AI agents (the TradingAgents graph): providers, roles, cost controls, records
+
+- **Graph**: market (technical), sentiment, news & economy and fundamentals analysts (each a tool-calling
+  loop over local data tools), a bull and a bear researcher (one round), a research manager (structured
+  ResearchPlan), a trader (TraderProposal), aggressive / conservative / neutral risk analysts (one round), a
+  portfolio manager (PortfolioDecision: rating Buy/Overweight/Hold/Underweight/Sell, executive summary,
+  thesis, optional price target and horizon), and a reflector that writes lessons to a memory log.
+- **Providers**: default Google **Gemini 3.8 Flash** on a verified free-tier key (no charge; Google may use
+  free-tier content); fallbacks Gemini 3.8 Flash then **Gemini 3.5 Flash-Lite** on provider failure or a model
+  without a price; budget refusals stop. The free 3.8 Flash quota ran out after about two full runs a day.
+  OpenAI key present (gpt-6-luna $0.10/$0.50, gpt-6-sol $2/$10 per M tokens); Groq (gpt-oss-120b $0.15/$0.60;
+  free plan about 8K tokens/minute, too small for analyst requests); the DeepSeek key was rejected as invalid.
+- **Per-role models** (`llm_clients/roles.py`; Settings > Agent models): 13 roles; currently bear,
+  conservative, neutral, research manager and portfolio manager on Groq gpt-oss-120b and the rest on Gemini,
+  so opposing debate sides use different models; fallbacks keep roles assigned to other providers.
+- **Gateway** (`ledger/ai_gateway.py`): every model priced or refused; budget reserved per run and checked
+  before each request ($5/day, $50/month, 600/6,000 requests, counted at paid rates even on the free tier);
+  usage recorded per request under the provider that answered; results cached by inputs (ticker, day,
+  analysts, models, roles). Page loads never trigger paid AI.
+- **Token reductions** in tool output (`agents/tools.py`): prices to the cent, no all-zero columns, last 60
+  sessions; indicators to 2 decimals without weekend placeholders; all indicators in one call. A one-analyst
+  run fell from 98k to 51k input tokens and from 15 to 12 requests.
+- **Records**: every request and reply is logged (`llm_clients/request_log.py`, `requests.jsonl` per run;
+  ticker page "what was sent"; `stocks calls`; `docs/AGENT_API_IO.txt`). Each run writes
+  `0_FINAL_DECISION.md` with the model's verdict (deciding) and the agents' view (not used).
+
+### 13.7 Manual chat route and the evidence packet (`agents/manual.py`, `agents/packet.py`)
+
+"Copy the prompt" -> paste into ChatGPT / Gemini / Claude -> paste the answer back -> parsed, saved as a
+report, the rating recorded (one rating per ticker and day), the final decision written. The prompt
+(`evidence-packet-v1`) is grounded instructions followed by one JSON evidence packet read from local caches
+only (no downloads):
+- instrument and type (Yahoo quoteType), cutoff and timezone, latest session;
+- one price snapshot `PX1` computed after cutting at the cutoff (EMA 10, SMA 50/200, RSI 14 Wilder, MACD
+  12/26/9, Bollinger 20/2, ATR 14, 20-day high/low, 250-session high and drawdown, 20-day realized
+  volatility, volume); comparisons at 5/20/60/250 sessions; the last 10 bars;
+- stocks: SEC facts filed before the cutoff (period end, filed, available-from, form, value) and derived
+  ratios; ETFs: cached-profile fund facts flagged "not point-in-time", a leverage flag, holdings / NAV /
+  premium listed as missing;
+- news: stored headlines with a known publication time on or before the cutoff's end of day (New York),
+  duplicates merged, relevance-ranked, with ID, publisher, published, first seen, URL, "headline only" or summary;
+- macro: FRED/ALFRED as known at the cutoff (vintages or lags), units, observation dates, 1- and 12-month
+  comparisons in percentage points or percent change, a true 12-month CPI figure;
+- the checks actually run (date order, missing closes, OHLC consistency, price basis, coverage), discrepancy
+  flags (precedence: local store > OHLCV cache > profile), one missing-data list, portfolio context "unknown";
+- size limits that drop whole items (old bars, the 250-session comparison, quarterly items, news beyond five);
+- no app verdicts, ranks or holdings (model forecasts optional, off by default).
+The answer contract keeps rating / executive_summary / investment_thesis / price_target / time_horizon and
+adds optional `evidence_ids` and `insufficient_evidence` (the five-value rating cannot abstain; abstention is
+recorded). Measured: TPR prompt 11,541 -> 4,953 tokens, TQQQ 7,047 -> 3,197 (o200k_base). Not yet evaluated on
+answer quality. Agent (API) runs still assemble their input through tools, not the packet.
+
+### 13.8 Open problems found while building this layer
+
+1. Verdicts come from a model that has not beaten SPY; about 100 stocks are BUY on any day.
+2. A coarse, non-monotone score-to-P&L map; heavy score ties; expected net positive for every stock.
+3. Crash and deep-drawdown models are flat across stocks today; trend up/down nearly flat.
+4. Signals' evidence status is "untested" for the current thresholds version.
+5. Leveraged ETFs (TQQQ, SOXL) rank top among funds and are held, while the account rule says "no leverage"
+   (meant as no margin): an unresolved policy question.
+6. Analyst and profile data are today's values (not point-in-time); the screen is a snapshot.
+7. LLM ratings disagree with the model (TPR: model #1 BUY, ChatGPT Sell); there is no evaluation yet of whose
+   calls are better.
+8. Free-tier quotas limit agent runs to a few a day; Groq's per-minute token cap blocks analyst requests.
+
+## 14. Inventory: every model, its inputs, outputs, training and evidence
+
+| # | Model | Where | Inputs (data, features) | Output | Training / method | Evidence |
+|---|---|---|---|---|---|---|
+| 1 | Standard rule (default expected return) | `optimizer` | 10+ years of daily adjusted closes per fund | expected growth = shrunk Sharpe x volatility, per year | closed form; no fitting | the plan's default; models below did not beat it in the portfolio after costs |
+| 2 | Portfolio optimizer | `optimizer/plan.py` | expected growth, worst historical drop per fund (or past crashes replayed), risk level 1-10, growth target | target mix, orders, recurring buys | maximize expected growth subject to a stress-loss cap (worst-case or scenarios), per-fund cap of a quarter of the budget | 2008-2026 backtest: scenarios mode exceeded its cap by up to 1.5x, so worst-case is default |
+| 3 | ETF forecast models (Elastic Net, XGBoost, XGBoost ranking, XGBoost quantiles, momentum) | `research/engine.py`, `forecast.py` | 41 funds; PRICE_FEATURES (momentum 1/3/6/12-1 m, reversal, volatility, downside vol, beta, distance from 52-week high, MA200 gap, drawdown, range, dollar volume, volume trend, Amihud), MARKET (VIX, VIX slope, 10y change, 3m bill, SPY momentum and vol), MACRO (CPI 12m, unemployment change, payrolls, NFCI, curve, credit spread and change, fed funds) | log return above cash over 5/20/60 sessions, quantiles, P(gain) | walk-forward with purging; within-date ranking; ensemble weighted by significant walk-forward IC (Holm) | ranked funds better than chance; did not beat the standard rule after costs |
+| 4 | "+chronos" variants and stacking | `research/foundation.py` | the above plus Chronos-2 forecast features | as above | XGBoost on stacked inputs | as above; Chronos contamination risk |
+| 5 | Chronos-2 (pretrained) | `research/engine.py` | price history | return forecast | zero-shot (amazon/chronos-2) | given no weight: pretraining may include the prices; scored only on a live record |
+| 6 | Volatility: GJR-GARCH vs EWMA | `research` | daily returns | volatility forecast | GJR-GARCH(1,1) vs RiskMetrics EWMA (0.94) | GJR-GARCH beat EWMA on volatility |
+| 7 | Stock event models: BaseRate, Logit, XGBEvent | `stocks/models.py`, `pipeline.py` | S&P 500 panel (point-in-time membership): technical group (the price features plus MA slopes, range positions, relative to SPY and sector, volume change, current trend), market, fundamental (SEC point-in-time: growth, margins, ROA, leverage, dilution, yields, filing age), macro (ALFRED vintages) | P(breakout up / down), P(large loss), P(deep drawdown) over 5/20/60 sessions | pooled across stocks; walk-forward folds shared across stocks; purged by label end | breakouts showed skill in the stock study; under the current thresholds: untested |
+| 8 | Trend, Severity, Relative models | `stocks/models.py` | same panel | trend class probabilities, drawdown quantiles, return relative to the market | multinomial / quantile / regression | no return skill in the stock study |
+| 9 | Stock return models (Elastic Net, XGBoost quantiles) | `stocks/pipeline.py` | same panel | mean / median / 5-95% return, P(gain), net after costs | walk-forward | no return skill; P(gain) is about 60-66% for every stock (drift) |
+| 10 | Decision ranker (XGBoost learning-to-rank) | `stocks/adapters.py`, `daily.py` | same panel; date groups | within-date score -> rank | LambdaMART-style ranking by date, fitted weekly, cached by code hash | IC 0.020 (0.005, 0.036) development, 0.037 exploratory; heavy score ties |
+| 11 | Score-to-net map | `adapters.score_to_net` | ranker percentile | expected net P&L, sd, 10% quantile | 10 bins, shrunk | top decile realized -0.5% in the study; not monotone today |
+| 12 | Trade-quality model | `adapters.TradeQuality` | panel + score | P(trade profitable after costs) | logistic / XGBoost, optional sigmoid calibration, cross-fitted | worse than the base log loss (0.69) |
+| 13 | Risk model | `daily` bundle | panel | P(large loss while held) | classifier | flat across stocks today (about 7%) |
+| 14 | Position engine and policies | `stocks/positions.py` | prices, dividends | trades for fixed 5/20/60 and barrier 20/60 policies | rule-based; T+1, next-close fills, no same-day exits | best development policy +210% vs SPY +358%; exploratory +5% vs SPY +43% |
+| 15 | Challengers: PatchTST, Chronos-2, TimesFM 2.5, Kronos-mini | `stocks/challengers.py` | price sequences, 150 stocks | return scores | compact PatchTST trained locally; others pretrained | no skill except Kronos-mini in development (0.041), likely contaminated; 0.014 after |
+| 16 | News sentiment (FinBERT) | `stocks/news.py` | stored headlines and summaries | sentiment score, relevance (about / mentions / other), events | pretrained FinBERT, local GPU or CPU | collected prospectively; not used in training |
+| 17 | Moat and quality checklists | `research/moat.py`, `quality.py` | Yahoo annual statements, profile, prices, dividends, analysts | pass / check / flag per test, verdict counts | fixed rules with sector bars | untested for returns |
+| 18 | Moat sources (AI reading of the 10-K) | `research/moat_ai.py` | the latest 10-K text | switching costs, network effects, cost advantages, intangibles, efficient scale, with quotes | one paid LLM call per filing, cached | qualitative |
+| 19 | Market brief | `optimizer/market.py` | macro data and headlines | summary and trends | one LLM call per day, cached | qualitative |
+| 20 | TradingAgents multi-agent graph | `tradingagents/graph` | tool data (prices, indicators, news, statements, macro), memory of past lessons | rating Buy..Sell with thesis | LLM agents (13 roles), one debate round each | shown as the agents' view; not used for decisions; no evaluation yet |
+| 21 | Verdict and entry plan | `stocks/verdict.py`, `signals.py` | items 10-13 (stocks), item 3 (funds), item 7 (dips, breakdown) | BUY / WATCH / HOLD / SELL / AVOID; limit entries with stops and targets | fixed rules on model outputs | inherits items 10-13: experimental |
