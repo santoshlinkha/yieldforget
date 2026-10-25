@@ -106,6 +106,11 @@ def _finite(value):
     return value
 
 
+# Free on a Gemini free-tier key (a Google project without billing), tried in order when the provider
+# before fails; each model has its own free quota.
+GEMINI_FALLBACKS = ("gemini-3.8-flash", "gemini-3.5-flash-lite")
+
+
 def _today() -> str:
     return date.today().isoformat()
 
@@ -352,7 +357,7 @@ class App:
         tickers = [t for t in dict.fromkeys([*(p.ticker.upper() for p in context.positions),
                                              *self.last_targets]) if t != cash][:int(g["ai_shortlist"])]
 
-        config = {**self.config, "agent_models": g["ai_agent_models"]}
+        config = self.agent_config(g)
 
         def work(job):
             ratings, failures = collect_ratings(tickers, config, analysts, gateway=self.gateway(),
@@ -364,24 +369,51 @@ class App:
 
         return self.ai.start(work)
 
+    def agent_config(self, g: dict | None = None) -> dict:
+        """The config agent runs use: the default provider and models chosen under Settings (else the
+        app's own), and the agent roles moved to other providers."""
+        g = g or self.store.settings("global")
+        primary = g.get("ai_primary") or {}
+        config = {**self.config, "agent_models": g["ai_agent_models"]}
+        if primary.get("provider"):
+            same = primary["provider"] == self.config["llm_provider"]
+            config.update(llm_provider=primary["provider"], quick_think_llm=primary["quick"],
+                          deep_think_llm=primary["deep"], backend_url=self.config.get("backend_url") if same else None)
+        return config
+
+    def agent_attempts(self, g: dict) -> list[dict]:
+        """The configs an agent run tries in order: the configured one, then the free Gemini models when the
+        spending policy lists Google as a fallback and a Google key is set."""
+        config = self.agent_config(g)
+        attempts = [config]
+        if "google" in g["ai_fallbacks"] and os.environ.get("GOOGLE_API_KEY"):
+            for model in GEMINI_FALLBACKS:
+                if (config["llm_provider"], config["deep_think_llm"]) != ("google", model):
+                    attempts.append({**config, "llm_provider": "google", "quick_think_llm": model,
+                                     "deep_think_llm": model, "backend_url": None, "agent_models": {}})
+        return attempts
+
     def ai_usage(self) -> dict:
         rows = [dict(r) for r in self.store.con.execute("SELECT * FROM ai_usage ORDER BY id DESC LIMIT 50")]
         from tradingagents.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
         from tradingagents.llm_clients.roles import ROLES, first_model, resolve, suggest
 
         g = self.store.settings("global")
-        config = {**self.config, "agent_models": g["ai_agent_models"]}
+        config = self.agent_config(g)
         # Which providers have a key in the environment (never the key itself).
         keys = sorted(p for p, env in PROVIDER_API_KEY_ENV.items() if env and os.environ.get(env))
         return {"remaining": self.gateway().remaining(), "recent": rows, "settings": g,
                 "roles": [{"role": r, "label": label, "stage": stage, "tier": tier,
                            "provider": resolve(config)[r][0], "model": resolve(config)[r][1],
                            "moved": r in g["ai_agent_models"]} for r, (label, stage, tier) in ROLES.items()],
-                "default": {"provider": self.config["llm_provider"], "quick": self.config["quick_think_llm"],
-                            "deep": self.config["deep_think_llm"]},
+                "default": {"provider": config["llm_provider"], "quick": config["quick_think_llm"],
+                            "deep": config["deep_think_llm"]},
+                "app_default": {"provider": self.config["llm_provider"], "quick": self.config["quick_think_llm"],
+                                "deep": self.config["deep_think_llm"]},
+                "fallbacks": [f"google/{m}" for m in GEMINI_FALLBACKS] if "google" in g["ai_fallbacks"] else [],
                 "providers": sorted(PROVIDER_API_KEY_ENV), "providers_with_keys": keys,
                 "catalog": {p: {"quick": first_model(p, "quick"), "deep": first_model(p, "deep")} for p in keys},
-                "suggested": suggest(self.config["llm_provider"], keys)}
+                "suggested": suggest(config["llm_provider"], keys)}
 
     def start_explain(self) -> bool:
         g = self.store.settings("global")
@@ -597,14 +629,38 @@ class App:
         analysts = [a for a in (body.get("analysts") or g["ai_analysts"]) if a in ANALYST_ROLES]
         if not analysts:
             raise ValueError("pick at least one analyst")
-        config = {**self.config, "agent_models": g["ai_agent_models"]}
         folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
         est = g["ai_estimates"]["rating"] * max(1, len(analysts))
 
+        attempts = self.agent_attempts(g)
+
         def work(job):
-            job.progress = f"agents analyzing {ticker} as of {day} ({', '.join(analysts)}); a few minutes"
-            result, how = analyze(ticker, day, config, analysts, self.gateway(), folder, est_usd=est, allow_paid=True)
-            return {**result, "how": how, "ticker": ticker}
+            from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
+
+            errors = []
+            for cfg in attempts:
+                who = f"{cfg['llm_provider']} ({cfg['deep_think_llm']})"
+                job.progress = f"agents analyzing {ticker} as of {day} on {who} ({', '.join(analysts)}); a few minutes"
+                try:
+                    result, how = analyze(ticker, day, cfg, analysts, self.gateway(), folder, est_usd=est,
+                                          allow_paid=True)
+                except AIInProgress:
+                    raise
+                except AIBlocked as exc:
+                    # Over budget or switched off stops here; a model with no price is a setup gap another
+                    # provider can cover.
+                    if not str(exc).startswith("no price"):
+                        raise
+                    errors.append(f"{who}: {exc}")
+                except Exception as exc:  # out of credit, bad key, unreachable: the next provider, if any
+                    logger.warning("analysis on %s failed: %s", who, exc)
+                    errors.append(f"{who}: {str(exc)[:200]}")
+                else:
+                    job.log += [f"{e} -> moved on" for e in errors]
+                    return {**result, "how": how, "ticker": ticker, "provider": cfg["llm_provider"],
+                            "model": cfg["deep_think_llm"], "fell_back": bool(errors)}
+                job.log.append(errors[-1])
+            raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
 
         return self.analysis.start(work)
 

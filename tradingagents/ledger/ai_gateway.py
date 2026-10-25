@@ -119,7 +119,7 @@ class Gateway:
         p = self.policy.prices.get(f"{provider}/{model}")
         if p is None:
             raise AIBlocked(f"no price is configured for {provider}/{model}, so its cost cannot be held to the "
-                            f"budget; add it under Settings > AI before using it")
+                            f"budget; add it under Settings → Agent models before using it")
         return p
 
     def cost(self, provider: str, model: str, input_tokens: int, output_tokens: int, cached: int = 0) -> float:

@@ -549,7 +549,13 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div class="card" id="agentsCard" style="grid-column:1 / -1">
           <h3>Agent models</h3>
           <p class="muted">Which provider and model each agent runs on. Putting the two sides of each debate on different providers (bull vs bear, aggressive vs conservative) stops one model arguing with itself; a third provider can judge. Blank rows use the default. Every model needs a price (dollars per million tokens) so its cost stays within the AI budget; a model with no price is refused before any call is made.</p>
-          <div class="row" style="margin:0 0 8px"><button class="ghost" id="agSuggest">Suggest a split across my keys</button><button class="ghost" id="agReset">All on the default</button><span class="muted small" id="agKeys"></span></div>
+          <div class="settings-grid" style="margin:0 0 6px">
+            <label>Default provider<select id="agPrimary"></select></label>
+            <label>Quick model (analysts, debaters, trader)<input type="text" id="agQuick"></label>
+            <label>Deep model (research and portfolio managers)<input type="text" id="agDeep"></label>
+          </div>
+          <p class="muted small" id="agPrimaryNote"></p>
+          <div class="row" style="margin:0 0 8px"><button class="ghost" id="agFree">Use free Gemini</button><button class="ghost" id="agSuggest">Suggest a split across my keys</button><button class="ghost" id="agReset">All on the default</button><span class="muted small" id="agKeys"></span></div>
           <div class="table-wrap"><table id="agTable" class="compact"></table></div>
           <h4 style="margin:12px 0 4px">Prices of the models used ($ per million tokens)</h4>
           <div class="table-wrap"><table id="agPrices" class="compact"></table></div>
@@ -990,14 +996,18 @@ $("fcUse").onchange = async () => {
 };
 
 // --- the quality and Wall Street screen ---
+// ?qv=signals opens the stock screen on that column view (and is remembered like a click).
+if (["quality", "signals"].includes(new URLSearchParams(location.search).get("qv"))) store.set("qsView", new URLSearchParams(location.search).get("qv"));
 let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false, qsView = store.get("qsView", "quality"), sgData = null;
 const QS_COLS = [["rank", "Combined rank"], ["ticker", "Ticker"], ["combined_score", "Combined score"],
   ["quality_rank", "Quality rank"], ["quality_score", "Quality score"], ["moat_passed", "Moat"],
   ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags (checks)"], ["implied_growth", "Implied growth"],
   ["forward_pe", "Fwd P/E"], ["analyst_mean", "Consensus"], ["analysts", "Analysts"], ["target_upside", "Target upside"]];
-const SG_COLS = [["rank", "Combined rank"], ["ticker", "Ticker"], ["action", "Action"], ["trend", "Trend (20 sessions)"],
-  ["lift_up", "Breakout lift"], ["lift_down", "Breakdown lift"], ["p_large_loss", "P(large loss)"], ["lift_crash", "Crash lift"],
-  ["warnings", "Warnings"], ["quality_score", "Quality score"], ["analyst_mean", "Consensus"]];
+const SG_COLS = [["rank", "Rank", "Combined rank"], ["ticker", "Ticker"], ["action", "Action", "The latest daily decision"],
+  ["trend", "Trend", "Over 20 sessions"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
+  ["lift_down", "Breakdown", "Breakdown lift: P(close below the range) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss while held)"],
+  ["lift_crash", "Crash", "Crash lift: P(large loss) ÷ usual"], ["warnings", "Warnings"], ["quality_score", "Quality", "Quality score"],
+  ["analyst_mean", "Cons.", "Analyst consensus, 1 strong buy to 5 strong sell"]];
 const ACT_ORDER = {ENTER: 0, EXIT: 1, REDUCE: 2, HOLD: 3, WAIT: 4};
 function qsSignal(r) { return sgData ? sgData[r.ticker] : null; }
 function qsValue(r, k) {
@@ -1053,16 +1063,16 @@ function renderScreen() {
 }
 const liftCell = (v, bad) => v == null ? "–" : `<span class="${v >= 1.2 ? (bad ? "neg" : "pos") : v <= 0.8 ? "muted" : ""}">${v.toFixed(2)}×</span>`;
 function renderSignals(shown, arrow) {
-  $("qsTable").innerHTML = "<tr>" + SG_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${["ticker", "warnings"].includes(c) ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
+  $("qsTable").innerHTML = "<tr>" + SG_COLS.map(([c, l, tip]) => `<th data-k="${c}" title="${esc(tip || l)}" style="cursor:pointer" class="${["ticker", "warnings"].includes(c) ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
     shown.map(r => {
       const g = qsSignal(r) || {}, d = g.decision, sg = g.signal && g.signal.status === "ok" ? g.signal : null;
       const act = d ? `<b class="${{ENTER: "pos", EXIT: "neg", REDUCE: "neg"}[d.action] || "muted"}">${esc(d.action)}</b>${d.paper_action ? ` <span class="muted small">${esc(d.paper_action)}</span>` : ""}` : "<span class='muted small'>–</span>";
-      return `<tr><td>${r.rank}</td><td class="l" style="max-width:190px"><b>${tk(r.ticker)}</b><div class="muted small">${esc(r.name || "")}</div></td>
-        <td title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}">${act}</td>
+      return `<tr><td>${r.rank}</td><td class="l" style="max-width:150px"><b>${tk(r.ticker)}</b><div class="muted small" style="white-space:normal">${esc(r.name || "")}</div></td>
+        <td title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}" style="white-space:normal">${act}</td>
         <td class="${sg && sg.trend_p == null ? "muted small" : ""}">${sg ? `${esc(sg.trend)}${sg.trend_p != null ? ` <span class="muted small">${pct(sg.trend_p, 0)}</span>` : ""}` : "–"}</td>
         <td>${sg ? liftCell(sg.lifts.up_break, false) : "–"}</td><td>${sg ? liftCell(sg.lifts.down_break, true) : "–"}</td>
         <td>${sg ? pct(sg.forecast.p_large_loss, 0) : "–"}</td><td>${sg ? liftCell(sg.lifts.large_loss, true) : "–"}</td>
-        <td class="l small">${sg ? (sg.warnings.length ? sg.warnings.map(w => `<div class="${w.level === "info" ? "pos" : "neg"}">${esc(w.text)}</div>`).join("") : "<span class='muted'>none</span>") : "<span class='muted'>no forecast saved</span>"}</td>
+        <td class="l small" style="white-space:normal;min-width:140px;max-width:220px">${sg ? (sg.warnings.length ? sg.warnings.map(w => `<div class="${w.level === "info" ? "pos" : "neg"}">${esc(w.text)}</div>`).join("") : "<span class='muted'>none</span>") : "<span class='muted'>no forecast saved</span>"}</td>
         <td>${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td>
         <td>${r.analyst_mean == null ? "–" : r.analyst_mean.toFixed(2)}</td></tr>`;
     }).join("");
@@ -1554,11 +1564,38 @@ function agRender() {
     used.map(k => { const p = prices[k] || {}; return `<tr><td class="l">${esc(k)}${prices[k] ? "" : " <span class='neg small'>no price: refused</span>"}</td>` +
       ["input", "cached_input", "output"].map(f => `<td><input type="number" min="0" step="0.01" data-k="${esc(k)}" data-f="${f}" value="${p[f] ?? ""}" style="width:90px"></td>`).join("") + "</tr>"; }).join("");
 }
+let agPrimary = null;
+function agPrimaryRender() {
+  const d = agData.default, keys = new Set(agData.providers_with_keys);
+  $("agPrimary").innerHTML = agData.providers.map(p => `<option value="${p}" ${p === d.provider ? "selected" : ""}>${p}${keys.has(p) ? "" : " (no key)"}</option>`).join("");
+  $("agQuick").value = d.quick; $("agDeep").value = d.deep;
+  $("agPrimaryNote").innerHTML = (d.provider === "google" ? "Gemini Flash models are <b>free</b> on a free-tier key (a Google project without billing): rate-limited, and Google may use the content to improve its products. The budget still counts them at the paid rate, so it never under-counts. " : "") +
+    (agData.fallbacks.length ? `If a run fails (bad key, out of credit, rate limit), it moves to ${agData.fallbacks.map(esc).join(", then ")}.` : "No fallback provider is allowed.");
+}
+function agSyncDefault() {
+  agData.default = {provider: $("agPrimary").value, quick: $("agQuick").value.trim(), deep: $("agDeep").value.trim()};
+  agPrimary = {...agData.default};
+  agRender(); agPrimaryRender();
+}
 async function loadAgents() {
   try { agData = await api("/api/ai"); } catch (e) { $("agStatus").textContent = e.message; return; }
   agMap = {...(agData.settings.ai_agent_models || {})};
+  agPrimary = agData.settings.ai_primary && agData.settings.ai_primary.provider ? {...agData.settings.ai_primary} : null;
+  agPrimaryRender();
   agRender();
 }
+$("agPrimary").onchange = () => {
+  const c = agData.catalog[$("agPrimary").value] || {};
+  $("agQuick").value = c.quick || ""; $("agDeep").value = c.deep || c.quick || "";
+  agSyncDefault();
+};
+$("agQuick").onchange = agSyncDefault;
+$("agDeep").onchange = agSyncDefault;
+$("agFree").onclick = () => {
+  $("agPrimary").value = "google"; $("agQuick").value = "gemini-3.8-flash"; $("agDeep").value = "gemini-3.8-flash";
+  agMap = {}; agSyncDefault();
+  $("agStatus").textContent = "Every agent on Gemini 3.8 Flash: review, then save.";
+};
 $("agSuggest").onclick = () => {
   if (!Object.keys(agData.suggested).length) { $("agStatus").textContent = "Only one provider has a key: add another key to split the debates."; return; }
   agMap = {...agData.suggested}; agRender(); $("agStatus").textContent = "Suggested: review, set prices, then save.";
@@ -1572,7 +1609,7 @@ $("agSave").onclick = async () => {
   });
   for (const [k, p] of Object.entries(prices)) if (p.input == null || p.output == null) { $("agStatus").textContent = `${k}: give both an input and an output price`; return; }
   try {
-    await api("/api/settings", {scope: "global", values: {ai_agent_models: agMap, ai_prices: prices}});
+    await api("/api/settings", {scope: "global", values: {ai_agent_models: agMap, ai_prices: prices, ...(agPrimary ? {ai_primary: agPrimary} : {})}});
     $("agStatus").textContent = "Saved."; loadAgents();
   } catch (e) { $("agStatus").textContent = e.message; }
 };

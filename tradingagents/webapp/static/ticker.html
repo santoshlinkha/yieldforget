@@ -67,6 +67,7 @@ th:first-child, td:first-child, th.l, td.l { text-align: left; }
 .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .tabs button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 .tabs button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.chips button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; background: var(--c); margin-right: 6px; vertical-align: middle; }
 svg text { fill: var(--muted); font-size: 11px; }
@@ -101,6 +102,46 @@ h3.sec:first-of-type { border-top: 0; padding-top: 0; margin-top: 4px; }
 .target .mark.now { background: var(--accent); width: 3px; }
 .target .lbl { position: absolute; top: -12px; transform: translateX(-50%); font-size: 11px; color: var(--muted); white-space: nowrap; }
 .target .lbl.now { top: 30px; color: var(--accent); font-weight: 600; }
+/* Controls: buttons, the date picker, toggle chips */
+:root { color-scheme: light; --accent-soft: #e8f0fe; --border-strong: #d1d5db; --focus: rgba(37, 99, 235, .25); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --accent-soft: #172554; --border-strong: #334155; --focus: rgba(96, 165, 250, .3); } }
+:root[data-theme="dark"] { color-scheme: dark; --accent-soft: #172554; --border-strong: #334155; --focus: rgba(96, 165, 250, .3); }
+button { font: inherit; font-size: 13px; font-weight: 600; line-height: 1.2; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; display: inline-flex; align-items: center; gap: 6px;
+  transition: filter .12s, background .12s, box-shadow .12s, transform .05s; }
+button:hover { filter: brightness(1.07); }
+button:active { transform: translateY(1px); }
+button:focus-visible, input:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus); }
+button:disabled { opacity: .55; cursor: progress; filter: none; transform: none; }
+button.ghost { background: var(--surface); color: var(--text); border-color: var(--border-strong); font-weight: 500; }
+button.ghost:hover { background: var(--surface-2); border-color: var(--accent); color: var(--accent); filter: none; }
+button.sm { padding: 5px 10px; font-size: 12px; font-weight: 500; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+input[type=date] { font: inherit; font-size: 13px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 7px 10px; min-width: 150px; cursor: pointer; }
+input[type=date]:hover { border-color: var(--accent); }
+input[type=date]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .7; }
+input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
+.runbox { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 10px 0 12px;
+  display: grid; gap: 10px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.flabel { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.daypick { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { position: relative; }
+.chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.chip span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 999px; font-size: 12.5px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--muted); user-select: none; transition: all .12s; }
+.chip span::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; }
+.chip input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip input:checked + span::before { background: currentColor; }
+.chip input:focus-visible + span { box-shadow: 0 0 0 3px var(--focus); }
+.chip:hover span { border-color: var(--accent); }
+.runbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.status { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; margin: 0; }
+.spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } button { transition: none; } }
 </style>
 </head>
 <body>
@@ -128,12 +169,14 @@ h3.sec:first-of-type { border-top: 0; padding-top: 0; margin-top: 4px; }
       <div class="card"><h2>Saved analysis reports</h2>
         <div id="runAgents">
           <p class="muted small">Run the TradingAgents team (analysts, bull/bear debate, trader, risk debate, portfolio manager) on this ticker as of a day you pick; they see only information up to that day. Paid: one full analysis held to your AI budget; a day already analyzed with the same settings is reused at no charge. Which model each agent uses: Settings → Agent models.</p>
-          <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin:6px 0">
-            <label class="small">Day <input type="date" id="agDate"></label>
-            <span class="small" id="agAnalysts"></span>
-            <button id="agRun">Run the agents</button>
+          <div class="runbox">
+            <div class="field"><label class="flabel" for="agDate">Analyze as of</label>
+              <div class="daypick"><input type="date" id="agDate"><span id="agPresets" class="chips"></span></div></div>
+            <div class="field"><span class="flabel">Analysts</span><div class="chips" id="agAnalysts"></div></div>
+            <div class="runbar"><button id="agRun"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor"/></svg>Run the agents</button>
+              <span class="muted small" id="agCost"></span></div>
+            <p class="status" id="agState"></p>
           </div>
-          <p class="small muted" id="agState"></p>
         </div>
         <div id="reports"></div></div>
       <div class="card"><h2>Expected return</h2><div id="fc"></div></div>
@@ -195,7 +238,7 @@ function sources(ms) {
     return;
   }
   if (!saved) {
-    box.innerHTML = `<div style="margin-top:10px"><button id="readMoat">Read the moat's sources from the 10-K (AI, paid)</button>
+    box.innerHTML = `<div style="margin-top:10px"><button class="ghost sm" id="readMoat">Read the moat's sources from the 10-K (AI, paid)</button>
       <p class="muted small">One call to the configured AI model, about $0.03, held to your AI budget and saved per filing, so each 10-K is read once. It rates switching costs, network effects, cost advantages, intangible assets and efficient scale, quoting the filing for each.</p>
       ${job && job.error ? `<p class="note">${esc(job.error)}</p>` : ""}</div>`;
     $("readMoat").onclick = async () => {
@@ -495,7 +538,7 @@ async function loadSignals() {
   } else {
     h += `<p class="small muted">${sg ? esc((sg.reasons || []).join("; ") || sg.status) : "No trend, breakout or crash forecast saved for this stock yet."}</p>`;
   }
-  h += `<div class="row"><button class="ghost" id="sigRun">${sg ? "Refresh" : "Compute"} signals for ${esc(symbol)}</button><span class="muted small" id="sigState"></span></div>`;
+  h += `<div class="row"><button class="ghost sm" id="sigRun">${sg ? "Refresh" : "Compute"} signals for ${esc(symbol)}</button><span class="muted small" id="sigState"></span></div>`;
   $("sig").innerHTML = h;
   $("sigRun").onclick = async () => {
     try { await getJSON("/api/stocks/run", {tickers: symbol, horizons: [20], news: false}); pollStocks(); }
@@ -522,15 +565,42 @@ function lastWeekday() {
 }
 $("agDate").value = lastWeekday();
 $("agDate").max = lastWeekday();
-$("agAnalysts").innerHTML = "Analysts: " + ANALYSTS.map(([k, l]) => `<label class="small"><input type="checkbox" value="${k}" ${k === "market" ? "checked" : ""}> ${l}</label>`).join(" ");
+$("agAnalysts").innerHTML = ANALYSTS.map(([k, l]) => `<label class="chip"><input type="checkbox" value="${k}" ${k === "market" ? "checked" : ""}><span>${l}</span></label>`).join("");
+// Quick picks: the last close, a week, a month and three months back (each moved to a weekday).
+function weekdayBefore(days) {
+  const [y, m, d] = lastWeekday().split("-").map(Number), t = new Date(y, m - 1, d - days);
+  while ([0, 6].includes(t.getDay())) t.setDate(t.getDate() - 1);
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+}
+const PRESETS = [["Last close", 0], ["1 week ago", 7], ["1 month ago", 30], ["3 months ago", 91]];
+function markPreset() {
+  $("agPresets").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.day === $("agDate").value));
+}
+$("agPresets").innerHTML = PRESETS.map(([l, n]) => `<button type="button" class="ghost sm" data-day="${weekdayBefore(n)}">${l}</button>`).join("");
+$("agPresets").querySelectorAll("button").forEach(b => b.onclick = () => { $("agDate").value = b.dataset.day; markPreset(); });
+$("agDate").onchange = () => {
+  const [y, m, d] = $("agDate").value.split("-").map(Number), day = new Date(y, m - 1, d).getDay();
+  $("agState").innerHTML = [0, 6].includes(day) ? `<span class="neg">That is a weekend: pick a trading day.</span>` : "";
+  markPreset();
+};
+function costHint() {
+  const n = $("agAnalysts").querySelectorAll("input:checked").length;
+  $("agCost").textContent = n ? `${n} analyst${n > 1 ? "s" : ""} · about one full analysis` : "pick at least one analyst";
+  $("agRun").disabled = !n;
+}
+$("agAnalysts").onchange = costHint;
+costHint();
+markPreset();
 async function pollAnalysis(first) {
   const j = await getJSON("/api/analyze").catch(() => null);
   if (!j) return;
   $("agRun").disabled = j.running;
-  if (j.running) { $("agState").textContent = j.progress + "…"; setTimeout(() => pollAnalysis(false), 5000); return; }
+  if (j.running) { $("agState").innerHTML = `<span class="spin"></span>${esc(j.progress)}…`; setTimeout(() => pollAnalysis(false), 5000); return; }
+  costHint();
   if (j.error) $("agState").innerHTML = `<span class="neg">${esc(j.error)}</span>`;
   else if (j.result && j.result.ticker === symbol) {
-    $("agState").innerHTML = `Done: <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} (${j.result.how === "cache" ? "reused, no charge" : "paid"}). The reports are below.`;
+    $("agState").innerHTML = `Done: <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +
+      ` (${j.result.how === "cache" ? "reused, no charge" : "paid"}${j.result.fell_back ? "; the first provider failed, so Gemini ran it" : ""}). The reports are below.`;
     if (!first) load();
   }
 }

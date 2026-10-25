@@ -526,7 +526,7 @@ def book_ai(portfolio: str = PORTFOLIO_OPT):
                   f"this month ${left['monthly_usd']:.4f}.")
     if not g["ai_prices"]:
         console.print("[yellow]No model prices are configured, so no paid AI call can run. Set them in the web "
-                      "app (Settings > AI) or with POST /api/settings.[/yellow]")
+                      "app (Settings → Agent models) or with POST /api/settings.[/yellow]")
 
 
 stocks_app = typer.Typer(help="Stock research: multi-ticker forecasts, recommendations and their record.",

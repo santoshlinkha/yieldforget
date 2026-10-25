@@ -38,6 +38,8 @@ GLOBAL_DEFAULTS = {
     "ai_estimates": {"rating": 0.30, "market_brief": 0.02},   # dollars reserved per job before it runs
     # Agent roles on their own provider and model (llm_clients.roles); empty: all on the run's provider.
     "ai_agent_models": {},
+    # The agents' default provider and models ({"provider", "quick", "deep"}); empty: the app's configured ones.
+    "ai_primary": {},
     "compute_backend": "auto",
     # Stock research: the saved watchlist, and the limits stock recommendations respect.
     "stock_watchlist": [],
@@ -86,6 +88,13 @@ class Store:
             scope, key = capital.SCOPE, capital.ALIASES[(scope, key)]
         if scope == capital.SCOPE:
             value = capital.validate(key, value)   # the backend checks every amount, whoever sends it
+        if (scope, key) == ("global", "ai_primary") and value:
+            from tradingagents.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
+
+            value = {k: str(value.get(k) or "").strip() for k in ("provider", "quick", "deep")}
+            value["provider"] = value["provider"].lower()
+            if value["provider"] not in PROVIDER_API_KEY_ENV or not value["quick"] or not value["deep"]:
+                raise ValueError("the default needs a known provider, a quick model and a deep model")
         if (scope, key) == ("global", "ai_agent_models"):
             from tradingagents.llm_clients.roles import validate
 
