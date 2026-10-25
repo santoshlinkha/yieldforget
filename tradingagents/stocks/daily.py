@@ -45,6 +45,7 @@ from .positions import POLICIES, Book, Lot, executable_prices
 from .targets import Thresholds
 
 BUNDLE_VERSION = "decision-v1"
+CASH_FUNDS = ("SGOV", "BIL")      # cash equivalents: valued as cash, never reviewed as stock lots
 DEFAULT_RULES = {"min_expected_net": 0.005, "min_p_win": 0.5, "combined_name_cap": 0.10, "prospective_min_trades": 20,
                  "max_drawdown_limit": -0.35}
 
@@ -136,7 +137,8 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
         blob = path.read_bytes()
         return pickle.loads(blob), {"key": key, "sha256": hashlib.sha256(blob).hexdigest(), "reused": True}  # noqa: S301
     if not train:
-        raise ValueError("the decision models for this week are not fitted yet: run `stocks train` (or POST /api/decisions/train)")
+        raise ValueError("the decision models for this week, data and code are not fitted yet: run `stocks today --train` "
+                         "(or POST /api/decisions/run with {\"train\": true})")
     t0 = time.time()
     dates = decision_dates(data.close.index[data.close.index <= cutoff], start="2006-01-01", every=S.EVERY)
     say("building the training panel")
@@ -258,7 +260,12 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
             ira: dict, prices: pd.Series, validated: bool, cutoff, execute) -> list[dict]:
     """ENTER (validated) or PAPER ENTER (experimental) and WAIT, with sizes and blocked constraints."""
     out = []
-    cand = today[today["in_index"]].sort_values("expected_net", ascending=False)
+    # A fixed order, ties broken by the score itself, then P(profit), then the ticker: the input order
+    # never decides which tied stock comes first, and ties are marked.
+    cand = today[today["in_index"]].reset_index().rename(columns={"index": "ticker"})
+    cand = cand.sort_values(["expected_net", "score_pct", "p_win", "ticker"], ascending=[False, False, False, True])
+    ties = cand.groupby("expected_net")["ticker"].transform("count")
+    cand = cand.assign(tied_with=ties - 1).set_index("ticker")
     active = (held - exiting)
     slots = max(0, r["max_names"] - len(active))
     budget = spendable
@@ -289,7 +296,7 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
         line = {"ticker": t, "expected_net": row["expected_net"], "net_sd": row["net_sd"], "net_q10": row["net_q10"],
                 "expected_excess_vs_spy": row["expected_excess"], "p_win": row["p_win"], "p_risk": risk,
                 "cost_rt": row["cost_rt"], "score_pct": row["score_pct"], "sigma": row["sigma"], "price": price,
-                "blocked": blocks,
+                "tied_with": int(row["tied_with"]), "blocked": blocks,
                 "execute": str(execute)}
         if blocks:
             line["action"] = "WAIT"
@@ -322,7 +329,12 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     r = rules(store)
     as_of = as_of or date.today()
     policy = POLICIES[policy_name]
-    lots = lots_from_ledger(store, r["sleeve"], as_of)
+    all_lots = lots_from_ledger(store, r["sleeve"], as_of)
+    lots = [lot for lot in all_lots if lot["ticker"] not in CASH_FUNDS]
+    cash_fund = {}
+    for lot in all_lots:
+        if lot["ticker"] in CASH_FUNDS:
+            cash_fund[lot["ticker"]] = cash_fund.get(lot["ticker"], 0.0) + lot["shares"]
     say("loading data")
     data = D.load(sorted({lot["ticker"] for lot in lots}), cache_dir)
     spy = data.close["SPY"].dropna()
@@ -339,9 +351,19 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     stocks = list(data.stocks)
     px, _ = executable_prices(data.close[stocks], data.actions)
     prices = px.loc[cutoff]
+    from tradingagents.optimizer.data import latest_prices
+
+    outside = {lot["ticker"] for lot in all_lots if lot["ticker"] not in prices.index or not np.isfinite(prices.get(lot["ticker"], np.nan))}
+    fallback = latest_prices(cache_dir, outside) if outside else {}
+
+    def price_of(t):
+        p = float(prices.get(t, np.nan)) if t in prices.index else np.nan
+        return p if np.isfinite(p) else float(fallback.get(t, np.nan))
+
     state = store.ledger.state(r["sleeve"], as_of)
-    held_value = sum(lot["shares"] * float(prices.get(lot["ticker"], np.nan) or 0) for lot in lots)
-    sleeve_value = state.cash.total + held_value
+    cash_fund_value = sum(q * price_of(t) for t, q in cash_fund.items())
+    held_value = sum(lot["shares"] * price_of(lot["ticker"]) for lot in lots)
+    sleeve_value = state.cash.total + held_value + cash_fund_value
     ev = evidence(store.con, policy_name, bundle["features"], Thresholds(), r)
     ew = ewma_vol(data.close[stocks])
     reviews = []
@@ -358,8 +380,6 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                 line["reasons"].append(f"earnings on {upcoming.date()}: a known gap risk (no automatic action)")
         reviews.append(line)
     combined = store.ledger.state("combined", as_of)
-    from tradingagents.optimizer.data import latest_prices
-
     ira_prices = latest_prices(cache_dir, set(combined.positions))
     by_ticker = {t: q * float(ira_prices.get(t, np.nan) or 0) for t, q in combined.positions.items()}
     ira = {"total": sum(by_ticker.values()) + combined.cash.total, "by_ticker": by_ticker}
@@ -377,6 +397,9 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                "summary": {a: sum(1 for x in reviews + entry_lines if x["action"] == a)
                            for a in ("ENTER", "WAIT", "HOLD", "REDUCE", "EXIT", "REVIEW")},
                "paper_enters": sum(1 for x in entry_lines if x.get("paper_action") == "PAPER ENTER"),
+               "cash_fund": {"holdings": cash_fund, "value": round(cash_fund_value, 2),
+                             "note": ("held as a cash equivalent; selling it frees settled cash the next session (T+1), "
+                                      "so buys funded by it come a session later") if cash_fund else None},
                "limitations": ["Levels are close-confirmed: exits execute at the next close and gaps can lose more "
                                "than the stated risk level.", "Recommendations only: nothing is sent to the broker.",
                                f"Universe survivorship: {data.survivorship}."]}
@@ -386,7 +409,8 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
               "model": {"policy": policy.__dict__, "policy_version": policy.version(), "bundle": art,
                         "bundle_meta": bundle["meta"], "thresholds": bundle["thresholds"], "evidence": ev,
                         "code": code_version()},
-              "account": {"sleeve_value": round(sleeve_value, 2), "settled_cash": round(state.cash.settled, 2),
+              "account": {"sleeve_value": round(sleeve_value, 2), "cash_fund_value": round(cash_fund_value, 2),
+                          "settled_cash": round(state.cash.settled, 2),
                           "reserved": round(state.cash.reserved, 2), "unsettled": round(state.cash.unsettled, 2),
                           "lots": len(lots), "ira_total": round(ira["total"], 2)},
               **payload}

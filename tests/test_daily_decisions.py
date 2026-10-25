@@ -140,3 +140,29 @@ def test_the_shadow_account_freezes_its_capital_and_advances_once(env):
     assert first["capital"] == last["capital"] == 1000.0               # frozen at inception
     days = [e[0] for e in last["equity"]]
     assert len(days) == len(set(days))                                 # each session replayed once
+
+
+def test_tied_forecasts_are_ordered_by_score_then_ticker_never_by_input_order():
+    base = pd.DataFrame({"expected_net": [0.007] * 4, "net_sd": [0.08] * 4, "net_q10": [-0.1] * 4,
+                         "expected_excess": [0.0] * 4, "p_win": [0.54] * 4, "p_risk": [0.07] * 4, "sigma": [0.02] * 4,
+                         "cost_rt": [0.003] * 4, "score_pct": [0.95, 0.99, 0.95, 0.97], "in_index": [True] * 4},
+                        index=["ZZZ", "MMM", "AAA", "QQQ"])
+    r = {**daily.DEFAULT_RULES, "max_names": 5, "max_position_share": 0.25, "min_order": 1.0, "max_large_loss_prob": 0.15}
+    ira = {"total": 6000.0, "by_ticker": {}}
+    prices = pd.Series(10.0, index=base.index)
+    a = daily.entries(base, set(), set(), r, 1000.0, 1000.0, ira, prices, True, None, "2026-10-26")
+    b = daily.entries(base.sample(frac=1, random_state=3), set(), set(), r, 1000.0, 1000.0, ira, prices, True, None,
+                      "2026-10-26")
+    assert [x["ticker"] for x in a] == [x["ticker"] for x in b] == ["MMM", "QQQ", "AAA", "ZZZ"]
+    assert all(x["tied_with"] == 3 for x in a)
+
+
+def test_a_cash_fund_in_the_sleeve_is_cash_not_a_lot_to_review(env, monkeypatch):
+    store, data, cache, cutoff, sessions = env
+    day = sessions[-5]
+    store.ledger.fill("trading", "buy", "SGOV", 5.0, 100.0, day.date(), settle_date=day.date())
+    monkeypatch.setattr("tradingagents.optimizer.data.latest_prices", lambda cache_dir, tickers: {t: 100.5 for t in tickers})
+    rec = daily.run(store, cache, cutoff.date(), train=True)
+    assert all(x["ticker"] != "SGOV" for x in rec["lots"])
+    assert rec["cash_fund"]["holdings"] == {"SGOV": 5.0} and rec["account"]["cash_fund_value"] == pytest.approx(502.5)
+    assert np.isfinite(rec["account"]["sleeve_value"])
