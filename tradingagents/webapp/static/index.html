@@ -155,6 +155,7 @@ table.compact tr.group td { font-weight: 600; color: var(--text); background: va
 #fcBatch tr[data-run] { cursor: pointer; }
 #fcTable tr.comb td { border-top: 1px solid var(--border-strong); }
 #fcTable td.l, #fcTable th.l { text-align: left; }
+td.l, th.l { text-align: left; }
 #fcTable tr.sub td { font-size: 12px; color: var(--muted); padding-top: 2px; padding-bottom: 2px; border-bottom: 0; }
 #fcTable tr.sub td.pos, #fcTable tr.sub td.neg { opacity: .8; } #fcBatch tr.shown td { background: var(--surface-2); }
 tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
@@ -226,6 +227,24 @@ tr.grp td { color: var(--muted); font-size: 11px; font-weight: 600; text-transfo
 .editor button.ghost { padding: 5px 9px; }
 .empty { text-align: center; padding: 32px 16px; color: var(--muted); }
 footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--border); padding-top: 16px; margin-top: 8px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { position: relative; }
+.chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.chip span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 999px; font-size: 12.5px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--muted); user-select: none; }
+.chip span::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; }
+.chip input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip input:checked + span::before { background: currentColor; }
+.chip:hover span { border-color: var(--accent); }
+.vb { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; }
+.vb.BUY { color: var(--buy, #059669); } .vb.SELL, .vb.AVOID { color: var(--sell, #dc2626); } .vb.HOLD { color: var(--accent); } .vb.WATCH, .vb.REVIEW { color: #d97706; }
+.econ { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); margin: 0 0 14px; }
+.econ h4 { margin: 0 0 6px; font-size: 13px; }
+.aiopts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 0 0 12px; }
+.aiopts .flabel { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
+.spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 </style>
 </head>
 <body>
@@ -432,8 +451,28 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     </section>
 
     <section class="tab" id="decisions">
-      <div class="page-head"><div><h2>Stock decisions</h2><p>Daily, after the close, for the Trading sleeve: ENTER, WAIT, HOLD, REDUCE or EXIT, each with its size, execution date, expected net benefit, uncertainty and reasons. Saved before any outcome is known; nothing is sent to the broker. Opening this page only reads saved decisions.</p></div></div>
+      <div class="page-head"><div><h2>Decisions</h2><p>Two kinds of decision, side by side. <b>AI decisions</b>: the TradingAgents team (technical, fundamentals, news and sentiment analysts, a bull/bear debate, a trader, a risk debate and a portfolio manager) reads each stock as of the last close, with the economy in view, and says BUY, HOLD or SELL; shown next to the app's rule verdict. <b>Quant model decision</b>: the fitted models' daily ENTER / WAIT / HOLD / EXIT for the Trading sleeve, sized to settled cash. Nothing is sent to the broker; you place the orders. Opening this page reads only what is saved.</p></div></div>
+      <div class="card" id="aiCard">
+        <div class="card-head"><h3>AI decisions</h3><span class="muted small" id="aiProv"></span></div>
+        <div class="econ" id="aiEcon"></div>
+        <div class="aiopts">
+          <div><label class="flabel" for="aiDay">Analyze as of</label><input type="date" id="aiDay" style="max-width:180px"></div>
+          <div><span class="flabel">Analysts</span><div class="chips" id="aiAnalysts"></div></div>
+          <div><span class="flabel">AI budget (counted at paid rates)</span>
+            <div class="row" style="margin:0;gap:6px"><input type="number" id="aiDaily" min="0" step="0.5" style="width:90px" title="Daily $"><span class="muted small">a day</span>
+              <input type="number" id="aiMonthly" min="0" step="1" style="width:90px" title="Monthly $"><span class="muted small">a month</span>
+              <button class="ghost" id="aiBudgetSave">Save</button></div>
+            <span class="muted small" id="aiLeft"></span></div>
+        </div>
+        <div class="table-wrap"><table id="aiTable" class="compact"></table></div>
+        <div class="row" id="aiMore" style="margin-top:6px"></div>
+        <div class="row"><button id="aiRunPicked">Run the AI on the selected stocks</button><span class="muted small" id="aiRunInfo"></span></div>
+        <p class="muted small" id="aiState"></p>
+        <div class="log" id="aiDecLog"></div>
+        <p class="muted small">AI decision: the agents' rating as an action. Buy or Overweight → <b>BUY</b>; Hold → <b>HOLD</b> (WATCH if you do not hold it); Underweight or Sell → <b>SELL</b> (AVOID if you do not hold it). The rule verdict is the app's fixed checklist (quality, Wall Street, the models' warnings and this rating); open a ticker for both in full and the agents' reports. An AI rating is an LLM's judgment on the evidence it read, not a tested forecast, and it counts toward the rule verdict for 30 days.</p>
+      </div>
       <div class="card">
+        <h3>Quant model decision (Trading sleeve)</h3>
         <div class="row" style="margin-top:0">
           <button id="dcRun">Make today's decision</button>
           <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="dcTrain"> fit models if needed</label>
@@ -1129,6 +1168,86 @@ async function loadScreen() {
 $("qsBuild").onclick = async () => { try { await api("/api/screen/quality", {}); loadScreen(); } catch (e) { showError(e.message); } };
 $("qsFilter").oninput = renderScreen;
 
+// --- AI decisions: the agents' BUY / HOLD / SELL on a shortlist ---
+let aiData = null, aiPicked = null, aiAll = false;
+const AI_PICK = 3;   // pre-selected: Trading holdings, then the best-ranked BUY verdicts
+const AI_ANALYSTS = [["market", "technical"], ["fundamentals", "fundamentals"], ["news", "news & economy"], ["social", "sentiment"]];
+function aiBrief(b) {
+  if (!b) return `<h4>Economic conditions</h4><p class="muted small">No economic brief saved yet. <button class="ghost" id="aiEconRun">Write today's brief (AI, about $0.02)</button></p>`;
+  return `<h4>Economic conditions <span class="muted small" style="font-weight:400">as of ${esc(b.as_of)}${b.model ? " · " + esc(b.model) : ""}</span></h4>` +
+    `<div class="small">${miniMarkdown(b.summary || "")}</div>` +
+    ((b.trends || []).length ? `<ul class="small" style="margin:6px 0 0 18px;padding:0">${b.trends.slice(0, 4).map(t => `<li><b>${esc(t.title)}</b>${t.direction ? ` (${esc(t.direction)})` : ""}</li>`).join("")}</ul>` : "") +
+    `<p class="muted small" style="margin:6px 0 0">The news analyst also reads global economic news for every stock. <button class="ghost" id="aiEconRun">Refresh the brief</button></p>`;
+}
+function aiRender() {
+  const d = aiData;
+  $("aiProv").textContent = `on ${d.provider.llm_provider} · ${d.provider.quick_think_llm}${d.provider.deep_think_llm !== d.provider.quick_think_llm ? " / " + d.provider.deep_think_llm : ""} (Settings → Agent models)`;
+  $("aiEcon").innerHTML = aiBrief(d.brief);
+  $("aiEconRun").onclick = async () => {
+    try { await api("/api/market/explain", {}); $("aiEconRun").disabled = true; $("aiEconRun").textContent = "Writing…"; setTimeout(loadAiDecisions, 15000); }
+    catch (e) { showError(e.message); }
+  };
+  if (aiPicked === null) {
+    const held = d.rows.filter(r => r.in_trading).map(r => r.ticker);
+    aiPicked = new Set([...held, ...d.rows.filter(r => r.why === "rule verdict BUY").map(r => r.ticker)].slice(0, AI_PICK));
+  }
+  $("aiTable").innerHTML = "<tr><th></th><th class='l'>Ticker</th><th class='l'>Listed because</th><th>AI decision</th><th class='l'>Agents' rating</th><th>Rule verdict</th><th>Agree</th><th></th></tr>" +
+    (d.rows.length ? aiShown(d.rows).map(r => {
+      const ai = r.ai, agree = ai && r.verdict ? (ai.action === r.verdict ? "✓" : "✗") : "–";
+      return `<tr><td><input type="checkbox" data-t="${esc(r.ticker)}" ${aiPicked.has(r.ticker) ? "checked" : ""} aria-label="Analyze ${esc(r.ticker)}"></td>
+        <td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.name || "")}</span></td>
+        <td class="l muted small">${esc(r.why)}${r.held ? " · held" : ""}</td>
+        <td>${ai ? `<span class="vb ${ai.action}">${ai.action}</span>` : "<span class='muted small'>not run</span>"}</td>
+        <td class="l small">${ai ? `${esc(ai.rating)} <span class="muted">${esc(ai.date)}${ai.stale ? " (stale)" : ""}</span>` : "–"}</td>
+        <td title="${esc(r.verdict_summary || "")}">${r.verdict ? `<span class="vb ${r.verdict}">${r.verdict}</span>` : "–"}</td>
+        <td class="${agree === "✓" ? "pos" : agree === "✗" ? "neg" : "muted"}">${agree}</td>
+        <td>${r.reports ? `<a href="/ticker/${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener">reports</a>` : ""}</td></tr>`;
+    }).join("") : "<tr><td colspan='8' class='muted l'>Nothing to list: no holdings, no BUY verdicts and no daily decision yet.</td></tr>");
+  const hidden = d.rows.length - aiShown(d.rows).length;
+  $("aiMore").innerHTML = hidden > 0 || aiAll ? `<button class="ghost" id="aiToggle">${aiAll ? "Show fewer" : `Show ${hidden} more`}</button>` : "";
+  if ($("aiToggle")) $("aiToggle").onclick = () => { aiAll = !aiAll; aiRender(); };
+  $("aiTable").querySelectorAll("input[data-t]").forEach(cb => cb.onchange = () => {
+    cb.checked ? aiPicked.add(cb.dataset.t) : aiPicked.delete(cb.dataset.t); aiCost();
+  });
+  aiCost();
+}
+// Holdings, anything already rated or picked, and the first BUY verdicts; the rest behind "show more".
+function aiShown(rows) {
+  if (aiAll) return rows;
+  let buys = 0;
+  return rows.filter(r => r.held || r.ai || aiPicked.has(r.ticker) || (r.why === "rule verdict BUY" && buys++ < 8));
+}
+function aiCost() {
+  const n = aiPicked.size, k = $("aiAnalysts").querySelectorAll("input:checked").length, b = aiData.budget;
+  const per = b.per_run_usd * (1 + 0.5 * Math.max(0, k - 1));
+  $("aiRunInfo").textContent = n && k ? `${n} stock${n > 1 ? "s" : ""} × ${k} analyst${k > 1 ? "s" : ""}: up to about ${usd(n * per)} reserved at paid rates (free on a free-tier Gemini key); a stock already analyzed that day is reused at no charge` : "pick stocks and analysts";
+  $("aiRunPicked").disabled = !n || !k || aiData.job.running;
+}
+async function loadAiDecisions() {
+  try { aiData = await api("/api/ai-decisions"); } catch (e) { $("aiState").textContent = e.message; return; }
+  const d = aiData, j = d.job;
+  if (!$("aiDay").value) $("aiDay").value = d.day;
+  if (!$("aiAnalysts").innerHTML) $("aiAnalysts").innerHTML = AI_ANALYSTS.map(([k, l]) => `<label class="chip"><input type="checkbox" value="${k}" checked><span>${l}</span></label>`).join("");
+  $("aiAnalysts").onchange = aiCost;
+  $("aiDaily").value = d.budget.daily_usd; $("aiMonthly").value = d.budget.monthly_usd;
+  $("aiLeft").textContent = `left: ${usd(Math.max(0, d.budget.left_today))} today, ${usd(Math.max(0, d.budget.left_month))} this month`;
+  aiRender();
+  $("aiDecLog").textContent = (j.log || []).join("\n");
+  if (j.running) { $("aiState").innerHTML = `<span class="spin"></span>${esc(j.progress)}…`; setTimeout(loadAiDecisions, 6000); }
+  else if (j.error) $("aiState").innerHTML = `<span class="neg">${esc(j.error)}</span>`;
+  else if (j.result && j.result.done) $("aiState").textContent = `Last run: ${Object.keys(j.result.done).length} analyzed, ${Object.keys(j.result.failed).length} failed, as of ${j.result.date}.`;
+  else $("aiState").textContent = "";
+}
+$("aiRunPicked").onclick = async () => {
+  const tickers = [...aiPicked], analysts = [...$("aiAnalysts").querySelectorAll("input:checked")].map(x => x.value);
+  if (!confirm(`Run the agents on ${tickers.join(", ")} as of ${$("aiDay").value} with ${analysts.length} analyst(s)? Paid AI runs, held to your budget (free on a free-tier Gemini key).`)) return;
+  try { await api("/api/ai-decisions", {tickers, analysts, date: $("aiDay").value}); loadAiDecisions(); } catch (e) { showError(e.message); }
+};
+$("aiBudgetSave").onclick = async () => {
+  try { await api("/api/ai-budget", {daily_usd: +$("aiDaily").value, monthly_usd: +$("aiMonthly").value}); loadAiDecisions(); }
+  catch (e) { showError(e.message); }
+};
+
 // --- daily stock decisions ---
 const ACT = {ENTER: "pos", EXIT: "neg", REDUCE: "neg", HOLD: "", WAIT: "muted", REVIEW: "neg"};
 async function loadDecisions() {
@@ -1654,7 +1773,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); loadCapital(); loadDecisions(); loadScreen(); loadSignalsBoard(); loadAgents(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); loadCapital(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over

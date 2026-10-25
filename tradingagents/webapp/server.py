@@ -649,16 +649,7 @@ class App:
     def analysis_state(self) -> dict:
         return self.analysis.state()
 
-    def start_analysis(self, body: dict) -> bool:
-        """The agents' full analysis of one ticker as of a chosen day (paid: asked for by a click)."""
-        from tradingagents.dataflows.symbols import safe_ticker_component
-        from tradingagents.optimizer.ai_views import ANALYST_ROLES, analyze
-
-        g = self.store.settings("global")
-        ticker = str(body.get("ticker") or "").strip().upper()
-        if not ticker:
-            raise ValueError("no ticker")
-        day = str(body.get("date") or _today())
+    def _check_day(self, day: str) -> str:
         try:
             when = date.fromisoformat(day)
         except ValueError:
@@ -667,43 +658,164 @@ class App:
             raise ValueError("the agents can only analyze a day that has happened")
         if when.weekday() >= 5:
             raise ValueError(f"{day} is a weekend: pick a trading day")
+        return day
+
+    def _analysts(self, body: dict, g: dict) -> list[str]:
+        from tradingagents.optimizer.ai_views import ANALYST_ROLES
+
         analysts = [a for a in (body.get("analysts") or g["ai_analysts"]) if a in ANALYST_ROLES]
         if not analysts:
             raise ValueError("pick at least one analyst")
-        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
-        est = g["ai_estimates"]["rating"] * max(1, len(analysts))
+        return analysts
 
-        attempts = self.agent_attempts(g)
+    def _run_agents(self, job, ticker: str, day: str, analysts: list[str], g: dict) -> dict:
+        """The agents on one ticker as of ``day``, trying each configured provider in turn (paid: only from a click)."""
+        from tradingagents.dataflows.symbols import safe_ticker_component
+        from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
+        from tradingagents.optimizer.ai_views import analyze
+
+        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
+        # Reserved before the run (the actual spend is recorded per request): the first analyst costs the
+        # most, each further one adds its report and a longer debate.
+        est = g["ai_estimates"]["rating"] * (1 + 0.5 * (len(analysts) - 1))
+        errors = []
+        for cfg in self.agent_attempts(g):
+            who = f"{cfg['llm_provider']} ({cfg['deep_think_llm']})"
+            job.progress = f"agents analyzing {ticker} as of {day} on {who} ({', '.join(analysts)}); a few minutes"
+            try:
+                result, how = analyze(ticker, day, cfg, analysts, self.gateway(), folder, est_usd=est, allow_paid=True)
+            except AIInProgress:
+                raise
+            except AIBlocked as exc:
+                # Over budget or switched off stops here; a model with no price is a setup gap another
+                # provider can cover.
+                if not str(exc).startswith("no price"):
+                    raise
+                errors.append(f"{who}: {exc}")
+            except Exception as exc:  # out of credit, bad key, unreachable: the next provider, if any
+                logger.warning("analysis on %s failed: %s", who, exc)
+                errors.append(f"{who}: {str(exc)[:200]}")
+            else:
+                job.log += [f"{ticker}: {e} -> moved on" for e in errors]
+                return {**result, "how": how, "ticker": ticker, "provider": cfg["llm_provider"],
+                        "model": cfg["deep_think_llm"], "fell_back": bool(errors)}
+            job.log.append(f"{ticker}: {errors[-1]}")
+        raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
+
+    def start_analysis(self, body: dict) -> bool:
+        """The agents' full analysis of one ticker as of a chosen day (paid: asked for by a click)."""
+        g = self.store.settings("global")
+        ticker = str(body.get("ticker") or "").strip().upper()
+        if not ticker:
+            raise ValueError("no ticker")
+        day = self._check_day(str(body.get("date") or _today()))
+        analysts = self._analysts(body, g)
+        return self.analysis.start(lambda job: self._run_agents(job, ticker, day, analysts, g))
+
+    # --- AI decisions: the agents' BUY / HOLD / SELL on a shortlist, next to the rules and the economy ---
+
+    def _last_session(self) -> str:
+        from tradingagents.stocks import daily
+
+        dec = daily.load(self.store.con)
+        if dec and dec.get("info_cutoff"):
+            return dec["info_cutoff"]
+        d = date.today()
+        while d.weekday() >= 5:
+            d = date.fromordinal(d.toordinal() - 1)
+        return d.isoformat()
+
+    def ai_decisions(self) -> dict:
+        """The shortlist the agents would analyze, each with its latest agent rating, its rule verdict and the
+        AI decision, plus the latest economic brief: reads only."""
+        from tradingagents.optimizer.universe import describe
+        from tradingagents.stocks.daily import CASH_FUNDS
+        from tradingagents.stocks.verdict import ai_decision
+
+        g = self.store.settings("global")
+        board = {r["ticker"]: r for r in self.signals()["rows"]}
+        positions = self.store.ledger.state("combined", _today()).positions
+        held = sorted(t for t, q in positions.items() if q and t not in CASH_FUNDS)
+        trading = sorted(t for t, q in self.store.ledger.state("trading", _today()).positions.items()
+                         if q and t not in CASH_FUNDS)
+        by_rank = sorted((r for r in board.values() if r.get("verdict") and r.get("screen")),
+                         key=lambda r: r["screen"].get("rank") or 9999)
+        buys = [r["ticker"] for r in by_rank if r["verdict"]["verdict"] == "BUY"]
+        paper = [t for t, r in board.items() if (r.get("decision") or {}).get("paper_action") == "PAPER ENTER"]
+        reports_root = Path(self.config["results_dir"])
+        rows, seen = [], set()
+        for t, why in [*((t, "you hold it") for t in held), *((t, "rule verdict BUY") for t in buys),
+                       *((t, "top of the daily decision") for t in paper)]:
+            if t in seen:
+                continue
+            seen.add(t)
+            r = board.get(t) or {}
+            rating = r.get("rating")
+            day_dir = reports_root / t / rating["date"] / "reports" if rating else None
+            rows.append({"ticker": t, "name": describe(t), "why": why, "held": t in positions and bool(positions[t]),
+                         "in_trading": t in trading, "rating": rating,
+                         "ai": ai_decision(rating, t in held) if rating else None,
+                         "verdict": (r.get("verdict") or {}).get("verdict"),
+                         "verdict_summary": (r.get("verdict") or {}).get("summary"),
+                         "reports": bool(day_dir and day_dir.is_dir())})
+        brief_dir = reports_root / "market"
+        briefs = sorted(brief_dir.glob("brief_*.json")) if brief_dir.is_dir() else []
+        brief = json.loads(briefs[-1].read_text(encoding="utf-8")) if briefs else None
+        gw = self.gateway().remaining()
+        return {"day": self._last_session(), "rows": rows, "default_pick": int(g["ai_shortlist"]),
+                "analysts": g["ai_analysts"], "brief": brief and {k: brief.get(k) for k in ("as_of", "summary", "trends", "watch", "model")},
+                "budget": {"daily_usd": g["ai_budget"]["daily_usd"], "monthly_usd": g["ai_budget"]["monthly_usd"],
+                           "left_today": gw["daily_usd"], "left_month": gw["monthly_usd"],
+                           "per_run_usd": g["ai_estimates"]["rating"]},
+                "provider": {k: self.agent_config(g)[k] for k in ("llm_provider", "quick_think_llm", "deep_think_llm")},
+                "job": self.analysis.state()}
+
+    def start_ai_decisions(self, body: dict) -> bool:
+        """The agents on each chosen ticker in turn, as of the last session (paid: asked for by a click).
+        A ticker already analyzed that day with the same settings is reused at no charge."""
+        from tradingagents.ledger.ai_gateway import AIBlocked
+
+        g = self.store.settings("global")
+        tickers = [str(t).strip().upper() for t in body.get("tickers") or [] if str(t).strip()]
+        if not tickers:
+            raise ValueError("pick at least one ticker")
+        if len(tickers) > 20:
+            raise ValueError("at most 20 tickers per run")
+        day = self._check_day(str(body.get("date") or self._last_session()))
+        analysts = self._analysts(body, g)
 
         def work(job):
-            from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
-
-            errors = []
-            for cfg in attempts:
-                who = f"{cfg['llm_provider']} ({cfg['deep_think_llm']})"
-                job.progress = f"agents analyzing {ticker} as of {day} on {who} ({', '.join(analysts)}); a few minutes"
+            done, failed = {}, {}
+            for i, t in enumerate(tickers, 1):
+                job.log.append(f"{i}/{len(tickers)} {t}: started")
                 try:
-                    result, how = analyze(ticker, day, cfg, analysts, self.gateway(), folder, est_usd=est,
-                                          allow_paid=True)
-                except AIInProgress:
-                    raise
-                except AIBlocked as exc:
-                    # Over budget or switched off stops here; a model with no price is a setup gap another
-                    # provider can cover.
-                    if not str(exc).startswith("no price"):
-                        raise
-                    errors.append(f"{who}: {exc}")
-                except Exception as exc:  # out of credit, bad key, unreachable: the next provider, if any
-                    logger.warning("analysis on %s failed: %s", who, exc)
-                    errors.append(f"{who}: {str(exc)[:200]}")
-                else:
-                    job.log += [f"{e} -> moved on" for e in errors]
-                    return {**result, "how": how, "ticker": ticker, "provider": cfg["llm_provider"],
-                            "model": cfg["deep_think_llm"], "fell_back": bool(errors)}
-                job.log.append(errors[-1])
-            raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
+                    out = self._run_agents(job, t, day, analysts, g)
+                except AIBlocked as exc:   # the budget refuses every further ticker too
+                    failed[t] = str(exc)
+                    job.log.append(f"{t}: stopped: {exc}")
+                    break
+                except Exception as exc:  # one ticker's failure stays with that ticker
+                    failed[t] = str(exc)[:300]
+                    job.log.append(f"{t}: failed: {str(exc)[:200]}")
+                    continue
+                done[t] = out["rating"]
+                job.log.append(f"{t}: {out['rating']} ({'reused' if out['how'] == 'cache' else 'new'})")
+            return {"ticker": None, "done": done, "failed": failed, "date": day}
 
         return self.analysis.start(work)
+
+    def set_ai_budget(self, body: dict) -> dict:
+        budget = dict(self.store.get("global", "ai_budget"))
+        for k in ("daily_usd", "monthly_usd"):
+            if k in body:
+                v = float(body[k])
+                if not 0 <= v <= 1000:
+                    raise ValueError("a budget is between $0 and $1,000")
+                budget[k] = v
+        if budget["daily_usd"] > budget["monthly_usd"]:
+            raise ValueError("the daily budget cannot exceed the monthly one")
+        self.store.set("global", "ai_budget", budget)
+        return budget
 
     def screen_state(self) -> dict:
         from tradingagents.stocks import screen
@@ -1256,6 +1368,8 @@ def make_handler(app: App):
                     self._json(app.signals(query.get("ticker")))
                 elif url.path == "/api/analyze":
                     self._json(app.analysis_state())
+                elif url.path == "/api/ai-decisions":
+                    self._json(app.ai_decisions())
                 elif url.path == "/api/decisions":
                     self._json(app.decisions_state())
                 elif url.path == "/api/capital":
@@ -1375,6 +1489,11 @@ def make_handler(app: App):
                     self._started(app.start_screen(), "The quality screen")
                 elif self.path == "/api/analyze":
                     self._started(app.start_analysis(body), "An agent analysis")
+                elif self.path == "/api/ai-decisions":
+                    self._started(app.start_ai_decisions(body), "An agent analysis")
+                elif self.path == "/api/ai-budget":
+                    with app.lock:
+                        self._json(app.set_ai_budget(body))
                 elif self.path == "/api/decisions/run":
                     self._started(app.start_decisions(body), "A decision run")
                 elif self.path == "/api/capital":

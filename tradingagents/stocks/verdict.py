@@ -118,3 +118,23 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
             "rules": {"min_quality_buy": MIN_QUALITY_BUY, "max_consensus_buy": MAX_CONSENSUS_BUY,
                       "min_upside_buy": MIN_UPSIDE_BUY, "min_quality": MIN_QUALITY, "max_consensus": MAX_CONSENSUS,
                       "rating_days": RATING_DAYS}}
+
+
+AI_DECISIONS = {"Buy": "BUY", "Overweight": "BUY", "Hold": "HOLD", "Underweight": "SELL", "Sell": "SELL"}
+
+
+def ai_decision(rating: dict, held: bool) -> dict:
+    """The agents' rating as an action: Buy / Overweight -> BUY, Hold -> HOLD, Underweight / Sell -> SELL
+    when held (AVOID when not), with the rating's age."""
+    r = rating.get("rating")
+    action = AI_DECISIONS.get(r, "REVIEW")
+    if action == "SELL" and not held:
+        action = "AVOID"
+    if action == "HOLD" and not held:
+        action = "WATCH"
+    try:
+        age = (date.today() - date.fromisoformat(str(rating.get("date"))[:10])).days
+    except ValueError:
+        age = None
+    return {"action": action, "rating": r, "date": rating.get("date"), "age_days": age,
+            "stale": age is None or age > RATING_DAYS}

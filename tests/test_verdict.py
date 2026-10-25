@@ -38,3 +38,14 @@ def test_a_held_stock_is_sold_only_on_the_decision_or_two_bearish_signs():
 
 def test_the_daily_decision_enter_is_a_buy():
     assert verdict(False, {"action": "ENTER"}, BREAKDOWN, {}, None, TODAY)["verdict"] == "BUY"
+
+
+def test_the_agents_rating_becomes_an_action():
+    from tradingagents.stocks.verdict import ai_decision
+
+    today = date.today().isoformat()
+    assert ai_decision({"rating": "Overweight", "date": today}, held=False)["action"] == "BUY"
+    assert ai_decision({"rating": "Underweight", "date": today}, held=True)["action"] == "SELL"
+    assert ai_decision({"rating": "Underweight", "date": today}, held=False)["action"] == "AVOID"
+    assert ai_decision({"rating": "Hold", "date": today}, held=False)["action"] == "WATCH"
+    assert ai_decision({"rating": "Hold", "date": "2020-01-02"}, held=True)["stale"]
