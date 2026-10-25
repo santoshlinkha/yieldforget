@@ -64,15 +64,19 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
 
     checks = []
     if s:
+        fund = s.get("kind") == "fund"
+        peers = "funds" if fund else "S&P 500 stocks" + ("" if s.get("member", True) else ", where it would stand")
         checks = [
-            _check("Model rank", pct >= TOP, f"#{s['rank']} of {s['of']} (ahead of {pct:.0%} of today's stocks; "
+            _check("Model rank", pct >= TOP, f"#{s['rank']} of {s['of']} {peers} (ahead of {pct:.0%}; "
                                              f"BUY needs the top fifth, AVOID is the bottom fifth)"),
-            _check("Expected net return", net > 0, f"{net:+.2%} over {horizon} sessions after costs of "
-                                                   f"{s.get('cost_rt', 0):.2%} (BUY needs above zero)"),
+            _check("Expected return", net > 0,
+                   f"{net:+.2%} above cash over {horizon} sessions (BUY needs above zero)" if fund else
+                   f"{net:+.2%} over {horizon} sessions after costs of {s.get('cost_rt') or 0:.2%} (BUY needs above zero)"),
             _check("Chance of profit", p_win >= MIN_P_WIN, f"{p_win:.0%} (BUY needs {MIN_P_WIN:.0%}+)"),
-            _check("Chance of a large loss", p_risk <= MAX_P_RISK, f"{p_risk:.0%} while held (BUY needs "
-                                                                     f"{MAX_P_RISK:.0%} or less)"),
         ]
+        if p_risk is not None:
+            checks.append(_check("Chance of a large loss", p_risk <= MAX_P_RISK,
+                                 f"{p_risk:.0%} while held (BUY needs {MAX_P_RISK:.0%} or less)"))
     if action:
         checks.append(_check("Daily decision", action not in ("EXIT", "REDUCE"),
                              f"{action}{' (' + decision['paper_action'] + ')' if decision.get('paper_action') else ''}"))
@@ -101,11 +105,19 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
             v, why = "SELL", f"the model ranks it #{s['rank']} of {s['of']} and expects {net:+.2%} after costs"
         else:
             v = "HOLD"
-            why = "held, and the model gives no reason to sell" if s else "held; the model does not score it"
+            if not s:
+                why = "held; no model view (the model has not scored this ticker), so nothing says to sell"
+            else:
+                peers = "funds" if s.get("kind") == "fund" else "stocks"
+                where = f"ranks #{s['rank']} of {s['of']} {peers}"
+                why = (f"held; the model {where}, in the top fifth: a candidate to add to" if pct >= TOP else
+                       f"held; the model {where}, in the bottom fifth, but still expects {net:+.2%}: "
+                       f"weakest of what you hold, though no sell signal" if pct <= BOTTOM else
+                       f"held; the model {where}, in the middle: no reason to sell or add")
     elif action == "ENTER":
         v, why = "BUY", "the daily decision says ENTER"
     elif not s:
-        v, why = "WATCH", "the model has not scored this stock (it ranks S&P 500 members in the daily decision)"
+        v, why = "WATCH", "no model view: the model has not scored this ticker"
     elif pct <= BOTTOM or net < 0:
         v = "AVOID"
         why = (f"the model ranks it in the bottom fifth (#{s['rank']} of {s['of']})" if pct <= BOTTOM

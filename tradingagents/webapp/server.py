@@ -624,20 +624,45 @@ class App:
         for e in TradingMemoryLog(self.config).load_entries():   # oldest first: the newest wins
             if e.get("rating"):
                 ratings[e["ticker"].upper()] = {"rating": e["rating"], "date": e["date"]}
+        funds = self._fund_scores(horizon)
         if ticker and not out["rows"]:
             out["rows"] = [{"ticker": ticker.upper(), "signal": None, "decision": None}]
+        if not ticker:   # held funds and stocks get a row too, so every holding has a verdict
+            present = {r["ticker"] for r in out["rows"]}
+            out["rows"] += [{"ticker": t, "signal": None, "decision": None}
+                            for t in sorted(held - present) if t not in daily.CASH_FUNDS]
         for r in out["rows"]:
             t = r["ticker"]
             row = rows.get(t) or (self._screen_row(t) if ticker else None)
             r["screen"] = row and {k: row.get(k) for k in ("quality_score", "quality_rank", "analyst_mean",
                                                             "analyst_label", "target_upside", "rank")}
             r["rating"] = ratings.get(t)
-            # Nothing on record (a fund, or a stock never screened or forecast): no verdict rather than a guess.
-            known = row or r["signal"] or r["decision"] or t in held or t in scores
-            r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t), score=scores.get(t),
+            # The stock model's score when it has one, else the fund models' rank among funds.
+            score = scores.get(t) or funds.get(t)
+            # Nothing on record (a cash fund, or a ticker no model covers): no verdict rather than a guess.
+            known = (row or r["signal"] or r["decision"] or t in held or score) and t not in daily.CASH_FUNDS
+            r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t), score=score,
                                    horizon=horizon) if known else None
             if ticker and r["signal"] and r["signal"].get("status") == "ok":
                 r["entry"] = self._entry_plan(t, r["signal"])
+        return out
+
+    def _fund_scores(self, horizon: int) -> dict:
+        """Every fund the fund models forecast, ranked among the funds by the combined forecast at
+        ``horizon`` sessions (return above cash, chance of a gain): read from saved runs, kept a few minutes."""
+        import time
+
+        key = (horizon, time.time() // 300)
+        if getattr(self, "_funds_cache", (None,))[0] == key:
+            return self._funds_cache[1]
+        rows = [r for r in self.combined_forecasts(horizon, "etf")["rows"] if r.get("combined")]
+        rows.sort(key=lambda r: (-r["combined"]["mean"], -r["combined"]["p_gain"], r["ticker"]))
+        n = len(rows)
+        out = {r["ticker"]: {"kind": "fund", "rank": i + 1, "of": n, "rank_pct": round(1 - i / max(n - 1, 1), 4),
+                             "expected_net": round(r["combined"]["mean"], 5), "p_win": round(r["combined"]["p_gain"], 4),
+                             "p_risk": None, "cost_rt": None, "models": r["combined"].get("models")}
+               for i, r in enumerate(rows)}
+        self._funds_cache = (key, out)
         return out
 
     def _entry_plan(self, symbol: str, sig: dict) -> dict | None:

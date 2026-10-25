@@ -49,3 +49,12 @@ def test_the_agents_rating_becomes_an_action_for_display():
     assert ai_decision({"rating": "Underweight", "date": today}, held=False)["action"] == "AVOID"
     assert ai_decision({"rating": "Hold", "date": today}, held=False)["action"] == "WATCH"
     assert ai_decision({"rating": "Hold", "date": "2020-01-02"}, held=True)["stale"]
+
+
+def test_a_fund_is_judged_by_its_rank_among_funds_without_a_large_loss_gate():
+    fund = {"kind": "fund", "rank": 3, "of": 41, "rank_pct": 0.95, "expected_net": 0.01, "p_win": 0.55, "p_risk": None}
+    v = verdict(False, None, None, {}, None, TODAY, score=fund)
+    assert v["verdict"] == "BUY" and "funds" in v["checks"][0]["detail"]
+    assert [c["name"] for c in v["checks"]] == ["Model rank", "Expected return", "Chance of profit"]
+    assert verdict(True, None, None, {}, None, TODAY, score={**fund, "rank": 40, "rank_pct": 0.03, "expected_net": -0.01})["verdict"] == "SELL"
+    assert "no model view" in verdict(True, None, None, {}, None, TODAY)["summary"]

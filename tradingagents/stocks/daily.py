@@ -351,7 +351,12 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
         if lot["ticker"] in CASH_FUNDS:
             cash_fund[lot["ticker"]] = cash_fund.get(lot["ticker"], 0.0) + lot["shares"]
     say("loading data")
-    data = D.load(sorted({lot["ticker"] for lot in lots}), cache_dir)
+    # Besides the Trading lots: every stock held in any sleeve and the watchlist, so each gets a score
+    # (outside the S&P 500 a stock is ranked against that day's members; funds are turned away by classify).
+    wanted = {lot["ticker"] for lot in lots}
+    wanted |= {t for t, q in store.ledger.state("combined", as_of).positions.items() if q and t not in CASH_FUNDS}
+    wanted |= {str(t).upper() for t in store.get("global", "stock_watchlist") or []}
+    data = D.load(sorted(wanted), cache_dir)
     spy = data.close["SPY"].dropna()
     cutoff = spy.index[spy.index <= pd.Timestamp(as_of)][-1]
     freshness = (pd.Timestamp(as_of) - cutoff).days
@@ -414,12 +419,22 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     ranked = today[today["in_index"]].reset_index().rename(columns={"index": "ticker"})
     ranked = ranked.sort_values(["score_pct", "p_win", "ticker"], ascending=[False, False, True]).set_index("ticker")
     n = len(ranked)
-    scores = {t: {"rank": i + 1, "of": n, "rank_pct": round(1 - i / max(n - 1, 1), 4),
-                  "score_pct": round(float(row["score_pct"]), 4),
-                  "expected_net": round(float(row["expected_net"]), 5), "net_sd": round(float(row["net_sd"]), 5),
-                  "p_win": round(float(row["p_win"]), 4), "p_risk": round(float(row["p_risk"]), 4),
-                  "cost_rt": round(float(row["cost_rt"]), 5)}
-              for i, (t, row) in enumerate(ranked.iterrows())}
+
+    def score_of(row, rank, rank_pct, member):
+        return {"rank": rank, "of": n, "rank_pct": round(rank_pct, 4), "member": member, "kind": "stock",
+                "score_pct": round(float(row["score_pct"]), 4),
+                "expected_net": round(float(row["expected_net"]), 5), "net_sd": round(float(row["net_sd"]), 5),
+                "p_win": round(float(row["p_win"]), 4), "p_risk": round(float(row["p_risk"]), 4),
+                "cost_rt": round(float(row["cost_rt"]), 5)}
+
+    scores = {t: score_of(row, i + 1, 1 - i / max(n - 1, 1), True) for i, (t, row) in enumerate(ranked.iterrows())}
+    # A requested stock outside the index: where it would stand among the members (they keep their ranks).
+    member_pct = ranked["score_pct"].to_numpy()
+    for t, row in today[~today["in_index"]].iterrows():
+        if t in scores or not np.isfinite(row["score_pct"]):
+            continue
+        ahead = int((member_pct > row["score_pct"]).sum())
+        scores[t] = score_of(row, ahead + 1, 1 - ahead / max(n - 1, 1), False)
     payload = {"lots": reviews, "entries": entry_lines, "freshness_days": freshness, "scores": scores,
                "horizon": policy.horizon,
                "summary": {a: sum(1 for x in reviews + entry_lines if x["action"] == a)
