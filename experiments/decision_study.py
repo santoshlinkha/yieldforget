@@ -37,6 +37,7 @@ def main():
     from tradingagents.stocks.models import log_loss
     from tradingagents.stocks.positions import POLICIES, benchmark, executable_prices
     from tradingagents.stocks.targets import Thresholds, ewma_vol
+    from tradingagents.stocks.daily import model_code_hash
 
     t0 = time.time()
     store = Store(Path("my_portfolio.json").resolve().parent)
@@ -207,7 +208,10 @@ def main():
             " code_version, scores_json, by_period_json, seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (now_utc(), "decision_study:h20", f"sp500_pit_{data.survivorship}", 20, "2012-01-01", str(sessions[-1].date()),
              json.dumps({"capital": snap, "features": feats, "smoke": os.getenv("DECISION_SMOKE") == "1", "thresholds_version": Thresholds().version(),
-                         "policies": out["policies"], "every": S.EVERY, "dev_end": out["dev_end"]}, default=str),
+                         "policies": out["policies"], "every": S.EVERY, "dev_end": out["dev_end"],
+                         # What evidence() binds a validation to: the exact model code and policy versions.
+                         "model_code": model_code_hash(),
+                         "policy_versions": {k: POLICIES[k].version() for k in out["policies"]}}, default=str),
              code_version(), json.dumps(out, default=str), "{}", out["seconds"]))
     (HERE / "decision_study.json").write_text(json.dumps(out, indent=1, default=str))
     log("wrote", HERE / "decision_study.json", f"{out['seconds']:.0f}s")

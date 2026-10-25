@@ -81,18 +81,29 @@ def lots_from_ledger(store, sleeve: str, as_of) -> list[dict]:
 # --- evidence ---
 
 def evidence(con, policy_name: str, features: list[str], thresholds: Thresholds, r: dict) -> dict:
-    """Whether the policy's study passed on development, and whether the prospective record confirms it."""
+    """Whether the policy's study passed on development, and whether the prospective record confirms it.
+
+    The study must be for this exact model: the policy's horizon and version, the features, the thresholds
+    and the model code (a study recorded before the code hash was stored counts as untested). The
+    prospective record must be the shadow account's current version, run under this same policy, and beat
+    SPY at the account level with a block-bootstrap interval above zero."""
+    from .shadow import SHADOW_VERSION
+
+    policy = POLICIES[policy_name]
+    code = model_code_hash()
     found = None
-    for row in con.execute("SELECT id, config_json, scores_json FROM research_trials WHERE name = 'decision_study:h20'"
-                           " ORDER BY id DESC"):
+    for row in con.execute("SELECT id, config_json, scores_json FROM research_trials WHERE name = ? ORDER BY id DESC",
+                           (f"decision_study:h{policy.horizon}",)):
         cfg = json.loads(row["config_json"] or "{}")
         if cfg.get("smoke") is False and cfg.get("thresholds_version") == thresholds.version() \
-                and cfg.get("features") == features and policy_name in (cfg.get("policies") or {}):
+                and cfg.get("features") == features and policy_name in (cfg.get("policies") or {}) \
+                and cfg.get("model_code") == code \
+                and (cfg.get("policy_versions") or {}).get(policy_name) == policy.version():
             found = row
             break
     if found is None:
         return {"trial": None, "development": "untested", "prospective": "none", "validated": False,
-                "note": "no full decision study for this policy, thresholds and features"}
+                "note": "no full decision study for this policy version, thresholds, features and model code"}
     s = json.loads(found["scores_json"])
     sim = (s.get("simulation") or {}).get(policy_name) or {}
     dev = sim.get("development:equal") or {}
@@ -106,9 +117,12 @@ def evidence(con, policy_name: str, features: list[str], thresholds: Thresholds,
     passed = all(checks.values())
     shadow = con.execute("SELECT state_json FROM shadow_snapshots ORDER BY id DESC LIMIT 1").fetchone()
     pros = json.loads(shadow["state_json"]).get("record", {}) if shadow else {}
-    confirmed = passed and pros.get("round_trips", 0) >= r["prospective_min_trades"] and pros.get("excess_vs_spy", -1) > 0
+    same_record = pros.get("version") == SHADOW_VERSION and pros.get("policy") == policy.version()
+    low = (pros.get("account_excess_ci") or [None])[0]
+    confirmed = passed and same_record and pros.get("round_trips", 0) >= r["prospective_min_trades"] \
+        and low is not None and low > 0
     return {"trial": found["id"], "development": "passed" if passed else "failed", "checks": checks,
-            "prospective": pros, "validated": bool(confirmed),
+            "prospective": pros, "prospective_matches": same_record, "validated": bool(confirmed),
             "chosen_rule": sim.get("chosen")}
 
 

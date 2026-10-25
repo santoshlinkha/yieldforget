@@ -191,3 +191,46 @@ def test_rerunning_a_cutoff_adds_no_shadow_orders(env):
     assert len(tickers) == len(set(tickers)) <= daily.rules(store)["max_names"]
     assert sum(o["dollars"] for o in last["pending"]) <= last["cash"] + 1e-6
     assert last["version"] == 2 and last["orders_frozen_for"] == [str(cutoff.date())]
+
+
+def test_validation_is_bound_to_the_model_code_policy_and_shadow_version(env):
+    from tradingagents.ledger.db import now_utc
+    from tradingagents.stocks.panel import features_for
+    from tradingagents.stocks.positions import POLICIES
+    from tradingagents.stocks.shadow import SHADOW_VERSION
+    from tradingagents.stocks.targets import Thresholds
+
+    store = env[0]
+    r = daily.rules(store)
+    feats, th, pol = features_for(), Thresholds(), POLICIES["barrier_20"]
+    scores = {"simulation": {"barrier_20": {"development:equal": {
+        "vs_spy_ci": [0.01, 0.03], "total": 0.5, "cash_total": 0.1, "max_drawdown": -0.01}}},
+        "quality": {"barrier_20": {"development": {"quality_logit_sig": {"log_loss": 0.5}, "log_loss_base": 0.6}}}}
+
+    def trial(**extra):
+        cfg = {"smoke": False, "thresholds_version": th.version(), "features": feats, "policies": {"barrier_20": {}},
+               **extra}
+        store.con.execute("INSERT INTO research_trials (created_at, name, universe, horizon, first_test, last_test,"
+                          " config_json, code_version, scores_json, by_period_json, seconds)"
+                          " VALUES (?, 'decision_study:h20', 'x', 20, 'a', 'b', ?, 'c', ?, '{}', 0)",
+                          (now_utc(), json.dumps(cfg), json.dumps(scores)))
+
+    trial()                                                         # recorded before the code hash was stored
+    assert daily.evidence(store.con, "barrier_20", feats, th, r)["development"] == "untested"
+    trial(model_code="someone-elses-code", policy_versions={"barrier_20": pol.version()})
+    assert daily.evidence(store.con, "barrier_20", feats, th, r)["development"] == "untested"
+    trial(model_code=daily.model_code_hash(), policy_versions={"barrier_20": pol.version()})
+    ev = daily.evidence(store.con, "barrier_20", feats, th, r)
+    assert ev["development"] == "passed" and not ev["validated"]    # no prospective record yet
+
+    def shadow(**record):
+        store.con.execute("INSERT INTO shadow_snapshots (created_at, as_of, decision_id, state_json) VALUES (?, ?, ?, ?)",
+                          (now_utc(), "2026-10-23", None, json.dumps({"record": record})))
+
+    many = {"round_trips": 10_000, "account_excess_ci": [0.001, 0.002]}
+    shadow(version=SHADOW_VERSION - 1, policy=pol.version(), **many)  # the old, broken shadow record
+    assert not daily.evidence(store.con, "barrier_20", feats, th, r)["validated"]
+    shadow(version=SHADOW_VERSION, policy=pol.version(), round_trips=10_000, account_excess_ci=[-0.001, 0.002])
+    assert not daily.evidence(store.con, "barrier_20", feats, th, r)["validated"]
+    shadow(version=SHADOW_VERSION, policy=pol.version(), **many)
+    assert daily.evidence(store.con, "barrier_20", feats, th, r)["validated"]

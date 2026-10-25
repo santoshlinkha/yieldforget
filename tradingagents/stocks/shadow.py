@@ -16,6 +16,8 @@ import json
 import numpy as np
 import pandas as pd
 
+from tradingagents.research.walkforward import block_bootstrap
+
 from .positions import Book, Lot, executable_prices
 
 # Version 2 (2026-10-25): an audit found that re-running a decision for the same cutoff appended its orders
@@ -124,11 +126,18 @@ def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: li
         frozen.append(str(cutoff.date()))
     excess = [c["net"] - c["spy"] for c in closed]
     eq = state.get("equity", [])
+    # The account against SPY, day by day: the mean daily excess and its block-bootstrap interval (20-session
+    # blocks, the holding horizon), so a few lucky trades cannot validate the model on their own.
+    daily_excess = np.diff(np.log([e[1] for e in eq])) - np.diff(np.log([e[2] for e in eq])) if len(eq) > 1 else []
+    ci = block_bootstrap(np.asarray(daily_excess), block=20) if len(daily_excess) >= 40 else (None, None)
     record = {"round_trips": len(closed), "excess_vs_spy": float(np.mean(excess)) if excess else None,
               "win_rate": float(np.mean([c["net"] > 0 for c in closed])) if closed else None,
               "value": eq[-1][1] if eq else state["capital"], "spy_value": eq[-1][2] if eq else state["capital"],
               "since": state["inception"], "capital": state["capital"], "version": state.get("version", 1),
-              "policy": state.get("policy")}
+              "policy": state.get("policy"),
+              "account_excess": (eq[-1][1] - eq[-1][2]) / state["capital"] if eq else None,
+              "account_excess_ci": [None if v is None or not np.isfinite(v) else float(v) for v in ci],
+              "account_days": len(daily_excess)}
     new_state = {**state, **_dump(book), "pending": pending, "due": due, "closed": closed, "last": str(cutoff.date()),
                  "record": record}
     with transaction(store.con):
