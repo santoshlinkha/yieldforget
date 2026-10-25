@@ -177,3 +177,17 @@ def test_paper_entries_depend_on_model_gates_not_on_the_real_accounts_cash():
                          pd.Series({"AAA": 10.0}), True, None, "2026-10-26")[0]
     assert line["action"] == "WAIT" and line["paper_action"] == "PAPER ENTER"     # no settled cash, good signal
     assert any("settled cash" in b for b in line["blocked"])
+
+
+def test_rerunning_a_cutoff_adds_no_shadow_orders(env):
+    store, data, cache, cutoff, sessions = env
+    for _ in range(3):
+        daily.run(store, cache, cutoff.date(), train=True)
+    states = [json.loads(r[0]) for r in store.con.execute("SELECT state_json FROM shadow_snapshots ORDER BY id")]
+    pending = [len(s["pending"]) for s in states]
+    assert pending[0] == pending[-1]                                   # the first decision for the day is frozen
+    last = states[-1]
+    tickers = [o["ticker"] for o in last["pending"]]
+    assert len(tickers) == len(set(tickers)) <= daily.rules(store)["max_names"]
+    assert sum(o["dollars"] for o in last["pending"]) <= last["cash"] + 1e-6
+    assert last["version"] == 2 and last["orders_frozen_for"] == [str(cutoff.date())]

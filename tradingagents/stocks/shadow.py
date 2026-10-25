@@ -18,6 +18,14 @@ import pandas as pd
 
 from .positions import Book, Lot, executable_prices
 
+# Version 2 (2026-10-25): an audit found that re-running a decision for the same cutoff appended its orders
+# again (39 pending orders, $9,350 against $1,000, 25 duplicates, before any had executed) and that a lot
+# bought on the latest session got that same session as its deadline. Version-1 snapshots stay as they are;
+# the first update under version 2 starts a new account at that update's cutoff, with no trades carried over.
+SHADOW_VERSION = 2
+RESTART_REASON = ("version 2: orders are frozen once per cutoff and pending orders count against the name "
+                  "limit; deadlines come from the exchange calendar. The version-1 account had executed no trade.")
+
 
 def _load(con):
     row = con.execute("SELECT state_json FROM shadow_snapshots ORDER BY id DESC LIMIT 1").fetchone()
@@ -51,11 +59,16 @@ def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: li
     sessions = px.index
     spy = data.close["SPY"]
     state = _load(store.con)
-    if state is None:
+    if state is None or state.get("version", 1) < SHADOW_VERSION:
+        previous = state
         capital = float(capital_snapshot["trading_capital_usd"])
-        state = {"inception": str(cutoff.date()), "capital": capital, "capital_version": capital_snapshot["version"],
-                 "cash": capital, "settling": {}, "lots": [], "costs": 0.0, "pending": [], "last": str(cutoff.date()),
-                 "spy_units": None, "closed": [], "equity": []}
+        state = {"version": SHADOW_VERSION, "inception": str(cutoff.date()), "capital": capital,
+                 "capital_version": capital_snapshot["version"], "cash": capital, "settling": {}, "lots": [],
+                 "costs": 0.0, "pending": [], "last": str(cutoff.date()), "spy_units": None, "closed": [],
+                 "equity": [], "policy": policy.version(), "orders_frozen_for": [],
+                 **({"restarted": {"reason": RESTART_REASON, "previous_inception": previous.get("inception"),
+                                   "previous_trades": len(previous.get("closed", [])),
+                                   "previous_lots": len(previous.get("lots", []))}} if previous else {})}
     book = _book(state, sessions)
     pending = state.get("pending", [])
     due = state.get("due", [])
@@ -87,23 +100,34 @@ def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: li
         bench = state["spy_units"] * float(spy.loc[day]) if state.get("spy_units") else state["capital"]
         state.setdefault("equity", []).append([str(day.date()), value, bench])
     value_now = book.value(px.loc[cutoff]) if cutoff in px.index else book.cash
-    held = {lot.ticker for lot in book.lots}
+    # Orders are frozen once per cutoff: a decision re-run for a cutoff already taken adds nothing, so the
+    # record follows the first decision made for each day. Pending orders count like held names.
+    frozen = state.setdefault("orders_frozen_for", [])
+    take_orders = str(cutoff.date()) not in frozen
+    held = {lot.ticker for lot in book.lots} | {o["ticker"] for o in pending}
     slots = max(0, r["max_names"] - len(held))
-    for line in entry_lines:
+    reserved = sum(o["dollars"] for o in pending)
+    for line in entry_lines if take_orders else []:
         if line.get("paper_action") != "PAPER ENTER" or slots <= 0 or line["ticker"] in held:
             continue
-        dollars = min(r["max_position_share"] * value_now, book.cash / max(slots, 1))
+        dollars = min(r["max_position_share"] * value_now, max(book.cash - reserved, 0.0) / max(slots, 1))
         if dollars >= r["min_order"]:
+            reserved += dollars
+            held.add(line["ticker"])
             pending.append({"ticker": line["ticker"], "dollars": dollars, "execute": line["execute"],
+                            "cutoff": str(cutoff.date()),
                             "sigma": float(np.nan_to_num(line.get("sigma", 0.02), nan=0.02)) if "sigma" in line else 0.02,
                             "cost_rt": float(line.get("cost_rt") or 0.004), "decision": decision_id})
             slots -= 1
+    if take_orders:
+        frozen.append(str(cutoff.date()))
     excess = [c["net"] - c["spy"] for c in closed]
     eq = state.get("equity", [])
     record = {"round_trips": len(closed), "excess_vs_spy": float(np.mean(excess)) if excess else None,
               "win_rate": float(np.mean([c["net"] > 0 for c in closed])) if closed else None,
               "value": eq[-1][1] if eq else state["capital"], "spy_value": eq[-1][2] if eq else state["capital"],
-              "since": state["inception"], "capital": state["capital"]}
+              "since": state["inception"], "capital": state["capital"], "version": state.get("version", 1),
+              "policy": state.get("policy")}
     new_state = {**state, **_dump(book), "pending": pending, "due": due, "closed": closed, "last": str(cutoff.date()),
                  "record": record}
     with transaction(store.con):

@@ -191,8 +191,15 @@ class Book:
     costs: float = 0.0
 
     def _next(self, day: pd.Timestamp, k: int = 1) -> pd.Timestamp:
+        """The ``k``-th session after ``day``. Past the end of the loaded prices it comes from the exchange
+        calendar (``ledger.sessions``), never clamped to the last row: a lot bought on the latest session
+        must get a deadline ``k`` sessions later, not that same session."""
         i = self.sessions.get_loc(day)
-        return self.sessions[min(i + k, len(self.sessions) - 1)]
+        if i + k < len(self.sessions):
+            return self.sessions[i + k]
+        from tradingagents.ledger.sessions import next_session
+
+        return pd.Timestamp(next_session(self.sessions[-1].date(), i + k - (len(self.sessions) - 1)))
 
     def settle(self, day: pd.Timestamp):
         for d in [d for d in self.settling if d <= day]:
