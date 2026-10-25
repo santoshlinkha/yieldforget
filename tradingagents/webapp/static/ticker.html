@@ -157,6 +157,22 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .vchecks li { display: flex; gap: 8px; padding: 3px 0; }
 .vchecks .mk { width: 16px; flex: none; text-align: center; font-weight: 700; }
 .vchecks .mk.ok { color: var(--buy); } .vchecks .mk.no { color: var(--sell); } .vchecks .mk.na { color: var(--faint); }
+.md { font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px 16px; }
+.md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 16px 0 6px; line-height: 1.3; }
+.md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3 { font-size: 14.5px; } .md h4, .md h5, .md h6 { font-size: 13.5px; }
+.md p { margin: 6px 0; } .md ul, .md ol { margin: 6px 0; padding-left: 22px; } .md li { margin: 2px 0; }
+.md code { font: 12px ui-monospace, Consolas, monospace; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.md pre { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; }
+.md pre code { border: 0; padding: 0; background: none; white-space: pre; }
+.md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--border); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+.md .tablewrap { overflow-x: auto; margin: 8px 0; }
+.md table { font-size: 12.5px; width: auto; min-width: 50%; }
+.md th { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--text); background: var(--surface); }
+.md th, .md td { text-align: left; border: 1px solid var(--border); padding: 5px 8px; white-space: normal; }
+.md a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -510,21 +526,77 @@ async function load() {
     $("reports").querySelectorAll("a[data-path]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
       const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
-      $("reportView").innerHTML = `<div class="report">${esc(await res.text())}</div>`;
+      $("reportView").innerHTML = renderMarkdown(await res.text());
     });
   }
 }
+// --- Markdown, rendered safely: every piece of text is escaped first; links only to web addresses ---
+function mdInline(t) {
+  const codes = [];
+  let h = esc(t).replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
+  h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+       .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>")
+       .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<i>$2</i>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<i>$2</i>");
+  return h.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+}
+function renderMarkdown(src) {
+  const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let para = [], list = null;
+  const flushPara = () => { if (para.length) { out.push(`<p>${mdInline(para.join(" "))}</p>`); para = []; } };
+  const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map(i => `<li>${mdInline(i)}</li>`).join("")}</${list.tag}>`); list = null; } };
+  const cells = row => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], t = line.trim();
+    if (/^```/.test(t)) {                      // fenced code block
+      flushPara(); flushList();
+      const body = [];
+      while (++i < lines.length && !/^```/.test(lines[i].trim())) body.push(lines[i]);
+      out.push(`<pre><code>${esc(body.join("\n"))}</code></pre>`);
+      continue;
+    }
+    if (t.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+      flushPara(); flushList();                // a table: header, separator, then rows
+      const head = cells(t), rows = [];
+      i += 1;
+      while (i + 1 < lines.length && lines[i + 1].includes("|") && lines[i + 1].trim()) rows.push(cells(lines[++i]));
+      out.push(`<div class="tablewrap"><table><tr>${head.map(c => `<th>${mdInline(c)}</th>`).join("")}</tr>` +
+        rows.map(r => `<tr>${head.map((_, k) => `<td>${mdInline(r[k] ?? "")}</td>`).join("")}</tr>`).join("") + `</table></div>`);
+      continue;
+    }
+    if (!t) { flushPara(); flushList(); continue; }
+    let m;
+    if ((m = t.match(/^(#{1,6})\s+(.*)$/))) { flushPara(); flushList(); out.push(`<h${m[1].length}>${mdInline(m[2].replace(/\s#+$/, ""))}</h${m[1].length}>`); continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { flushPara(); flushList(); out.push("<hr>"); continue; }
+    if ((m = t.match(/^>\s?(.*)$/))) { flushPara(); flushList(); out.push(`<blockquote>${mdInline(m[1])}</blockquote>`); continue; }
+    if ((m = t.match(/^([-*+]|\d+[.)])\s+(.*)$/))) {
+      flushPara();
+      const tag = /\d/.test(m[1]) ? "ol" : "ul";
+      if (!list || list.tag !== tag) { flushList(); list = {tag, items: []}; }
+      list.items.push(m[2]);
+      continue;
+    }
+    if (list && /^\s{2,}/.test(line)) { list.items[list.items.length - 1] += " " + t; continue; }   // a wrapped list item
+    flushList();
+    para.push(t);
+  }
+  flushPara(); flushList();
+  return `<div class="md">${out.join("")}</div>`;
+}
+
 // --- what each agent sent to the model and what came back ---
 function callsView(calls) {
   const tin = calls.reduce((a, c) => a + (c.input_tokens || 0), 0), tout = calls.reduce((a, c) => a + (c.output_tokens || 0), 0);
-  const msg = m => `<div style="margin:6px 0"><span class="flabel">${esc(m.role)}${m.name ? " · " + esc(m.name) : ""}</span>` +
-    (m.content ? `<div class="report" style="max-height:260px;overflow:auto">${esc(m.content)}</div>` : "") +
+  // Replies are Markdown and render as such; what was sent stays as sent (prompts and raw tool data).
+  const msg = (m, rendered) => `<div style="margin:6px 0"><span class="flabel">${esc(m.role)}${m.name ? " · " + esc(m.name) : ""}</span>` +
+    (m.content ? (rendered ? `<div style="max-height:420px;overflow:auto">${renderMarkdown(m.content)}</div>`
+                           : `<div class="report" style="max-height:260px;overflow:auto">${esc(m.content)}</div>`) : "") +
     (m.tool_calls ? `<div class="small">asks for: ${m.tool_calls.map(t => `<code>${esc(t.name)}(${esc(JSON.stringify(t.args))})</code>`).join(", ")}</div>` : "") + `</div>`;
   return `<p class="small muted">${calls.length} requests · ${tin.toLocaleString()} tokens sent · ${tout.toLocaleString()} received. Each request repeats the agent's instructions and the conversation so far; the reply is either tool calls (fetch data) or the agent's text.</p>` +
     calls.map(c => `<details style="margin:4px 0"><summary class="small"><b>#${c.n} ${esc(c.agent || "agent")}</b> · ${esc(c.model || "")} · ${c.input_tokens ?? "?"} in / ${c.output_tokens ?? "?"} out · ${c.seconds ?? "?"} s${c.error ? ` · <span class="neg">error</span>` : ""}${c.received && c.received.tool_calls ? " · tool calls" : ""}</summary>` +
       (c.tools_offered.length ? `<p class="small muted">Tools offered: ${c.tools_offered.map(esc).join(", ")}</p>` : "") +
-      `<h4 class="small" style="margin:8px 0 2px">Sent</h4>${c.sent.map(msg).join("")}` +
-      `<h4 class="small" style="margin:8px 0 2px">Came back</h4>${c.error ? `<p class="neg small">${esc(c.error)}</p>` : msg(c.received || {})}</details>`).join("");
+      `<h4 class="small" style="margin:8px 0 2px">Sent</h4>${c.sent.map(m => msg(m, false)).join("")}` +
+      `<h4 class="small" style="margin:8px 0 2px">Came back</h4>${c.error ? `<p class="neg small">${esc(c.error)}</p>` : msg(c.received || {}, true)}</details>`).join("");
 }
 
 // --- signals: the saved trend, breakout and crash forecasts, and today's decision for this stock ---
