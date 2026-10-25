@@ -237,7 +237,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
 .chip input:checked + span::before { background: currentColor; }
 .chip:hover span { border-color: var(--accent); }
 .vb { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; }
-.vb.BUY { color: var(--buy, #059669); } .vb.SELL, .vb.AVOID { color: var(--sell, #dc2626); } .vb.HOLD { color: var(--accent); } .vb.WATCH, .vb.REVIEW { color: #d97706; }
+.vb.BUY { color: var(--buy, #059669); } .vb.SELL, .vb.AVOID { color: var(--sell, #dc2626); } .vb.HOLD { color: var(--accent); } .vb.WATCH, .vb.REVIEW { color: #d97706; } .vb.ABSTAIN { color: var(--muted); }
 .econ { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); margin: 0 0 14px; }
 .econ h4 { margin: 0 0 6px; font-size: 13px; }
 .aiopts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 0 0 12px; }
@@ -1071,12 +1071,12 @@ const SG_COLS = [["rank", "Rank", "Combined rank"], ["ticker", "Ticker"], ["verd
   ["analyst_mean", "Cons.", "Analyst consensus, 1 strong buy to 5 strong sell"]];
 const ACT_ORDER = {ENTER: 0, EXIT: 1, REDUCE: 2, HOLD: 3, WAIT: 4};
 const VERDICT_ORDER = {BUY: 0, SELL: 1, HOLD: 2, WATCH: 3, AVOID: 4};
-const VERDICT_CLS = {BUY: "pos", SELL: "neg", AVOID: "neg", HOLD: "", WATCH: "muted"};
+const VERDICT_CLS = {BUY: "pos", SELL: "neg", AVOID: "neg", HOLD: "", WATCH: "muted", ABSTAIN: "muted"};
 function qsSignal(r) { return sgData ? sgData[r.ticker] : null; }
 function qsValue(r, k) {
   const g = qsSignal(r), sg = g && g.signal && g.signal.status === "ok" ? g.signal : null;
   if (k === "action") return g && g.decision ? ACT_ORDER[g.decision.action] ?? 5 : null;
-  if (k === "verdict") return g && g.verdict ? VERDICT_ORDER[g.verdict.verdict] : null;
+  if (k === "verdict") return g && g.verdict ? VERDICT_ORDER[g.verdict.verdict] + (g.verdict.action !== g.verdict.verdict ? 0.5 : 0) : null;
   if (k === "model_rank") return g && g.verdict && g.verdict.model ? g.verdict.model.rank : null;
   if (k === "trend") return sg ? (sg.trend_p == null ? "~" : sg.trend + (1 - sg.trend_p).toFixed(3)) : null;
   if (k === "lift_up") return sg ? sg.lifts.up_break : null;
@@ -1133,7 +1133,7 @@ function renderSignals(shown, arrow) {
       const g = qsSignal(r) || {}, d = g.decision, sg = g.signal && g.signal.status === "ok" ? g.signal : null;
       const act = d ? `<b class="${{ENTER: "pos", EXIT: "neg", REDUCE: "neg"}[d.action] || "muted"}">${esc(d.action)}</b>${d.paper_action ? ` <span class="muted small">${esc(d.paper_action)}</span>` : ""}` : "<span class='muted small'>–</span>";
       return `<tr><td>${r.rank}</td><td class="l" style="max-width:150px"><b>${tk(r.ticker)}</b><div class="muted small" style="white-space:normal">${esc(r.name || "")}</div></td>
-        <td title="${esc(g.verdict ? g.verdict.summary : "")}"><b class="${g.verdict ? VERDICT_CLS[g.verdict.verdict] : "muted"}">${g.verdict ? g.verdict.verdict : "–"}</b></td>
+        <td title="${esc(g.verdict ? g.verdict.label + ": " + g.verdict.summary : "")}"><b class="${g.verdict ? VERDICT_CLS[g.verdict.action] : "muted"}">${g.verdict ? g.verdict.action : "–"}</b>${g.verdict && g.verdict.action !== g.verdict.verdict ? `<div class="muted small">model ${esc(g.verdict.verdict)}, not validated</div>` : ""}</td>
         <td title="${g.verdict && g.verdict.model ? `expected ${(100 * g.verdict.model.expected_net).toFixed(2)}% after costs, P(profit) ${pct(g.verdict.model.p_win, 0)}` : ""}">${g.verdict && g.verdict.model ? `#${g.verdict.model.rank} <span class="muted small">of ${g.verdict.model.of}</span>` : "–"}</td>
         <td title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}" style="white-space:normal">${act}</td>
         <td class="${sg && sg.trend_p == null ? "muted small" : ""}">${sg ? `${esc(sg.trend)}${sg.trend_p != null ? ` <span class="muted small">${pct(sg.trend_p, 0)}</span>` : ""}` : "–"}</td>

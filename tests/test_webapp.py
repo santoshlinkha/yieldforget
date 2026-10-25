@@ -159,3 +159,40 @@ def test_an_existing_paper_record_is_never_started_over_by_accident(server):
     status, out = _call(base, "/api/tracker/start", {})
     assert status == 400 and "already exists" in out["error"]
     assert json.loads((tmp_path / "paper_tracker.json").read_text())["start"] == "2026-10-22"
+
+
+def test_a_pasted_answer_is_tied_to_its_packet_and_a_second_one_archives_the_first(server, monkeypatch):
+    from tradingagents.agents import packet
+
+    base, tmp_path, _ = server
+    idx = pd.bdate_range(end="2026-10-23", periods=260)
+    close = pd.Series(range(100, 360), index=idx, dtype=float)
+    inputs = {"ticker": "AAA", "cutoff": "2026-10-23", "ohlcv": None, "facts": None, "macro": {}, "news": [],
+              "bars": pd.DataFrame({"Close": close, "High": close + 1, "Low": close - 1, "Volume": 1e6}),
+              "profile": {"quoteType": "EQUITY", "longName": "Aaa Inc."}, "profile_fetched": None}
+    monkeypatch.setattr(packet, "load_inputs", lambda *a, **k: inputs)
+    status, prompt = _call(base, "/api/manual-prompt?ticker=AAA&date=2026-10-23")
+    assert status == 200 and prompt["packet_id"] in prompt["prompt"].splitlines()[0]
+    day = tmp_path / "results" / "AAA" / "2026-10-23"
+    assert (day / "packets" / f"{prompt['packet_id']}.json").is_file()
+
+    answer = ("Analysis [PX1] and [ZZ9].\n```json\n" + json.dumps(
+        {"rating": "Hold", "executive_summary": "Flat.", "investment_thesis": "None.", "packet_id": prompt["packet_id"],
+         "evidence_ids": ["PX1"], "insufficient_evidence": True}) + "\n```")
+    status, first = _call(base, "/api/manual-answer", {"ticker": "AAA", "date": "2026-10-23", "text": answer})
+    assert status == 200 and first["packet_id"] == prompt["packet_id"] and first["unknown_cited_ids"] == ["ZZ9"]
+    prov = json.loads((day / "reports" / "provenance.json").read_text())
+    assert prov["abstained"] and prov["packet_id"] == prompt["packet_id"]
+    assert (day / "reports" / "evidence_packet.json").is_file()
+    assert "ZZ9" in (day / "reports" / "chat_answer.md").read_text()
+
+    status, _ = _call(base, "/api/manual-answer", {"ticker": "AAA", "date": "2026-10-23", "text": answer.replace("Hold", "Sell")})
+    assert status == 200
+    archived = list((day / "archive").iterdir())
+    assert len(archived) == 1 and '"Hold"' in (archived[0] / "chat_answer.md").read_text()
+    assert '"Sell"' in (day / "reports" / "chat_answer.md").read_text()
+    status, page = _call(base, "/api/ticker?symbol=AAA")
+    runs = [r for r in (page.get("reports") or {}).get("runs", []) if r["date"] == "2026-10-23"]
+    assert sorted({r["run"] or "" for r in runs}) == ["", f"archive/{archived[0].name}"]   # roots may repeat a run
+    rated = [r for r in page["reports"]["ratings"] if r["date"] == "2026-10-23"]
+    assert rated and rated[0]["abstained"]

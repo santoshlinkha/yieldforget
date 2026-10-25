@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import uuid
 from dataclasses import asdict
@@ -606,24 +607,26 @@ class App:
 
     # --- capital: the three amounts, against what the books actually hold ---
 
-    def signals(self, ticker: str | None = None) -> dict:
+    def signals(self, ticker: str | None = None, decision_id: str | None = None) -> dict:
         """Saved trend, breakout and crash signals with the daily decision's actions, and each stock's
         verdict (BUY / WATCH / HOLD / SELL / AVOID): reads only."""
         from tradingagents.memory import TradingMemoryLog
         from tradingagents.stocks import daily, screen, signals
         from tradingagents.stocks.verdict import verdict
 
-        decision = daily.load(self.store.con)
+        decision = daily.load(self.store.con, decision_id)
         scores = (decision or {}).get("scores") or {}
         horizon = (decision or {}).get("horizon") or 20
         out = signals.board(self.store.con, decision, 20, ticker)
         held = {t for t, q in self.store.ledger.state("combined", _today()).positions.items() if q}
         latest = screen.latest(Path(self.config["results_dir"])) or {}
         rows = {r["ticker"]: r for r in latest.get("rows", [])}
+        from tradingagents.stocks.verdict import rating_on_record
+
         ratings = {}
         for e in TradingMemoryLog(self.config).load_entries():   # oldest first: the newest wins
             if e.get("rating"):
-                ratings[e["ticker"].upper()] = {"rating": e["rating"], "date": e["date"]}
+                ratings[e["ticker"].upper()] = rating_on_record(e)
         funds = self._fund_scores(horizon)
         if ticker and not out["rows"]:
             out["rows"] = [{"ticker": ticker.upper(), "signal": None, "decision": None}]
@@ -642,7 +645,7 @@ class App:
             # Nothing on record (a cash fund, or a ticker no model covers): no verdict rather than a guess.
             known = (row or r["signal"] or r["decision"] or t in held or score) and t not in daily.CASH_FUNDS
             r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t), score=score,
-                                   horizon=horizon) if known else None
+                                   horizon=horizon, validated=(decision or {}).get("mode") == "validated")                 if known else None
             if ticker and r["signal"] and r["signal"].get("status") == "ok":
                 r["entry"] = self._entry_plan(t, r["signal"])
         return out
@@ -764,8 +767,17 @@ class App:
 
         ticker, day = ticker.strip().upper(), self._check_day(day)
         set_config(self.config)
-        # The evidence packet: local caches only; the app's verdict, model rank and signals stay out.
-        prompt = build_prompt(ticker, day, self.cache_dir)
+        # The evidence packet: local caches only; the app's verdict, model rank and signals stay out. It is saved
+        # under its content ID, so a pasted answer can be tied to the exact evidence it was given.
+        from tradingagents.agents.packet import packet_id, render
+        from tradingagents.dataflows.symbols import safe_ticker_component
+
+        prompt, packet = build_prompt(ticker, day, self.cache_dir, with_packet=True)
+        pid = packet_id(packet)
+        packets = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "packets"
+        packets.mkdir(parents=True, exist_ok=True)
+        if not (packets / f"{pid}.json").exists():
+            (packets / f"{pid}.json").write_text(render(packet), encoding="utf-8")
         try:
             import tiktoken
 
@@ -773,7 +785,7 @@ class App:
         except Exception:
             tokens, how = len(prompt) // 4, "estimate (characters / 4)"
         return {"ticker": ticker, "date": day, "prompt": prompt, "chars": len(prompt), "tokens_est": tokens,
-                "tokens_how": how, "version": PROMPT_VERSION}
+                "tokens_how": how, "version": PROMPT_VERSION, "packet_id": pid}
 
     def manual_answer(self, body: dict) -> dict:
         """A chat app's answer to the manual prompt: saved as a report, its rating recorded, the final decision written."""
@@ -788,25 +800,47 @@ class App:
         if not ticker or len(text.strip()) < 40:
             raise ValueError("paste the whole answer, ending with its JSON block")
         decision = parse_answer(text)
-        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
-        (folder / "5_portfolio").mkdir(parents=True, exist_ok=True)
         from tradingagents.agents.manual import PROMPT_VERSION
+        from tradingagents.agents.packet import cited_ids, evidence_ids
+        from tradingagents.optimizer.ai_views import fresh_report_folder
 
-        # The prompt format the answer replied to, so answers to different input formats stay apart.
-        (folder / "chat_answer.md").write_text(f"# Answer from {source}\n\nPrompt format: {PROMPT_VERSION}"
-                                               f"{'; the analysis abstained (insufficient evidence)' if decision.get('insufficient_evidence') else ''}"
-                                               f"\n\n{text}\n", encoding="utf-8")
+        day_dir = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day
+        # Which packet the answer replied to: the ID it echoes, else the latest one copied for this ticker and day.
+        packets = day_dir / "packets"
+        pid = re.sub(r"[^0-9a-f]", "", str(decision.get("packet_id") or "").lower())
+        if not (pid and (packets / f"{pid}.json").is_file()):
+            saved = sorted(packets.glob("*.json"), key=lambda f: f.stat().st_mtime) if packets.is_dir() else []
+            pid = saved[-1].stem if saved else None
+        packet = json.loads((packets / f"{pid}.json").read_text(encoding="utf-8")) if pid else None
+        cited = sorted(cited_ids(decision, text))
+        unknown = sorted(set(cited) - evidence_ids(packet)) if packet else cited
+        folder = fresh_report_folder(day_dir / "reports")   # an earlier run is archived, never overwritten
+        (folder / "5_portfolio").mkdir(parents=True, exist_ok=True)
+        # The prompt format and packet the answer replied to, and any cited ID the packet does not contain.
+        (folder / "chat_answer.md").write_text(
+            f"# Answer from {source}\n\nPrompt format: {PROMPT_VERSION}; evidence packet {pid or 'unknown'}"
+            f"{'; the analysis abstained (insufficient evidence)' if decision.get('insufficient_evidence') else ''}"
+            f"{'; cited IDs not in the packet: ' + ', '.join(unknown) if unknown else ''}\n\n{text}\n",
+            encoding="utf-8")
+        if packet:   # the evidence the answer was given, kept with it
+            (folder / "evidence_packet.json").write_text(json.dumps(packet), encoding="utf-8")
         md = decision_markdown(decision)
-        pm = folder / "5_portfolio" / "decision.md"
-        if not pm.is_file():   # an agent run's own decision for that day is kept
-            pm.write_text(md, encoding="utf-8")
+        (folder / "5_portfolio" / "decision.md").write_text(md, encoding="utf-8")
         log = TradingMemoryLog(self.config)
         before = {(e["date"], e["ticker"].upper()) for e in log.load_entries()}
         log.store_decision(ticker, day, md, decision["rating"])
         recorded = (day, ticker) not in before
-        final = self._write_decision(ticker, day, folder, {"rating": decision["rating"], "fell_back": False}, None,
-                                     models=source)
+        final = self._write_decision(ticker, day, folder, {"rating": decision["rating"], "fell_back": False,
+                                                           "abstained": decision.get("insufficient_evidence")},
+                                     None, models=source)
+        provenance = {"source": source, "prompt_version": PROMPT_VERSION, "packet_id": pid, "cited_ids": cited,
+                      "unknown_cited_ids": unknown, "abstained": bool(decision.get("insufficient_evidence")),
+                      "rating": decision["rating"], "rating_recorded": recorded,
+                      "model_decision": final.get("decision_id"),
+                      "saved_at": datetime.now().astimezone().isoformat(timespec="seconds")}
+        (folder / "provenance.json").write_text(json.dumps(provenance, indent=1), encoding="utf-8")
         return {"ticker": ticker, "date": day, "rating": decision["rating"], "final": final, "recorded": recorded,
+                "packet_id": pid, "unknown_cited_ids": unknown,
                 "note": None if recorded else "a rating for this ticker and day was already on record (it stays; "
                                                  "the verdict uses that one)"}
 
@@ -818,17 +852,26 @@ class App:
         from tradingagents.stocks.verdict import ai_decision
 
         held = bool(self.store.ledger.state("combined", _today()).positions.get(ticker)) and ticker not in CASH_FUNDS
-        ai = ai_decision({"rating": result["rating"], "date": day}, held)
-        row = (self.signals(ticker)["rows"] or [{}])[0]
-        rule = (row.get("verdict") or {})
+        ai = ai_decision({"rating": result["rating"], "date": day, "abstained": result.get("abstained")}, held)
+        # The model run as of the analysis day: the latest decision with data through that day, never a later one.
+        found = self.store.con.execute("SELECT id, info_cutoff FROM stock_decisions WHERE info_cutoff <= ?"
+                                       " ORDER BY info_cutoff DESC, created_at DESC LIMIT 1", (day,)).fetchone()
+        board = self.signals(ticker, found["id"]) if found else {"rows": []}
+        row = (board["rows"] or [{}])[0]
+        rule = (row.get("verdict") or {}) if found else {}
         used = [models] if models else sorted({f"{p}/{m}" for p, m in roles.resolve(cfg).values()})
         pm = folder / "5_portfolio" / "decision.md"
         model = rule.get("model") or {}
-        final = rule.get("verdict") or "WATCH"
+        final = rule.get("action") or "WATCH"            # what the evidence gate allows
+        view = rule.get("label") or final                # the model's view, qualified when not validated
         lines = [f"# FINAL DECISION: {final}", "",
                  f"**{ticker}**, as of {day}. Decided by the app's own {model.get('horizon', 20)}-session model, "
-                 f"not by the agents: {rule.get('summary', 'the model has not scored this stock')} "
-                 f"({'you hold it' if held else 'you do not hold it'}).", ""]
+                 f"not by the agents: {rule.get('summary', 'no model run with data through this day')} "
+                 f"({'you hold it' if held else 'you do not hold it'}).", "",
+                 f"- **Model view**: {view}" + ("" if view == final else " (the evidence gate turns it into "
+                                                                         f"{final}: the model is not validated)"),
+                 f"- **Model run used**: decision {found['id'][:8]} with data through {found['info_cutoff']}"
+                 if found else "- **Model run used**: none with data through this day"]
         if model:
             fund = model.get("kind") == "fund"
             lines += [f"- **Model rank**: #{model['rank']} of {model['of']} {'funds' if fund else 'S&P 500 stocks'} today",
@@ -844,7 +887,8 @@ class App:
             lines += ["## The portfolio manager's decision", "", pm.read_text(encoding="utf-8")]
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "0_FINAL_DECISION.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return {"action": final, "agents": ai["action"], "rating": result["rating"], "held": held, "model": model}
+        return {"action": final, "view": view, "agents": ai["action"], "rating": result["rating"], "held": held,
+                "model": model, "decision_id": found["id"] if found else None}
 
     def start_analysis(self, body: dict) -> bool:
         """The agents' full analysis of one ticker as of a chosen day (paid: asked for by a click)."""
@@ -885,7 +929,7 @@ class App:
         # BUY verdicts in the model's own order (its rank decides the verdict).
         by_rank = sorted((r for r in board.values() if (r.get("verdict") or {}).get("model")),
                          key=lambda r: r["verdict"]["model"]["rank"])
-        buys = [r["ticker"] for r in by_rank if r["verdict"]["verdict"] == "BUY"]
+        buys = [r["ticker"] for r in by_rank if r["verdict"]["verdict"] == "BUY"]   # the model's view (labelled)
         paper = [t for t, r in board.items() if (r.get("decision") or {}).get("paper_action") == "PAPER ENTER"]
         reports_root = Path(self.config["results_dir"])
         rows, seen = [], set()
@@ -894,11 +938,13 @@ class App:
 
         from tradingagents.memory import TradingMemoryLog
 
+        from tradingagents.stocks.verdict import rating_on_record
+
         cutoff = (date.today() - timedelta(days=RATING_DAYS)).isoformat()
         last_rated = {}
         for e in TradingMemoryLog(self.config).load_entries():   # oldest first: the newest wins
             if e.get("rating") and e.get("date", "") >= cutoff:
-                last_rated[e["ticker"].upper()] = {"rating": e["rating"], "date": e["date"]}
+                last_rated[e["ticker"].upper()] = rating_on_record(e)
         rated = sorted(last_rated, key=lambda t: last_rated[t]["date"], reverse=True)
         for t, why in [*((t, "you hold it") for t in held), *((t, "analyzed by the agents") for t in rated),
                        *((t, "model verdict BUY") for t in buys), *((t, "top of the daily decision") for t in paper)]:
@@ -911,7 +957,8 @@ class App:
             rows.append({"ticker": t, "name": describe(t), "why": why, "held": t in positions and bool(positions[t]),
                          "in_trading": t in trading, "rating": rating,
                          "ai": ai_decision(rating, t in held) if rating else None,
-                         "verdict": (r.get("verdict") or {}).get("verdict"),
+                         "verdict": (r.get("verdict") or {}).get("action"),
+                         "verdict_label": (r.get("verdict") or {}).get("label"),
                          "verdict_summary": (r.get("verdict") or {}).get("summary"),
                          "reports": bool(day_dir and day_dir.is_dir())})
         brief_dir = reports_root / "market"
@@ -960,14 +1007,17 @@ class App:
 
         return self.analysis.start(work)
 
-    def request_log(self, ticker: str, day: str) -> dict:
-        """Every model request of a saved agent run and its reply (read from the run's folder)."""
+    def request_log(self, ticker: str, day: str, run: str | None = None) -> dict:
+        """Every model request of a saved agent run and its reply (read from the run's folder); ``run`` names an
+        earlier, archived run of that day."""
         from tradingagents.dataflows.symbols import safe_ticker_component
         from tradingagents.llm_clients.request_log import read
 
         self._check_day(day)
-        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker.upper()) / day / "reports"
-        return {"ticker": ticker.upper(), "date": day, "requests": read(folder)}
+        if run and not re.fullmatch(r"archive/\d{8}T\d{6}(_\d+)?", run):
+            raise ValueError("unknown run")
+        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker.upper()) / day / (run or "reports")
+        return {"ticker": ticker.upper(), "date": day, "run": run, "requests": read(folder)}
 
     def set_ai_budget(self, body: dict) -> dict:
         budget = dict(self.store.get("global", "ai_budget"))
@@ -1206,23 +1256,36 @@ class App:
                 if not folder.is_dir():
                     continue
                 for day in sorted(folder.iterdir(), reverse=True):
-                    rep = day / "reports"
-                    if rep.is_dir():
-                        from tradingagents.llm_clients.request_log import FILE
+                    # The day's latest run, then each earlier run of that day (archived, never overwritten).
+                    earlier = sorted((day / "archive").iterdir(), reverse=True) if (day / "archive").is_dir() else []
+                    for rep, run in [(day / "reports", None)] + [(a, f"archive/{a.name}") for a in earlier]:
+                        if rep.is_dir():
+                            from tradingagents.llm_clients.request_log import FILE
 
-                        calls = rep / FILE
-                        found.append({"date": day.name, "requests": sum(1 for _ in calls.open(encoding="utf-8")) if calls.is_file() else 0,
-                                      "files": [
-                            {"name": " / ".join(f.relative_to(rep).with_suffix("").parts).replace("_", " "),
-                             "path": str(f.resolve())} for f in sorted(rep.rglob("*.md"))]})
+                            calls = rep / FILE
+                            found.append({"date": day.name, "run": run,
+                                          "requests": sum(1 for _ in calls.open(encoding="utf-8")) if calls.is_file() else 0,
+                                          "files": [
+                                {"name": " / ".join(f.relative_to(rep).with_suffix("").parts).replace("_", " "),
+                                 "path": str(f.resolve())} for f in sorted(rep.rglob("*.md"))]})
             from tradingagents.memory import TradingMemoryLog
             from tradingagents.stocks.verdict import ai_decision
 
-            ratings = [{"date": e["date"], "rating": e["rating"]} for e in TradingMemoryLog(self.config).load_entries()
+            from tradingagents.stocks.verdict import rating_on_record
+
+            ratings = [rating_on_record(e) for e in TradingMemoryLog(self.config).load_entries()
                        if e.get("ticker", "").upper() == symbol]
             held = bool(self.store.ledger.state("combined", _today()).positions.get(symbol))
             by_date = {r["date"]: r for r in ratings}
             for run in found:
+                if run["run"]:   # an archived run: its own final decision only; the rating on record is the latest's
+                    for root in self.report_roots():
+                        first = root / symbol / run["date"] / run["run"] / "0_FINAL_DECISION.md"
+                        if first.is_file():
+                            head = first.read_text(encoding="utf-8").splitlines()[0]
+                            run["decision"] = head.split(":", 1)[1].strip() if head.startswith("# FINAL DECISION:") else None
+                            break
+                    continue
                 if run["date"] in by_date:
                     run["rating"] = by_date[run["date"]]["rating"]
                     run["agents"] = ai_decision(by_date[run["date"]], held)["action"]
@@ -1558,7 +1621,7 @@ def make_handler(app: App):
                 elif url.path == "/api/ai-decisions":
                     self._json(app.ai_decisions())
                 elif url.path == "/api/requests":
-                    self._json(app.request_log(query.get("ticker", ""), query.get("date", "")))
+                    self._json(app.request_log(query.get("ticker", ""), query.get("date", ""), query.get("run") or None))
                 elif url.path == "/api/decisions":
                     self._json(app.decisions_state())
                 elif url.path == "/api/capital":

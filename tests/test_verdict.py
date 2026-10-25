@@ -55,6 +55,32 @@ def test_a_fund_is_judged_by_its_rank_among_funds_without_a_large_loss_gate():
     fund = {"kind": "fund", "rank": 3, "of": 41, "rank_pct": 0.95, "expected_net": 0.01, "p_win": 0.55, "p_risk": None}
     v = verdict(False, None, None, {}, None, TODAY, score=fund)
     assert v["verdict"] == "BUY" and "funds" in v["checks"][0]["detail"]
-    assert [c["name"] for c in v["checks"]] == ["Model rank", "Expected return", "Chance of profit"]
+    assert [c["name"] for c in v["checks"]] == ["Model rank", "Expected return", "Chance of beating cash (before costs)"]
     assert verdict(True, None, None, {}, None, TODAY, score={**fund, "rank": 40, "rank_pct": 0.03, "expected_net": -0.01})["verdict"] == "SELL"
     assert "no model view" in verdict(True, None, None, {}, None, TODAY)["summary"]
+
+
+def test_an_unvalidated_buy_is_labelled_and_its_action_waits():
+    v = verdict(False, {"action": "WAIT", "paper_action": "PAPER ENTER"}, None, {}, None, TODAY, score=TOP)
+    assert v["verdict"] == "BUY" and v["action"] == "WAIT" and v["label"] == "BUY (model view, not validated)"
+    ok = verdict(False, None, None, {}, None, TODAY, score=TOP, validated=True)
+    assert ok["action"] == "BUY" and ok["label"] == "BUY"
+    fund = {"kind": "fund", "rank": 1, "of": 41, "rank_pct": 1.0, "expected_net": 0.01, "p_win": 0.55, "p_risk": None}
+    assert verdict(False, None, None, {}, None, TODAY, score=fund, validated=True)["action"] == "WAIT"   # funds never validated
+    assert verdict(True, {"action": "EXIT"}, None, {}, None, TODAY, score=TOP)["action"] == "SELL"     # rule-based exit stays
+
+
+def test_a_stock_without_a_risk_estimate_never_passes_the_gate():
+    for missing in (None, float("nan")):
+        v = verdict(False, None, None, {}, None, TODAY, score={**TOP, "p_risk": missing}, validated=True)
+        assert v["verdict"] == "WATCH" and "risk estimate" in v["summary"].replace("chance of a large loss at the exit",
+                                                                                   "risk estimate")
+
+
+def test_an_abstaining_analysis_is_shown_as_abstain_not_as_its_placeholder_rating():
+    from tradingagents.stocks.verdict import ABSTAIN_MARK, ai_decision, rating_on_record
+
+    entry = {"rating": "Hold", "date": "2026-10-23", "decision": f"**Rating**: Hold\n\n{ABSTAIN_MARK}: abstained"}
+    assert rating_on_record(entry)["abstained"]
+    assert ai_decision(rating_on_record(entry), held=True)["action"] == "ABSTAIN"
+    assert ai_decision({"rating": "Hold", "date": "2026-10-23"}, held=True)["action"] == "HOLD"

@@ -51,8 +51,13 @@ def _check(name, ok, detail, decides=True):
 
 
 def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict | None, rating: dict | None,
-            today: date | None = None, score: dict | None = None, horizon: int = 20) -> dict:
-    """``{"verdict", "summary", "checks", "context", "held", "model"}``. ``checks`` decide the verdict;
+            today: date | None = None, score: dict | None = None, horizon: int = 20, validated: bool = False) -> dict:
+    """``{"verdict", "action", "label", "validated", "summary", "checks", "context", "held", "model"}``.
+
+    ``verdict`` is the model's view; ``action`` is what the evidence gate allows. While the model is not
+    validated (experimental mode; funds always), a model BUY is action WAIT and a model-driven SELL is HOLD,
+    and ``label`` says so ("BUY (model view, not validated)"); a rule-based exit from the daily decision's
+    lot review (EXIT / REDUCE) and the decision's own ENTER keep their action. ``checks`` decide the verdict;
     ``context`` is shown beside it and changes nothing. ``ok`` None means no data."""
     today = today or date.today()
     screen, rating = screen or {}, _fresh(rating, today)
@@ -72,11 +77,16 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
             _check("Expected return", net > 0,
                    f"{net:+.2%} above cash over {horizon} sessions (BUY needs above zero)" if fund else
                    f"{net:+.2%} over {horizon} sessions after costs of {s.get('cost_rt') or 0:.2%} (BUY needs above zero)"),
-            _check("Chance of profit", p_win >= MIN_P_WIN, f"{p_win:.0%} (BUY needs {MIN_P_WIN:.0%}+)"),
+            _check("Chance of beating cash (before costs)" if fund else "Chance of profit after costs",
+                   p_win >= MIN_P_WIN, f"{p_win:.0%} (BUY needs {MIN_P_WIN:.0%}+)"),
         ]
-        if p_risk is not None:
-            checks.append(_check("Chance of a large loss", p_risk <= MAX_P_RISK,
-                                 f"{p_risk:.0%} while held (BUY needs {MAX_P_RISK:.0%} or less)"))
+        if not fund:
+            # A stock needs its risk estimate: missing or unknown fails the gate, it is never skipped.
+            known = p_risk is not None and p_risk == p_risk
+            checks.append(_check("Chance of a large loss at the exit", known and p_risk <= MAX_P_RISK,
+                                 f"{p_risk:.0%} at the exit of a {horizon}-session trade (terminal, not the "
+                                 f"worst point while held; BUY needs {MAX_P_RISK:.0%} or less)" if known else
+                                 "unknown: BUY needs a risk estimate"))
     if action:
         checks.append(_check("Daily decision", action not in ("EXIT", "REDUCE"),
                              f"{action}{' (' + decision['paper_action'] + ')' if decision.get('paper_action') else ''}"))
@@ -127,7 +137,12 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
     else:
         missing = [x["name"].lower() for x in checks if x["ok"] is False]
         v, why = "WATCH", "the model's view is not strong enough: " + ", ".join(missing)
-    return {"verdict": v, "summary": why, "checks": checks, "context": context, "held": held,
+    validated = bool(validated) and not (s and s.get("kind") == "fund")
+    rule_based = action in ("EXIT", "REDUCE", "ENTER")
+    act = v if validated or rule_based else {"BUY": "WAIT", "SELL": "HOLD"}.get(v, v)
+    label = v if act == v else f"{v} (model view, not validated)"
+    return {"verdict": v, "action": act, "label": label, "validated": validated, "summary": why,
+            "checks": checks, "context": context, "held": held,
             "model": {"horizon": horizon, **s} if s else None,
             "rules": {"top": TOP, "bottom": BOTTOM, "min_p_win": MIN_P_WIN, "max_p_risk": MAX_P_RISK,
                       "rating_days": RATING_DAYS}}
@@ -136,11 +151,23 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
 AI_DECISIONS = {"Buy": "BUY", "Overweight": "BUY", "Hold": "HOLD", "Underweight": "SELL", "Sell": "SELL"}
 
 
+ABSTAIN_MARK = "**Insufficient evidence**"   # what decision_markdown writes when an answer abstained
+
+
+def rating_on_record(entry: dict) -> dict:
+    """A memory-log entry as the rating the screens use: the rating, its date and whether the analysis
+    abstained (its decision text carries the abstention mark; the rating was recorded only because the format
+    requires one)."""
+    return {"rating": entry.get("rating"), "date": entry.get("date"),
+            "abstained": ABSTAIN_MARK in str(entry.get("decision") or "")}
+
+
 def ai_decision(rating: dict, held: bool) -> dict:
     """The agents' rating as an action: Buy / Overweight -> BUY, Hold -> HOLD, Underweight / Sell -> SELL
-    when held (AVOID when not), with the rating's age. Shown as the agents' view; it decides nothing."""
+    when held (AVOID when not), with the rating's age; ABSTAIN when the analysis said the evidence was
+    insufficient. Shown as the agents' view; it decides nothing."""
     r = rating.get("rating")
-    action = AI_DECISIONS.get(r, "REVIEW")
+    action = "ABSTAIN" if rating.get("abstained") else AI_DECISIONS.get(r, "REVIEW")
     if action == "SELL" and not held:
         action = "AVOID"
     if action == "HOLD" and not held:
@@ -150,4 +177,4 @@ def ai_decision(rating: dict, held: bool) -> dict:
     except ValueError:
         age = None
     return {"action": action, "rating": r, "date": rating.get("date"), "age_days": age,
-            "stale": age is None or age > RATING_DAYS}
+            "stale": age is None or age > RATING_DAYS, "abstained": bool(rating.get("abstained"))}

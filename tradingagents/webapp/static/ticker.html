@@ -149,6 +149,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .verdict.SELL, .verdict.AVOID { color: var(--sell); background: color-mix(in srgb, var(--sell) 12%, transparent); }
 .verdict.HOLD { color: var(--accent); background: var(--accent-soft); }
 .verdict.WATCH { color: #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }
+.verdict.ABSTAIN { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
 .verdict.big { font-size: 20px; padding: 6px 18px; }
 .vbox { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--surface-2); margin-bottom: 12px; }
@@ -515,21 +516,27 @@ async function load() {
   const rp = d.reports;
   if (failed(rp)) $("reports").innerHTML = failed(rp);
   else {
-    // One record per day: runs of the same day (saved under more than one results folder, or an agent run
-    // and a pasted chat answer) are merged, their reports listed once by name.
+    // One record per run: the same run saved under more than one results folder is merged, its reports listed
+    // once by name. Earlier runs of a day are archived (never overwritten) and listed after the day's latest.
     const byDay = {};
     for (const run of rp.runs) {
-      const m = byDay[run.date] = byDay[run.date] || {...run, files: [], requests: 0};
+      const key = run.date + "|" + (run.run || "");
+      const m = byDay[key] = byDay[key] || {...run, files: [], requests: 0};
       for (const k of ["agents", "rating", "decision"]) m[k] = m[k] || run[k];
       m.requests = Math.max(m.requests, run.requests || 0);
       for (const fl of run.files) if (!m.files.some(x => x.name === fl.name)) m.files.push(fl);
     }
-    rp.runs = Object.values(byDay).sort((a, b) => (a.date < b.date ? 1 : -1));
+    const order = run => run.date + "|" + (run.run ? "0" + run.run : "1");
+    rp.runs = Object.values(byDay).sort((a, b) => (order(a) < order(b) ? 1 : -1));
+    const earlier = run => {
+      const t = (run.run.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/) || []).slice(1);
+      return t.length ? ` · earlier run (${t[0]}-${t[1]}-${t[2]} ${t[3]}:${t[4]}), superseded` : " · earlier run, superseded";
+    };
     // Each saved run shows the agents' own decision (their rating as an action); the model's verdict is the card above.
-    const withRun = rp.runs.filter(run => run.agents);
+    const withRun = rp.runs.filter(run => run.agents && !run.run);
     let h = withRun.length ? `<p class="small">Agents' decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.agents)}</b></a>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details data-day="${esc(run.date)}"><summary>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
-      (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
+    h += rp.runs.length ? rp.runs.map(run => `<details ${run.run ? `data-run="${esc(run.run)}"` : `data-day="${esc(run.date)}"`}><summary>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.run ? `<span class="muted">${esc(earlier(run))}</span>` : ""}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""}${run.run && run.decision ? ` · final decision then: ${esc(run.decision)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+      (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"${run.run ? ` data-callrun="${esc(run.run)}"` : ""}><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") +
       `<div class="runView"></div></details>`).join("")
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
@@ -542,12 +549,12 @@ async function load() {
       a.classList.add("on");
       view.innerHTML = html;
     };
-    $("reports").querySelectorAll("details[data-day]").forEach(box => box.addEventListener("toggle", () => {
+    $("reports").querySelectorAll("details[data-day], details[data-run]").forEach(box => box.addEventListener("toggle", () => {
       if (!box.open) { box.querySelector(".runView").innerHTML = ""; box.querySelectorAll("a.on").forEach(x => x.classList.remove("on")); }
     }));
     $("reports").querySelectorAll("a[data-calls]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
-      const r = await getJSON(`/api/requests?ticker=${encodeURIComponent(symbol)}&date=${a.dataset.calls}`).catch(e => ({error: e.message}));
+      const r = await getJSON(`/api/requests?ticker=${encodeURIComponent(symbol)}&date=${a.dataset.calls}${a.dataset.callrun ? "&run=" + encodeURIComponent(a.dataset.callrun) : ""}`).catch(e => ({error: e.message}));
       show(a, r.error ? `<p class="neg">${esc(r.error)}</p>` : callsView(r.requests));
     });
     $("reports").querySelectorAll("a[data-path]").forEach(a => a.onclick = async ev => {
@@ -687,7 +694,7 @@ function signalTable(sg) {
   return `<table><tr><th class="l">Within ${sg.horizon} sessions</th><th>Model</th><th>Usual</th><th>Lift</th><th>Among today's stocks</th><th>Evidence</th></tr>` +
     line("Breakout above the recent range", "up_break", f.p_up_break, b.up_break, "good") +
     line("Breakdown below the recent range", "down_break", f.p_down_break, b.down_break, "bad") +
-    line("Large loss during the position", "large_loss", f.p_large_loss, b.large_loss, "bad") +
+    line("Large loss at the 20-session end", "large_loss", f.p_large_loss, b.large_loss, "bad") +
     line("Deep drawdown", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>`;
 }
 async function loadSignals() {
@@ -699,15 +706,15 @@ async function loadSignals() {
   if (vd) {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
     const vm = vd.model;
-    h += `<div class="vbox"><span class="verdict big ${vd.verdict}">${vd.verdict}</span><div class="why"><b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.` +
+    h += `<div class="vbox"><span class="verdict big ${vd.action}" title="The action the evidence gate allows">${vd.action}</span><div class="why">${vd.label !== vd.action ? `<div class="small"><b>Model view: ${esc(vd.label)}</b>. The model is experimental, so its BUY is not acted on.</div>` : ""}<b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.` +
       (vm ? `<div class="small muted" style="margin-top:4px">Model rank <b>#${vm.rank}</b> of ${vm.of} ${vm.kind === "fund" ? "funds" : "S&amp;P 500 stocks"} · expected ${spct(vm.expected_net, 2)}${vm.kind === "fund" ? " above cash" : " after costs"} over ${vm.horizon} sessions · P(profit) ${pct(vm.p_win, 0)}</div>` : "") + `</div></div>` +
-      `<details${vd.verdict === "WATCH" ? " open" : ""}><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
+      `<details${vd.verdict === "WATCH" || vd.label !== vd.action ? " open" : ""}><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
       (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
         : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
       `<p class="small" style="margin:10px 0 4px"><b>Context</b> <span class="muted">(shown, does not change the verdict)</span></p><ul class="vchecks">` +
       (vd.context || []).map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>` +
       `<p class="small muted">The verdict comes only from the app's own ${vd.model ? vd.model.horizon : 20}-session model, which ranks every S&amp;P 500 stock on how a trade should do after costs. Not held: BUY needs the top fifth, an expected gain after costs, P(profit) ${pct(vd.rules.min_p_win, 0)}+ and P(large loss) ${pct(vd.rules.max_p_risk, 0)} or less; AVOID is the bottom fifth or an expected loss; WATCH is in between. Held: SELL on the daily decision's EXIT/REDUCE or a bottom-fifth rank with an expected loss; otherwise HOLD. The agents' rating is shown but not used. The model is experimental: its ranking showed a small edge in testing, but trading on it did not beat holding SPY.</p></details>`;
-    $("vbadge").innerHTML = `<span class="verdict ${vd.verdict}" title="${esc(vd.summary)}">${vd.verdict}</span>`;
+    $("vbadge").innerHTML = `<span class="verdict ${vd.action}" title="${esc(vd.label + ": " + vd.summary)}">${vd.action}${vd.label !== vd.action ? " · model " + esc(vd.verdict) : ""}</span>`;
   }
   if (dec) {
     const why = (dec.blocked || dec.reasons || []).join("; ");
@@ -726,10 +733,11 @@ async function loadSignals() {
   if (ep) {
     const money2 = x => "$" + x.toFixed(2);
     h += `<h3 class="sec">Entry plan <span class="muted small" style="font-weight:400">next ${ep.horizon} sessions</span></h3>` +
-      `<table><tr><th class="l">Entry</th><th>Price</th><th>vs close</th><th>Chance it fills</th><th>Stop-loss</th><th>Take-profit</th></tr>` +
+      `<table><tr><th class="l">Entry</th><th>Price</th><th>vs close</th><th title="Chance the price trades at or through this level within the window; a limit order there may still not fill">Chance the price reaches it</th><th>Stop-loss</th><th>Take-profit</th></tr>` +
       ep.rows.map((r, i) => `<tr><td class="l">${esc(r.name)}</td><td><b>${money2(r.price)}</b></td><td class="muted">${i ? spct(r.vs_close) : "–"}</td>` +
         `<td>${r.chance == null ? "–" : i ? pct(r.chance, 0) : "now"}</td><td class="neg">${money2(r.stop)}</td><td class="pos">${money2(r.profit)}</td></tr>`).join("") + `</table>` +
-      `<p class="small muted">${vd && vd.verdict === "BUY" ? "The model says BUY: buy at the next close, or place a limit at a dip and accept that it may not fill."
+      `<p class="small muted">${vd && vd.action === "BUY" ? "The model says BUY: buy at the next close, or place a limit at a dip and accept that it may not fill."
+        : vd && vd.verdict === "BUY" ? "The model's view is BUY but it is not validated (experimental): the action is WAIT; these levels show where a buy would be placed, for reference."
         : vd && vd.verdict === "AVOID" ? "The model says AVOID: these levels are for reference only."
         : "The model does not say BUY yet: if you buy anyway, a limit at a dip lowers the price you pay."} ` +
       `Limit prices come from the stock models: the 20-day low (its chance is the breakdown probability), and the model's median and worst-5% expected dip from today's close. ` +

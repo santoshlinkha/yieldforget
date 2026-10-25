@@ -15,6 +15,7 @@ explicit choice.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from tradingagents.agents.rating import RATING_REVIEW
 from tradingagents.dataflows.date_window import get_current_date
@@ -101,7 +102,6 @@ def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, repor
     every model priced, cached by its inputs (the same ticker, day, analysts and models runs once),
     and its usage recorded. Returns ``(result, "cache" | "paid")``.
     """
-    from pathlib import Path
 
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
@@ -111,10 +111,9 @@ def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, repor
     used = roles.models_used(config, [r for r in roles.ROLES if r not in ANALYST_ROLES or r in analysts])
 
     def work(callback):
-        from tradingagents.llm_clients.request_log import FILE, RequestLog
+        from tradingagents.llm_clients.request_log import RequestLog
 
-        folder = Path(report_dir)
-        (folder / FILE).unlink(missing_ok=True)   # this run's requests only
+        folder = fresh_report_folder(report_dir)   # an earlier run for this day is archived, not overwritten
         graph = TradingAgentsGraph(analysts, config=config, callbacks=[callback, RequestLog(folder)])
         state, rating = graph.propagate(ticker, trade_date)
         graph.save_reports(state, ticker, folder)
@@ -128,3 +127,20 @@ def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, repor
                 **({"agents": moved} if moved else {})},
         also_priced=[(provider, config["quick_think_llm"]), *used], work=work, est_usd=est_usd,
         est_requests=EST_REQUESTS_BASE + EST_REQUESTS_PER_ANALYST * len(analysts), allow_paid=allow_paid)
+
+
+def fresh_report_folder(folder) -> Path:
+    """An empty report folder for a new run. When an earlier run already wrote there, that whole folder first
+    moves to ``archive/<its time>`` beside it, so no report is overwritten and every run stays readable."""
+    from datetime import datetime
+
+    folder = Path(folder)
+    if folder.is_dir() and any(folder.iterdir()):
+        stamp = datetime.fromtimestamp(folder.stat().st_mtime).strftime("%Y%m%dT%H%M%S")
+        target, n = folder.parent / "archive" / stamp, 1
+        while target.exists():
+            target, n = folder.parent / "archive" / f"{stamp}_{n}", n + 1
+        target.parent.mkdir(parents=True, exist_ok=True)
+        folder.rename(target)
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder

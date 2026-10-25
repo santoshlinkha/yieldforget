@@ -536,12 +536,41 @@ Rules:
 Cover, briefly: price and trend, fundamentals or fund facts, news and macro, the case for and against, and the decision.
 End with one JSON code block in exactly this shape (the app reads it):
 ```json
-{"rating": "Buy | Overweight | Hold | Underweight | Sell", "executive_summary": "2-4 sentences", "investment_thesis": "the evidence that decided it, with IDs", "price_target": null, "time_horizon": "e.g. 3-6 months", "evidence_ids": ["PX1"], "insufficient_evidence": false}
+{"rating": "Buy | Overweight | Hold | Underweight | Sell", "executive_summary": "2-4 sentences", "investment_thesis": "the evidence that decided it, with IDs", "price_target": null, "time_horizon": "e.g. 3-6 months", "evidence_ids": ["PX1"], "insufficient_evidence": false, "packet_id": "the packet_id on the first line"}
 ```
 The rating must be one of the five values (the app requires one). If the evidence is insufficient, set "insufficient_evidence" to true and say why in "investment_thesis"; the app records that the analysis abstained, whatever the rating field holds. price_target stays null unless the packet supplies one."""
 
 
+def packet_id(packet: dict) -> str:
+    """A content address for a packet: the same packet always has the same ID."""
+    import hashlib
+
+    return hashlib.sha256(render(packet).encode("utf-8")).hexdigest()[:12]
+
+
+def evidence_ids(packet: dict) -> set[str]:
+    """Every evidence ID the packet carries (``id`` fields at any depth)."""
+    out, stack = set(), [packet]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            if isinstance(x.get("id"), str):
+                out.add(x["id"])
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+    return out
+
+
+def cited_ids(answer: dict, text: str = "") -> set[str]:
+    """IDs an answer cites: its ``evidence_ids`` and every [ID] in its text."""
+    found = {str(i) for i in (answer.get("evidence_ids") or [])}
+    found |= set(re.findall(r"\[([A-Z]{1,4}\d{1,3})\]", text or ""))
+    return found
+
+
 def build_prompt(ticker: str, cutoff: str, cache_dir: Path, limits: dict | None = None, **kw) -> tuple[str, dict]:
-    """(prompt text, packet): stable instructions first, then the instrument's packet."""
+    """(prompt text, packet): stable instructions first, then the instrument's packet, tagged with its ID."""
     packet = assemble(load_inputs(ticker, cutoff, cache_dir), limits, **kw)
-    return f"[{PACKET_VERSION}]\n{INSTRUCTIONS}\n\nEVIDENCE PACKET:\n{render(packet)}\n", packet
+    return (f"[{PACKET_VERSION} packet_id={packet_id(packet)}]\n{INSTRUCTIONS}\n\nEVIDENCE PACKET:\n"
+            f"{render(packet)}\n", packet)

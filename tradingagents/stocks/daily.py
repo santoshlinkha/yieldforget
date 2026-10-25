@@ -291,7 +291,7 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
         if not (isinstance(risk, float) and np.isfinite(risk)):
             model_blocks.append("risk estimate missing or invalid")
         elif risk > r["max_large_loss_prob"]:
-            model_blocks.append(f"P(large loss during the position) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
+            model_blocks.append(f"P(large loss at the exit close) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
         if not np.isfinite(row["expected_net"]) or row["expected_net"] < r["min_expected_net"]:
             model_blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
         if not np.isfinite(row["p_win"]) or row["p_win"] < r["min_p_win"]:

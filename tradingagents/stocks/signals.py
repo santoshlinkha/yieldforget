@@ -15,7 +15,7 @@ Every number comes from the fitted models; the warnings are fixed arithmetic on 
   ("unclear" is the most common outcome). Classes the model does not tell stocks apart on are skipped.
 - **Breakout likely**: P(close above the recent range) at least 1.2x usual and in today's top fifth.
 - **Breakdown risk**: P(close below the recent range) at least 1.2x usual and in today's top fifth.
-- **Crash warning**: P(a large loss during the position) at least 1.5x usual, at least 10%, and in
+- **Crash warning**: P(a large loss at the end of the horizon; terminal, not the worst point while held) at least 1.5x usual, at least 10%, and in
   today's top fifth.
 - **Deep drawdown warning**: the same with at least 20%.
 - **Can it tell stocks apart?** When a model gives nearly every stock the same probability (the

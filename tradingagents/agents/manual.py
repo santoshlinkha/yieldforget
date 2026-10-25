@@ -23,10 +23,11 @@ RATINGS = [r.value for r in PortfolioRating]
 PROMPT_VERSION = PACKET_VERSION
 
 
-def build_prompt(ticker: str, day: str, cache_dir: Path, limits: dict | None = None) -> str:
-    """The whole prompt for one instrument and cutoff (instructions, then the evidence packet)."""
-    text, _packet = _packet_prompt(ticker.upper(), day, cache_dir, limits)
-    return text
+def build_prompt(ticker: str, day: str, cache_dir: Path, limits: dict | None = None, with_packet: bool = False):
+    """The whole prompt for one instrument and cutoff (instructions, then the evidence packet); with
+    ``with_packet``, ``(text, packet)`` so the caller can save the packet the answer will cite."""
+    text, packet = _packet_prompt(ticker.upper(), day, cache_dir, limits)
+    return (text, packet) if with_packet else text
 
 
 def parse_answer(text: str) -> dict:

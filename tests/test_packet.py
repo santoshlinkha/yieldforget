@@ -136,7 +136,7 @@ def test_the_packet_is_deterministic():
 def test_the_prompt_is_versioned_grounded_and_free_of_app_conclusions(monkeypatch):
     monkeypatch.setattr(P, "load_inputs", lambda *a, **k: _inputs())
     text, packet = P.build_prompt("ACME", CUTOFF, cache_dir=None)
-    assert text.startswith(f"[{P.PACKET_VERSION}]") and text.index("Rules:") < text.index("EVIDENCE PACKET")
+    assert text.startswith(f"[{P.PACKET_VERSION} packet_id={P.packet_id(packet)}]") and text.index("Rules:") < text.index("EVIDENCE PACKET")
     assert "commit to" not in text.lower() and "evidence IDs" in text
     for leak in ("verdict", "model rank", "model_forecasts"):
         assert leak not in P.render(packet).lower()
