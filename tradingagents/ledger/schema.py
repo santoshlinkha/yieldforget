@@ -384,4 +384,28 @@ CREATE TABLE shadow_snapshots (
     state_json TEXT NOT NULL
 );
 """ + _guards("stock_decisions") + _guards("shadow_snapshots"),
+    6: """
+-- Entry plans: the Trader's proposal and the Portfolio Manager's final plan for one run, linked by the
+-- approval, each with the quote it was checked against, the local feasibility check, the capital settings
+-- version and the evidence. Never edited: superseded and expired are worked out when read.
+CREATE TABLE entry_plans (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    analysis_date TEXT NOT NULL,           -- the information cutoff
+    run_ref TEXT,                          -- the run's report folder
+    source TEXT NOT NULL,                  -- the models or chat app that wrote it
+    stage TEXT NOT NULL,                   -- trader | portfolio_manager
+    review TEXT,                           -- proposed (trader) | approved | revised | rejected
+    parent_id TEXT REFERENCES entry_plans(id),
+    action TEXT,                           -- the side it serves: the trader's action or the manager's rating
+    plan_json TEXT,                        -- as the model gave it; NULL when it gave none
+    reference_json TEXT NOT NULL,
+    validation_json TEXT NOT NULL,
+    settings_json TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    plan_version TEXT NOT NULL
+);
+CREATE INDEX entry_plans_ticker ON entry_plans (ticker, created_at);
+""" + _guards("entry_plans"),
 }

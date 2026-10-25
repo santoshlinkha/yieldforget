@@ -61,6 +61,10 @@ class AgentState(MessagesState):
     investment_plan: Annotated[str, "Investment plan from the Research Manager"]
 
     trader_investment_plan: Annotated[str, "Transaction proposal from the Trader"]
+    entry_reference: Annotated[str, "The as-traded reference close for entry plans, one line; read from local data"]
+    entry_reference_quote: Annotated[dict, "The reference quote itself (session, price, currency, basis)"]
+    trader_entry: Annotated[dict, "The Trader's action, stop-loss and entry plan, structured; empty without one"]
+    final_entry: Annotated[dict, "The Portfolio Manager's rating, target, entry plan and its review; empty without one"]
 
     # risk management team discussion step
     risk_debate_state: Annotated[

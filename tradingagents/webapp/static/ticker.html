@@ -149,6 +149,13 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .verdict.SELL, .verdict.AVOID { color: var(--sell); background: color-mix(in srgb, var(--sell) 12%, transparent); }
 .verdict.HOLD { color: var(--accent); background: var(--accent-soft); }
 .verdict.WATCH { color: #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }
+.eplan-state { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .05em; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); text-transform: uppercase; }
+.eplan-state.blocked, .eplan-state.expired { color: var(--sell); background: color-mix(in srgb, var(--sell) 12%, transparent); }
+.eplan-state.waiting, .eplan-state.unavailable { color: #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }
+.eplan-state.actionable { color: var(--buy, #059669); background: color-mix(in srgb, var(--buy, #059669) 12%, transparent); }
+#eplan table td.l { width: 38%; }
+#eplan ul { margin: 4px 0 4px 18px; padding: 0; }
 .verdict.ABSTAIN { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
 .verdict.big { font-size: 20px; padding: 6px 18px; }
 .vbox { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px; border: 1px solid var(--border); border-radius: 10px;
@@ -200,6 +207,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
     <div>
       <div class="card"><h2>In your account</h2><div id="mine"></div></div>
       <div class="card"><h2>Verdict, signals and action</h2><div id="sig"><p class="muted">Loading…</p></div></div>
+      <div class="card"><h2>Agents' entry plan</h2><div id="eplan"><p class="muted">Loading…</p></div></div>
       <div class="card"><h2>Saved analysis reports</h2>
         <div id="runAgents">
           <p class="muted small">Run the TradingAgents team (analysts, bull/bear debate, trader, risk debate, portfolio manager) on this ticker as of a day you pick; they see only information up to that day. Paid: one full analysis held to your AI budget; a day already analyzed with the same settings is reused at no charge. Which model each agent uses: Settings → Agent models.</p>
@@ -359,7 +367,60 @@ function statementTable(st, which) {
     Object.entries(part.rows).map(([k, vals]) => `<tr><td class="l">${esc(k)}</td>${vals.map(v => `<td>${k.includes("EPS") ? (v == null ? "–" : v.toFixed(2)) : big(v)}</td>`).join("")}</tr>`).join("") + "</table></div>";
 }
 
+// --- the agents' entry plan: the trader's proposal, the manager's final plan, the app's local check ---
+const nz = v => v == null || v === "" ? '<span class="muted">Insufficient data</span>' : esc(v);
+const STATE_TEXT = {actionable: "feasible", conditional: "feasible if triggered", waiting: "wait", unavailable: "no plan",
+  blocked: "blocked", expired: "expired"};
+function planTable(row) {
+  const p = row.plan || {}, v = row.validation || {}, wait = p.status === "wait";
+  const range = p.entry_range_low != null && p.entry_range_high != null ? `${esc(p.entry_range_low)} to ${esc(p.entry_range_high)}` : null;
+  const rows = [["Status", nz(p.status)], ["Type", nz(p.entry_type)],
+    ["Price", p.entry_price != null ? esc(p.entry_price) + (p.currency ? " " + esc(p.currency) : "") : nz(null)], ["Range", range || nz(null)],
+    [wait ? "Reconsider when" : "Condition", nz(p.trigger)],
+    ["Earliest execution", nz(p.earliest_execution) + (v.earliest_allowed ? ` <span class="muted small">(first allowed ${esc(v.earliest_allowed)})</span>` : "")],
+    ["Expires", nz(p.expires_at)], ["Evidence", (p.evidence_ids || []).length ? esc(p.evidence_ids.join(", ")) : nz(null)]];
+  if (!row.plan) return `<p class="muted small">No entry plan was given.</p>`;
+  return `<table>${rows.map(([k, x]) => `<tr><td class="l muted">${k}</td><td class="l">${x}</td></tr>`).join("")}</table>` +
+    (p.rationale ? `<p class="small"><b>Rationale:</b> ${esc(p.rationale)}</p>` : "");
+}
+function planCheck(v) {
+  if (!v) return "";
+  const s = v.sizing, lv = v.levels || {};
+  let h = `<p class="small">App check: <span class="eplan-state ${esc(v.state)}">${esc(STATE_TEXT[v.state] || v.state)}</span> <span class="muted">on ${esc(v.checked_on)}</span></p>`;
+  if ((v.blocks || []).length) h += `<ul class="small neg">${v.blocks.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`;
+  if (s) h += `<table><tr><td class="l muted">Size (settled cash only)</td><td class="l">${money(s.dollars)} · ${esc(s.shares)} shares at ${esc(s.price_used)}</td></tr>` +
+    `<tr><td class="l muted">Cash</td><td class="l">${money(s.available)} available after ${money(s.reserved)} reserved; position cap ${money(s.position_cap)}</td></tr>` +
+    `<tr><td class="l muted">Stop-loss / target</td><td class="l">${nz(lv.stop_loss)} / ${nz(lv.price_target)}${lv.reward_to_risk != null ? ` · reward to risk ${esc(lv.reward_to_risk)}` : ""}${lv.loss_at_stop_usd != null ? ` · loss at the stop ${money(lv.loss_at_stop_usd)}` : ""}</td></tr></table>`;
+  if ((v.warnings || []).length) h += `<details><summary class="small muted">${v.warnings.length} warning${v.warnings.length === 1 ? "" : "s"}</summary><ul class="small muted">${v.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></details>`;
+  return h;
+}
+function planRun(run) {
+  const f = run.final, t = run.trader, any = f || t, ref = any.reference || {}, ev = (f || t).evidence || {};
+  const tag = run.current ? "" : (any.expired ? " · <b>expired</b>" : (f && f.superseded_by ? " · <b>superseded</b> by a later plan" : ""));
+  let h = `<p class="small">Analysis as of <b>${esc(any.analysis_date)}</b> · ${esc(any.source)} · saved ${esc(String(any.created_at).slice(0, 16).replace("T", " "))}${tag}</p>`;
+  h += `<p class="small">Action: ${f ? `manager <b>${esc(f.action)}</b>` : ""}${f && t ? " · " : ""}${t ? `trader <b>${esc(t.action)}</b>` : ""}` +
+    (f ? ` · review of the trader's plan: <b>${esc(f.review || (t ? "not stated" : "no trader (chat answer)"))}</b>` : "") + `</p>`;
+  h += `<p class="small">Reference: ${ref.price != null ? `<b>${esc(ref.price)} ${esc(ref.currency || "")}</b> at ${esc(ref.at || "the close")} on ${esc(ref.session)}` : nz(null)}` +
+    ` <span class="muted">(${ref.verified ? "as traded, basis verified" : "basis not verified"}: ${esc(ref.how || "")})</span></p>`;
+  const evid = [ev.packet_id ? `packet ${esc(ev.packet_id)}` : "", ev.model_decision ? `model run ${esc(ev.model_decision)}` : "",
+    (ev.unknown_cited_ids || []).length ? `<span class="neg">cited IDs not in the packet: ${esc(ev.unknown_cited_ids.join(", "))}</span>` : ""].filter(Boolean);
+  if (evid.length) h += `<p class="small muted">Evidence: ${evid.join(" · ")}</p>`;
+  if (f) h += `<h3 class="sec">Final plan (portfolio manager)</h3>` + planTable(f) + planCheck(f.validation);
+  if (t) h += `<details${f ? "" : " open"}><summary class="small"><b>Trader's proposal</b> (before the risk debate)</summary>` + planTable(t) + planCheck(t.validation) + `</details>`;
+  return h;
+}
+async function loadEntryPlans() {
+  let r;
+  try { r = await getJSON("/api/entry-plans?ticker=" + encodeURIComponent(symbol)); }
+  catch (e) { $("eplan").innerHTML = `<p class="neg">${esc(e.message)}</p>`; return; }
+  if (!r.runs.length) { $("eplan").innerHTML = `<p class="muted small">No entry plan yet. An agent run or a pasted chat answer adds one; the app checks it against the as-traded close and this account (settled cash, caps, timing, no day trading) and executes nothing.</p>`; return; }
+  const [first, ...rest] = r.runs;
+  $("eplan").innerHTML = `<p class="muted small">Written by the AI; checked by the app; executed by you. The model's verdict above decides BUY or SELL; this is how an entry could be made.</p>` +
+    planRun(first) + (rest.length ? `<details><summary class="small">${rest.length} earlier plan${rest.length === 1 ? "" : "s"} (superseded or expired)</summary>${rest.map(run => `<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px">${planRun(run)}</div>`).join("")}</details>` : "");
+}
+
 async function load() {
+  loadEntryPlans();
   document.title = symbol;
   $("sym").textContent = symbol;
   let d;

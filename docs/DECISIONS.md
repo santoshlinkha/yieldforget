@@ -217,3 +217,12 @@ not run (non-commercial licence); its adapter path is the same as 2.5's once the
   each pasted answer keeps the exact evidence packet it answered.
 - **Honest backtests.** The ETF backtest trades the session after it plans; the legacy stock scorer
   compounds correctly and annualizes on real spacing. Old figures stay as recorded.
+
+## 11. Entry plans (2026-10-25)
+
+- **The AI writes the plan, the app checks it, you execute it.** An entry plan is only actionable after
+  the local check passes: traded-price basis verified, settled cash, caps, timing, no day trading. A blocked
+  plan is kept with its reasons.
+- **The model's verdict still decides BUY or SELL**; the entry plan says how an entry could be made.
+- **No extra AI calls.** The plan rides in the trader's and manager's existing answers, for about 1.5k more
+  input tokens per run.

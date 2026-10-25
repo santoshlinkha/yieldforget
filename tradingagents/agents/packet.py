@@ -532,11 +532,12 @@ Rules:
 - Do not infer article contents, flows, institutional positioning or analyst consensus from headlines alone.
 - Do not invent return forecasts, probabilities, price targets, stop-losses or position sizes. You may quote ones the packet supplies, keeping their horizon, units and validation status.
 - Where the evidence is not enough for a view, say so plainly rather than choosing a side.
+- entry_plan: how to enter, priced as traded against REF1 (never adjusted closes or percentages), from levels the packet shows; status wait (with the condition that would change it) or unavailable when it does not support one. The app checks it; it executes nothing.
 - "checks" lists the validations actually run on the data; they do not guarantee correctness.
 Cover, briefly: price and trend, fundamentals or fund facts, news and macro, the case for and against, and the decision.
 End with one JSON code block in exactly this shape (the app reads it):
 ```json
-{"rating": "Buy | Overweight | Hold | Underweight | Sell", "executive_summary": "2-4 sentences", "investment_thesis": "the evidence that decided it, with IDs", "price_target": null, "time_horizon": "e.g. 3-6 months", "evidence_ids": ["PX1"], "insufficient_evidence": false, "packet_id": "the packet_id on the first line"}
+{"rating": "Buy | Overweight | Hold | Underweight | Sell", "executive_summary": "2-4 sentences", "investment_thesis": "the evidence that decided it, with IDs", "price_target": null, "time_horizon": "e.g. 3-6 months", "evidence_ids": ["PX1"], "insufficient_evidence": false, "packet_id": "the packet_id on the first line", "entry_plan": {"status": "ready | conditional | wait | unavailable", "entry_type": "market | limit | conditional | null", "entry_price": null, "entry_range_low": null, "entry_range_high": null, "currency": null, "trigger": null, "earliest_execution": "YYYY-MM-DD", "expires_at": "YYYY-MM-DD", "evidence_ids": ["REF1"], "rationale": null}}
 ```
 The rating must be one of the five values (the app requires one). If the evidence is insufficient, set "insufficient_evidence" to true and say why in "investment_thesis"; the app records that the analysis abstained, whatever the rating field holds. price_target stays null unless the packet supplies one."""
 
@@ -569,8 +570,25 @@ def cited_ids(answer: dict, text: str = "") -> set[str]:
     return found
 
 
+def _entry_reference(ticker: str, cutoff: str, cache_dir) -> dict:
+    """REF1: the as-traded close an entry plan is priced against (local store only), with its basis."""
+    from tradingagents.ledger.sessions import next_session
+
+    from .entry_plan import reference_quote
+
+    try:
+        ref = reference_quote(ticker, cutoff, cache_dir) if cache_dir else {}
+    except Exception:  # no store: no reference
+        ref = {}
+    if ref.get("price") is None:
+        return {"id": "REF1", "price": None, "reason": ref.get("how") or "no as-traded close in the local store"}
+    return {"id": "REF1", "session": ref["session"], "close_as_traded": ref["price"], "currency": ref.get("currency"),
+            "basis": ref["how"], "earliest_execution": str(next_session(ref["session"]))}
+
+
 def build_prompt(ticker: str, cutoff: str, cache_dir: Path, limits: dict | None = None, **kw) -> tuple[str, dict]:
     """(prompt text, packet): stable instructions first, then the instrument's packet, tagged with its ID."""
     packet = assemble(load_inputs(ticker, cutoff, cache_dir), limits, **kw)
+    packet["entry_reference"] = _entry_reference(ticker, cutoff, cache_dir)
     return (f"[{PACKET_VERSION} packet_id={packet_id(packet)}]\n{INSTRUCTIONS}\n\nEVIDENCE PACKET:\n"
             f"{render(packet)}\n", packet)

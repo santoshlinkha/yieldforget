@@ -10,6 +10,7 @@ free-text generation and the rating is read from that text.
 
 from __future__ import annotations
 
+from tradingagents.agents.entry_plan import PM_INSTRUCTION
 from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -45,6 +46,8 @@ def create_portfolio_manager(llm):
 
 {portfolio_context}
 
+{state.get("entry_reference") or ""}
+
 ---
 
 **Rating Scale** (use exactly one):
@@ -72,6 +75,7 @@ Write these sections, in this order, starting with the rating on its own line:
 - **Rating**: exactly one of Buy / Overweight / Hold / Underweight / Sell
 - **Executive Summary**: the call and how to act on it
 - **Investment Thesis**: the evidence that decided it, and what would change it
+{PM_INSTRUCTION}
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 
@@ -81,9 +85,13 @@ Write these sections, in this order, starting with the rating on its own line:
         if decision is not None:
             final_trade_decision = render_pm_decision(decision)
             final_rating = decision.rating.value
+            final_entry = {"rating": final_rating, "price_target": decision.price_target,
+                           "review": decision.entry_plan_review.value if decision.entry_plan_review else None,
+                           "plan": decision.entry_plan.model_dump(mode="json") if decision.entry_plan else None}
         else:
             final_trade_decision = llm.invoke(prompt).content
             final_rating = parse_rating(final_trade_decision)
+            final_entry = {}
 
         new_risk_debate_state = {
             "history": risk_debate_state["history"],
@@ -101,6 +109,7 @@ Write these sections, in this order, starting with the rating on its own line:
             "risk_debate_state": new_risk_debate_state,
             "final_trade_decision": final_trade_decision,
             "final_rating": final_rating,
+            "final_entry": final_entry,
         }
 
     return portfolio_manager_node

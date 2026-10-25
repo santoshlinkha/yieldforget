@@ -1,5 +1,6 @@
 from typing import Any
 
+from tradingagents.agents.entry_plan import render_reference
 from tradingagents.agents.state import InvestDebateState, RiskDebateState
 
 
@@ -18,6 +19,7 @@ class Propagator:
         past_context: str = "",
         instrument_context: str = "",
         portfolio_context: str = "",
+        entry_reference: dict | None = None,
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -35,6 +37,10 @@ class Propagator:
             "trade_date": str(trade_date),
             "past_context": past_context,
             "portfolio_context": portfolio_context,
+            "entry_reference_quote": entry_reference or {},
+            "entry_reference": render_reference(entry_reference),
+            "trader_entry": {},
+            "final_entry": {},
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

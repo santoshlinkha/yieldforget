@@ -63,4 +63,24 @@ def decision_markdown(d: dict) -> str:
                 "the answer format requires one.\n")
     if d.get("evidence_ids"):
         out += f"\n**Evidence cited**: {', '.join(map(str, d['evidence_ids']))}\n"
+    if d.get("entry_plan"):
+        from tradingagents.agents.schemas import render_entry_plan
+
+        out += "\n" + render_entry_plan(d["entry_plan"]) + "\n"
     return out
+
+
+def entry_plan_of(d: dict) -> dict | None:
+    """The answer's entry plan, normalised like the agents' (placeholders and formatted prices cleaned);
+    as given when it does not fit the schema, so the local check reports what is wrong with it."""
+    from pydantic import ValidationError
+
+    from tradingagents.agents.schemas import EntryPlan
+
+    raw = d.get("entry_plan")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return EntryPlan.model_validate(raw).model_dump(mode="json")
+    except ValidationError:
+        return raw

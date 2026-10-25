@@ -88,6 +88,70 @@ class TraderAction(StrEnum):
 
 
 # ---------------------------------------------------------------------------
+# Entry plan (Trader proposes, Portfolio Manager approves, revises or rejects)
+# ---------------------------------------------------------------------------
+
+
+class EntryPlanStatus(StrEnum):
+    READY = "ready"
+    CONDITIONAL = "conditional"
+    WAIT = "wait"
+    UNAVAILABLE = "unavailable"
+
+
+class EntryType(StrEnum):
+    MARKET = "market"
+    LIMIT = "limit"
+    CONDITIONAL = "conditional"
+
+
+# How to enter, as prices a broker would accept. Optional everywhere: an older answer without it still
+# parses, and the app checks every plan locally before showing it as actionable. No docstring and few field
+# descriptions: structured output sends both on every call; the instructions live in the three prompts.
+class EntryPlan(BaseModel):
+    status: EntryPlanStatus
+    entry_type: EntryType | None = None
+    entry_price: float | None = None
+    entry_range_low: float | None = None
+    entry_range_high: float | None = None
+    currency: str | None = None
+    trigger: str | None = None
+    earliest_execution: str | None = Field(default=None, description="YYYY-MM-DD")
+    expires_at: str | None = Field(default=None, description="YYYY-MM-DD")
+    evidence_ids: list[str] = Field(default_factory=list)
+    rationale: str | None = None
+
+    @field_validator("entry_price", "entry_range_low", "entry_range_high", mode="before")
+    @classmethod
+    def _nullish_float_to_none(cls, v):
+        return _coerce_optional_float(v)
+
+
+class EntryPlanReview(StrEnum):
+    APPROVED = "approved"
+    REVISED = "revised"
+    REJECTED = "rejected"
+
+
+def render_entry_plan(plan: EntryPlan | dict | None) -> str:
+    """An entry plan as markdown, for reports and the next agent's context."""
+    if plan is None:
+        return "**Entry Plan**: not provided"
+    p = plan.model_dump(mode="json") if isinstance(plan, BaseModel) else dict(plan)
+    rng = (f"{p.get('entry_range_low')}-{p.get('entry_range_high')}"
+           if p.get("entry_range_low") is not None and p.get("entry_range_high") is not None else None)
+    bits = [f"status {p.get('status')}"]
+    for label, value in (("type", p.get("entry_type")), ("price", p.get("entry_price")), ("range", rng),
+                         ("currency", p.get("currency")), ("trigger", p.get("trigger")),
+                         ("earliest", p.get("earliest_execution")), ("expires", p.get("expires_at")),
+                         ("evidence", ", ".join(p.get("evidence_ids") or []) or None)):
+        if value is not None and value != "":
+            bits.append(f"{label} {value}")
+    text = "**Entry Plan**: " + "; ".join(bits)
+    return text + (f"\n\n**Entry Rationale**: {p['rationale']}" if p.get("rationale") else "")
+
+
+# ---------------------------------------------------------------------------
 # Research Manager
 # ---------------------------------------------------------------------------
 
@@ -181,6 +245,7 @@ class TraderProposal(BaseModel):
         default=None,
         description="Optional sizing guidance, e.g. '5% of portfolio'.",
     )
+    entry_plan: EntryPlan | None = None
 
     @field_validator("entry_price", "stop_loss", mode="before")
     @classmethod
@@ -206,6 +271,8 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
                          ("Stop Loss", proposal.stop_loss),
                          ("Position Sizing", proposal.position_sizing)):
         parts.extend(["", f"**{label}**: {value if value is not None and value != '' else 'not provided'}"])
+    if proposal.entry_plan is not None:
+        parts.extend(["", render_entry_plan(proposal.entry_plan)])
     parts.extend([
         "",
         f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
@@ -258,6 +325,8 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    entry_plan: EntryPlan | None = None
+    entry_plan_review: EntryPlanReview | None = None
 
     @field_validator("price_target", mode="before")
     @classmethod
@@ -285,6 +354,9 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     target = decision.price_target if decision.price_target is not None else "not provided"
     parts.extend(["", f"**Price Target**: {target}"])
     parts.extend(["", f"**Time Horizon**: {decision.time_horizon or 'not provided'}"])
+    if decision.entry_plan is not None or decision.entry_plan_review is not None:
+        review = decision.entry_plan_review.value if decision.entry_plan_review else "not stated"
+        parts.extend(["", f"**Entry Plan Review**: {review}", "", render_entry_plan(decision.entry_plan)])
     return "\n".join(parts)
 
 

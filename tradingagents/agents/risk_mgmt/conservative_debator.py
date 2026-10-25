@@ -1,3 +1,4 @@
+from tradingagents.agents.entry_plan import RISK_INSTRUCTION
 from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -37,6 +38,7 @@ Your task is to actively counter the arguments of the Aggressive and Neutral Ana
 
 {instrument_context}
 {portfolio_context}
+{state.get("entry_reference") or ""} {RISK_INSTRUCTION}
 Market Research Report: {market_research_report}
 Social Media Sentiment Report: {sentiment_report}
 Latest World Affairs Report: {news_report}

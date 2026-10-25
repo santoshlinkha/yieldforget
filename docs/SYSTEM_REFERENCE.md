@@ -760,3 +760,107 @@ methods apply only to new runs.
 Consequence: every decision study recorded before 2026-10-25 lacks the model-code binding, so the
 current model reads as untested until a new full study is run. That is deliberate: it is the
 conservative reading of evidence that cannot be tied to the code now running.
+
+## 16. Entry plans (added 2026-10-25)
+
+The agents now say how an entry could be made, and the app checks it. Nothing is executed: the app
+recommends and records, you place the order.
+
+**Flow (no extra model calls).**
+
+1. The **Trader** proposes an `entry_plan` inside its existing structured answer (`TraderProposal.entry_plan`).
+2. The three **risk analysts** read the trader's plan in its proposal text and are asked to challenge its price, trigger, timing and expiry.
+3. The **Portfolio Manager** approves, revises or rejects it (`PortfolioDecision.entry_plan`, `entry_plan_review`).
+
+Only these five prompts carry the entry instructions; the analysts, researchers and research manager do not.
+A pasted chat answer may include the same optional `entry_plan` in its JSON; it is recorded as the manager's
+plan, with no separate trader proposal.
+
+**Plan shape** (all optional; answers without it parse as before):
+
+```json
+{"status": "ready|conditional|wait|unavailable", "entry_type": "market|limit|conditional|null",
+ "entry_price": null, "entry_range_low": null, "entry_range_high": null, "currency": null, "trigger": null,
+ "earliest_execution": "YYYY-MM-DD", "expires_at": "YYYY-MM-DD", "evidence_ids": [], "rationale": null}
+```
+
+**Reference quote** (`agents/entry_plan.reference_quote`, local store only):
+
+- It is the last close on or before the cutoff, **as traded**.
+- On the store's latest session the adjusted close equals the traded close.
+- For an earlier session, the later dividends and splits are undone from cached corporate actions.
+- The basis is "verified" only when those actions were fetched after the store's last session.
+- Agents see it as one line ("Entry reference: …"). The chat packet carries it as evidence item `REF1`.
+
+**Local feasibility check** (`entry_plan.validate`).
+
+Blocks (the plan is kept but cannot be used):
+- the action is not Buy or Overweight (long-only: no short, no entry from a Sell);
+- the reference is missing or its basis is unverified;
+- the reference close is more than one session older than the cutoff;
+- the type is unknown;
+- a limit has no price, or a conditional has no trigger;
+- a price is not positive, a range is unordered, or the entry is outside its range;
+- the currency differs from the quote's;
+- the price is more than 20% from the reference;
+- the price matches the adjusted close rather than the traded one;
+- execution is earlier than the session after the reference close, or not on a trading session;
+- the plan expires before it starts;
+- the stock was sold on the planned entry day (a day trade);
+- the name limit is reached;
+- settled cash after reservations is below the minimum order;
+- the whole-IRA concentration cap would be exceeded.
+
+Warnings: more than 8% from the reference, a buy limit above the last close, no currency, no expiry, an
+expiry longer than 20 sessions, an old quote, already held, stop or target on the wrong side, and always
+"no exit on the entry session".
+
+Sizing uses the capital settings and the stock rules:
+
+```
+min(position cap, settled cash after reservations / free name slots)
+```
+
+It shows the stop-loss, the target, reward to risk and the loss at the stop. States are: feasible,
+feasible if triggered, wait (with its reconsideration condition), no plan, blocked, expired.
+
+**Persistence** (migration 6, table `entry_plans`, append-only):
+- one row per stage (trader, portfolio_manager), linked by `parent_id`, with the review;
+- the cutoff, the run folder, the source and the side;
+- the plan as given, the reference quote, the check, the capital settings version and hash, and the rules;
+- the evidence: cited IDs, packet ID, and the model decision as of that day.
+
+When the plans are read, the newest final plan is current, earlier ones are marked superseded by the
+next, and a plan past its expiry is expired. Each agent run also writes `entry_plan.json` beside its
+reports.
+
+**UI.** The ticker page has a new card, "Agents' entry plan", for the current plan. It shows:
+- the manager's action and review, and the trader's action;
+- the reference price with its session and basis;
+- the evidence (packet, model run, unknown cited IDs);
+- the final plan: status, type, price or range, condition (or "Reconsider when" for a wait), earliest
+  execution and the first allowed day, expiry, evidence and rationale;
+- the app's check with its blocks and warnings, the size, the stop and target, and reward to risk.
+
+The trader's proposal is shown separately, below the final plan. Earlier plans sit behind a fold, marked
+superseded or expired. A missing value reads "Insufficient data", never zero. End-to-end example:
+`tests/test_webapp.py::test_an_entry_plan_from_a_pasted_answer_is_checked_kept_and_shown`. The plan there
+is blocked because the test account has no settled cash.
+
+**Measured token impact** (o200k_base tokenizer, an approximation for the Gemini and Groq tokenizers):
+
+| Item | Before | After | Added |
+|---|---|---|---|
+| Trader output schema | 426 | 806 | +380 |
+| Portfolio Manager output schema | 392 | 826 | +434 |
+| Trader prompt (instruction + reference line) | | | +120 |
+| Each risk analyst prompt (instruction + reference + plan in the trader's text) | | | +128 (x3 per round) |
+| Portfolio Manager prompt | | | +167 |
+| Model output (typical plan, trader + manager) | | | about +200 |
+| **Whole agent run** | | | **about +1,485 input, +200 output** |
+| Chat prompt instructions | 391 | 540 | +149 |
+| Chat packet `REF1` item | | | +56 |
+
+The schemas were trimmed for this: no docstring or field descriptions on `EntryPlan`, since structured
+output sends both on every call. `docs/AGENT_API_IO.txt` is built from a recorded run, so it shows the
+old prompts until the next agent run is recorded.

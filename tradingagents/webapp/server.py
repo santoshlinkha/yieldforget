@@ -756,6 +756,11 @@ class App:
                 out = {**result, "how": how, "ticker": ticker, "provider": cfg["llm_provider"],
                        "model": cfg["deep_think_llm"], "fell_back": bool(errors)}
                 out["final"] = self._write_decision(ticker, day, folder, out, cfg)
+                plans = result.get("entry_plans") or {}
+                if plans.get("trader") or plans.get("final"):
+                    out["entry_plans"] = self._record_entry_plans(
+                        ticker, day, folder, plans.get("trader"), plans.get("final"), result.get("entry_reference"),
+                        source=who, evidence={"model_decision": out["final"].get("decision_id")})
                 return out
             job.log.append(f"{ticker}: {errors[-1]}")
         raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
@@ -833,6 +838,23 @@ class App:
         final = self._write_decision(ticker, day, folder, {"rating": decision["rating"], "fell_back": False,
                                                            "abstained": decision.get("insufficient_evidence")},
                                      None, models=source)
+        from tradingagents.agents.manual import entry_plan_of
+
+        plan = entry_plan_of(decision)
+        entry = None
+        if plan is not None:   # a chat answer is the manager's view: no separate trader proposal
+            ref = None
+            if packet and (packet.get("entry_reference") or {}).get("close_as_traded") is not None:
+                r = packet["entry_reference"]
+                ref = {"ticker": ticker, "cutoff": day, "session": r["session"], "price": r["close_as_traded"],
+                       "currency": r.get("currency"), "verified": True, "how": r["basis"], "basis": "as traded",
+                       "source": f"evidence packet {pid} (REF1)"}
+            entry = self._record_entry_plans(ticker, day, folder, None,
+                                             {"rating": decision["rating"], "plan": plan,
+                                              "price_target": decision.get("price_target")},
+                                             ref, source=source,
+                                             evidence={"packet_id": pid, "unknown_cited_ids": unknown,
+                                                       "model_decision": final.get("decision_id")})
         provenance = {"source": source, "prompt_version": PROMPT_VERSION, "packet_id": pid, "cited_ids": cited,
                       "unknown_cited_ids": unknown, "abstained": bool(decision.get("insufficient_evidence")),
                       "rating": decision["rating"], "rating_recorded": recorded,
@@ -840,9 +862,33 @@ class App:
                       "saved_at": datetime.now().astimezone().isoformat(timespec="seconds")}
         (folder / "provenance.json").write_text(json.dumps(provenance, indent=1), encoding="utf-8")
         return {"ticker": ticker, "date": day, "rating": decision["rating"], "final": final, "recorded": recorded,
-                "packet_id": pid, "unknown_cited_ids": unknown,
+                "packet_id": pid, "unknown_cited_ids": unknown, "entry_plans": entry,
                 "note": None if recorded else "a rating for this ticker and day was already on record (it stays; "
                                                  "the verdict uses that one)"}
+
+    def _record_entry_plans(self, ticker: str, day: str, folder: Path, trader: dict | None, final: dict | None,
+                            ref: dict | None, source: str, evidence: dict | None = None) -> dict:
+        """Check a run's entry plans against the local quote and this account, and save them (append-only).
+        A failure here never loses the run: the plans stay in the run's entry_plan.json."""
+        from tradingagents.agents import entry_plan as EP
+
+        try:
+            ref = ref if ref and ref.get("session") else EP.reference_quote(ticker, day, self.cache_dir)
+            account = EP.account_view(self.store, ticker, _today(), self.cache_dir)
+            return EP.record(self.store, ticker, day, str(folder), source, ref, account, trader or None,
+                             final or None, evidence)
+        except Exception as exc:
+            logger.warning("entry plans for %s on %s not recorded: %s", ticker, day, exc)
+            return {"error": str(exc)[:200]}
+
+    def entry_plans(self, ticker: str) -> dict:
+        """Every recorded entry plan for a ticker, by run: current, superseded or expired."""
+        from tradingagents.agents.entry_plan import plans_for
+
+        ticker = ticker.strip().upper()
+        if not ticker:
+            raise ValueError("which ticker?")
+        return {"ticker": ticker, "runs": plans_for(self.store.con, ticker), "today": _today()}
 
     def _write_decision(self, ticker: str, day: str, folder: Path, result: dict, cfg: dict | None,
                         models: str | None = None) -> dict:
@@ -1616,6 +1662,8 @@ def make_handler(app: App):
                     self._json(app.signals(query.get("ticker")))
                 elif url.path == "/api/analyze":
                     self._json(app.analysis_state())
+                elif url.path == "/api/entry-plans":
+                    self._json(app.entry_plans(query.get("ticker", "")))
                 elif url.path == "/api/manual-prompt":
                     self._json(app.manual_prompt(query.get("ticker", ""), query.get("date", "")))
                 elif url.path == "/api/ai-decisions":

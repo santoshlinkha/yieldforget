@@ -324,7 +324,18 @@ class TradingAgentsGraph:
             ),
             instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
+            entry_reference=self.entry_reference(company_name, trade_date),
         )
+
+    def entry_reference(self, company_name, trade_date) -> dict | None:
+        """The as-traded close entry plans are priced against, from the local price store only."""
+        from tradingagents.agents.entry_plan import reference_quote
+
+        try:
+            return reference_quote(company_name, str(trade_date), Path(self.config["data_cache_dir"]) / "optimizer")
+        except Exception as exc:   # no reference: the prompts ask for wait or unavailable
+            logger.info("no entry reference for %s: %s", company_name, exc)
+            return None
 
     def settle_pending(self, company_name):
         """Settle this ticker's decisions whose holding window has now traded.

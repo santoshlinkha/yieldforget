@@ -9,11 +9,12 @@ from tradingagents.agents.context import (
     get_language_instruction,
     get_portfolio_context_from_state,
 )
+from tradingagents.agents.entry_plan import TRADER_INSTRUCTION
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
 from tradingagents.agents.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
-    invoke_structured_or_freetext,
+    invoke_structured,
 )
 
 
@@ -57,6 +58,7 @@ def create_trader(llm):
                     "instrument's quote currency (for example 189.5), never a percentage "
                     "or a range; convert a percentage distance to the price level it "
                     "implies, or omit the field if you cannot state a number. "
+                    + TRADER_INSTRUCTION
                     + NO_EXTERNAL_TOOLS
                     + get_language_instruction()
                 ),
@@ -66,6 +68,7 @@ def create_trader(llm):
                 "content": (
                     f"Here is the research team's investment plan for {company_name}. "
                     f"{instrument_context}\n\n"
+                    f"{state.get('entry_reference') or ''}\n\n"
                     f"{report_section}"
                     f"{portfolio_context}\n\n"
                     f"Proposed Investment Plan:\n{investment_plan}\n\n"
@@ -82,17 +85,18 @@ def create_trader(llm):
             },
         ]
 
-        trader_plan = invoke_structured_or_freetext(
-            structured_llm,
-            llm,
-            messages,
-            render_trader_proposal,
-            "Trader",
-        )
+        # The structured proposal is kept (not only its text) so the entry plan reaches the app as data.
+        proposal = invoke_structured(structured_llm, messages, "Trader")
+        trader_plan = render_trader_proposal(proposal) if proposal is not None else llm.invoke(messages).content
+        entry = ({"action": proposal.action.value, "stop_loss": proposal.stop_loss,
+                  "entry_price": proposal.entry_price,
+                  "plan": proposal.entry_plan.model_dump(mode="json") if proposal.entry_plan else None}
+                 if proposal is not None else {})
 
         return {
             "messages": [AIMessage(content=trader_plan)],
             "trader_investment_plan": trader_plan,
+            "trader_entry": entry,
         }
 
     return trader_node

@@ -196,3 +196,38 @@ def test_a_pasted_answer_is_tied_to_its_packet_and_a_second_one_archives_the_fir
     assert sorted({r["run"] or "" for r in runs}) == ["", f"archive/{archived[0].name}"]   # roots may repeat a run
     rated = [r for r in page["reports"]["ratings"] if r["date"] == "2026-10-23"]
     assert rated and rated[0]["abstained"]
+
+
+def test_an_entry_plan_from_a_pasted_answer_is_checked_kept_and_shown(server, monkeypatch):
+    from tradingagents.agents import entry_plan, packet
+
+    base, tmp_path, _ = server
+    idx = pd.bdate_range(end="2026-10-23", periods=260)
+    close = pd.Series(range(100, 360), index=idx, dtype=float)
+    monkeypatch.setattr(packet, "load_inputs", lambda *a, **k: {
+        "ticker": "AAA", "cutoff": "2026-10-23", "ohlcv": None, "facts": None, "macro": {}, "news": [],
+        "bars": pd.DataFrame({"Close": close, "High": close + 1, "Low": close - 1, "Volume": 1e6}),
+        "profile": {"quoteType": "EQUITY"}, "profile_fetched": None})
+    monkeypatch.setattr(entry_plan, "reference_quote", lambda t, d, c: {
+        "ticker": t, "cutoff": d, "session": "2026-10-23", "price": 359.0, "adjusted": 359.0, "currency": "USD",
+        "verified": True, "how": "the store's latest session", "basis": "as traded"})
+    status, prompt = _call(base, "/api/manual-prompt?ticker=AAA&date=2026-10-23")
+    assert status == 200 and '"REF1"' in prompt["prompt"] and '"close_as_traded":359.0' in prompt["prompt"]
+
+    plan = {"status": "ready", "entry_type": "limit", "entry_price": 355.0, "entry_range_low": None,
+            "entry_range_high": None, "currency": "USD", "trigger": None, "earliest_execution": "2026-10-26",
+            "expires_at": "2026-10-30", "evidence_ids": ["REF1"], "rationale": "a pullback"}
+    answer = "Analysis [PX1].\n```json\n" + json.dumps(
+        {"rating": "Buy", "executive_summary": "s", "investment_thesis": "t", "packet_id": prompt["packet_id"],
+         "evidence_ids": ["PX1"], "entry_plan": plan}) + "\n```"
+    status, saved = _call(base, "/api/manual-answer", {"ticker": "AAA", "date": "2026-10-23", "text": answer})
+    assert status == 200 and saved["entry_plans"]["plans"][0]["stage"] == "portfolio_manager"
+    status, shown = _call(base, "/api/entry-plans?ticker=AAA")
+    run = shown["runs"][0]
+    assert status == 200 and run["current"] and run["trader"] is None
+    final = run["final"]
+    assert final["plan"]["entry_price"] == 355.0 and final["reference"]["source"].startswith("evidence packet")
+    assert final["evidence"]["packet_id"] == prompt["packet_id"] and final["action"] == "Buy"
+    # The fixture's Trading sleeve holds no settled cash: the plan is kept, blocked, with that reason.
+    assert final["validation"]["state"] == "blocked" and not final["validation"]["feasible"]
+    assert any(b.startswith("settled cash: $0.00") for b in final["validation"]["blocks"])

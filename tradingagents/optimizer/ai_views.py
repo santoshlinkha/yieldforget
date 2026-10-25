@@ -117,7 +117,12 @@ def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, repor
         graph = TradingAgentsGraph(analysts, config=config, callbacks=[callback, RequestLog(folder)])
         state, rating = graph.propagate(ticker, trade_date)
         graph.save_reports(state, ticker, folder)
-        return {"rating": rating, "date": trade_date, "folder": str(folder)}
+        from tradingagents.agents.entry_plan import from_state, save_run_file
+
+        plans = from_state(state)
+        save_run_file(folder, plans, state.get("entry_reference_quote"))
+        return {"rating": rating, "date": trade_date, "folder": str(folder), "entry_plans": plans,
+                "entry_reference": state.get("entry_reference_quote") or None}
 
     return gateway.run(
         task="analysis", provider=provider, model=config["deep_think_llm"], schema_version=RATING_SCHEMA,
