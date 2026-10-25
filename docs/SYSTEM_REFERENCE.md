@@ -537,3 +537,30 @@ API (no stock page yet): `POST /api/stocks/run`, `GET /api/stocks[?run=]`,
 - **Chronos-2** may have seen the test prices in pretraining; only the live record is clean.
 - **Paid AI** features are blocked until a model price is configured.
 - **The app never trades**; recommendations are research for the owner to review.
+
+---
+
+## 12. Daily stock decisions, capital settings and challengers (added later on 2026-10-24)
+
+Full detail: `docs/DECISIONS.md`. In brief:
+
+- **Capital settings** (Settings > Capital; `book capital`; `/api/capital`): Trading capital $1,000 (net
+  funding target, not a daily budget), Investing capital $4,800, daily investment $27.61 (planned
+  purchase per session, bounded by settled cash). Validated, versioned, snapshotted into every record;
+  changes produce reviewable transfer proposals and never move money or retrain models.
+- **Execution contract** and one **position engine** for labels, simulation and the shadow account:
+  next-close entry, close-confirmed levels filled at the next close, exact deadlines, no same-day exits,
+  T+1, dividends as cash, executable prices.
+- **Foundations fixed** after verification: point-in-time membership (fja05680/sp500; survivorship
+  partial), members-only ranking with requested-ticker invariance, unknown capex, split-consistent
+  valuation, expm1 barriers, no zero cash returns, per-series FRED lags, as-of pricing, missing risk
+  blocks approval, limits including holdings, evidence bound to the exact design. The original stock
+  study's evidence no longer applies (new thresholds version `thr-016cb9da59`).
+- **Decisions**: ENTER / PAPER ENTER / WAIT / HOLD / REDUCE / EXIT / REVIEW with size, execution date,
+  expected net P&L and spread, P(profit), P(large loss), levels, deadline, reasons and blocks.
+- **Decision study**: XGBoost learning-to-rank IC 0.020 (0.005, 0.036) in development; trade-quality
+  probabilities worse than the base rate; the complete policy trails cash-flow-matched SPY (best
+  development policy +210% vs SPY +358% over 2013 to mid-2024; exploratory +5.0% vs SPY +43% and cash
+  +9.9%). **Not validated**: the app is in experimental mode (WAIT; PAPER ENTER feeds the shadow account).
+- **Challengers** on 150 stocks: no ranking skill for PatchTST, Chronos-2, TimesFM 2.5; Kronos-mini
+  0.041 (0.016, 0.067) in development but likely contaminated and 0.014 (not significant) after.

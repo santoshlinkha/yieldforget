@@ -135,6 +135,7 @@ def simulate(signals: pd.DataFrame, px: pd.DataFrame, div: pd.DataFrame, policy:
     cap (existing holdings included); exits are close-confirmed every session; dividends are cash."""
     sessions = px.index[(px.index >= pd.Timestamp(start)) & (px.index <= pd.Timestamp(end))]
     book = Book(px.index, cash=capital)
+    marks = px.ffill()          # lots are marked at their last known price; trades need a price that day
     pending, log = [], []
     by_date = {d: g.droplevel("date") for d, g in signals.groupby(level="date")}
     equity, exposure = [], []
@@ -155,9 +156,9 @@ def simulate(signals: pd.DataFrame, px: pd.DataFrame, div: pd.DataFrame, policy:
             if lot in book.lots and np.isfinite(p) and day > lot.entry_date:
                 book.sell(day, lot, p, reason)
         book._due = book.exits_due(day, prices)
-        value = book.value(prices)
+        value = book.value(marks.loc[day])
         equity.append((day, value))
-        held = sum(l.shares * float(prices.get(l.ticker, 0) or 0) for l in book.lots)
+        held = sum(l.shares * float(marks.loc[day].get(l.ticker, 0) or 0) for l in book.lots)
         exposure.append(held / value if value else 0.0)
         if day in by_date:
             today = by_date[day]

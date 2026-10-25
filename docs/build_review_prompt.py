@@ -119,7 +119,8 @@ and mismatches with the reference above.
 
 def excerpts() -> str:
     from tradingagents.research import walkforward
-    from tradingagents.stocks import fundamentals, ideas, macro, panel, targets
+    from tradingagents.ledger import capital
+    from tradingagents.stocks import daily, fundamentals, ideas, macro, panel, positions, targets
 
     parts = [("Targets and labels (tradingagents/stocks/targets.py)", [targets.Thresholds, targets.labels,
                                                                      targets.current_trend]),
@@ -129,7 +130,11 @@ def excerpts() -> str:
              ("Economic vintages (tradingagents/stocks/macro.py)", [macro.as_known]),
              ("Cost estimate and panel (tradingagents/stocks/panel.py)", [panel.spread_cost, panel.build]),
              ("Walk-forward split (tradingagents/research/walkforward.py)", [walkforward.walk_forward]),
-             ("Recommendation sizing (tradingagents/stocks/ideas.py)", [ideas.make])]
+             ("Recommendation sizing (tradingagents/stocks/ideas.py)", [ideas.make]),
+             ("Position engine (tradingagents/stocks/positions.py)", [positions.Policy, positions.trades]),
+             ("Daily decision gates and exits (tradingagents/stocks/daily.py)", [daily.evidence, daily.review_lot,
+                                                                                daily.entries]),
+             ("Capital settings (tradingagents/ledger/capital.py)", [capital.reallocation, capital.daily_plan])]
     out = []
     for title, fns in parts:
         out.append(f"## {title}\n")

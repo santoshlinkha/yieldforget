@@ -83,7 +83,7 @@ def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: li
                                "reason": item["reason"], "net": gross - lot.cost_rt, "spy": spy_ret})
         due = [{"ticker": lot.ticker, "entry": str(lot.entry_date.date()), "reason": why}
                for lot, why in book.exits_due(day, prices)]
-        value = book.value(prices)
+        value = book.value(px.ffill().loc[day])     # last known price for a lot without one today
         bench = state["spy_units"] * float(spy.loc[day]) if state.get("spy_units") else state["capital"]
         state.setdefault("equity", []).append([str(day.date()), value, bench])
     value_now = book.value(px.loc[cutoff]) if cutoff in px.index else book.cash

@@ -634,6 +634,33 @@ API (no stock page yet): `POST /api/stocks/run`, `GET /api/stocks[?run=]`,
 
 ---
 
+## 12. Daily stock decisions, capital settings and challengers (added later on 2026-10-24)
+
+Full detail: `docs/DECISIONS.md`. In brief:
+
+- **Capital settings** (Settings > Capital; `book capital`; `/api/capital`): Trading capital $1,000 (net
+  funding target, not a daily budget), Investing capital $4,800, daily investment $27.61 (planned
+  purchase per session, bounded by settled cash). Validated, versioned, snapshotted into every record;
+  changes produce reviewable transfer proposals and never move money or retrain models.
+- **Execution contract** and one **position engine** for labels, simulation and the shadow account:
+  next-close entry, close-confirmed levels filled at the next close, exact deadlines, no same-day exits,
+  T+1, dividends as cash, executable prices.
+- **Foundations fixed** after verification: point-in-time membership (fja05680/sp500; survivorship
+  partial), members-only ranking with requested-ticker invariance, unknown capex, split-consistent
+  valuation, expm1 barriers, no zero cash returns, per-series FRED lags, as-of pricing, missing risk
+  blocks approval, limits including holdings, evidence bound to the exact design. The original stock
+  study's evidence no longer applies (new thresholds version `thr-016cb9da59`).
+- **Decisions**: ENTER / PAPER ENTER / WAIT / HOLD / REDUCE / EXIT / REVIEW with size, execution date,
+  expected net P&L and spread, P(profit), P(large loss), levels, deadline, reasons and blocks.
+- **Decision study**: XGBoost learning-to-rank IC 0.020 (0.005, 0.036) in development; trade-quality
+  probabilities worse than the base rate; the complete policy trails cash-flow-matched SPY (best
+  development policy +210% vs SPY +358% over 2013 to mid-2024; exploratory +5.0% vs SPY +43% and cash
+  +9.9%). **Not validated**: the app is in experimental mode (WAIT; PAPER ENTER feeds the shadow account).
+- **Challengers** on 150 stocks: no ranking skill for PatchTST, Chronos-2, TimesFM 2.5; Kronos-mini
+  0.041 (0.016, 0.067) in development but likely contaminated and 0.014 (not significant) after.
+
+---
+
 # Appendix: source of the critical functions
 
 These are copied from the code at build time. Review them for leakage, off-by-one errors,
@@ -653,6 +680,7 @@ class Thresholds:
     sideways_range_k: float = 1.25
     loss_k: float = 1.5
     drawdown_k: float = 1.5
+    contract: str = "v2"      # v2: position risks from the next-close entry; arithmetic barriers via expm1
 
     def version(self) -> str:
         return "thr-" + hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()[:10]
@@ -700,7 +728,8 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
     end_close = fwd_c[:, -1, :]
 
     # The session (1 to h) on which the drawdown first went past its threshold: an alarm's lead time.
-    dd_line = -(np.exp(th.drawdown_k * sigma_h) - 1)
+    # A fall of k sigma in log terms is an arithmetic return of expm1(-k sigma).
+    dd_line = np.expm1(-th.drawdown_k * sigma_h)
     breached = (fwd_l / start[:, None, :] - 1) <= dd_line[:, None, :]
     dd_day = np.where(breached.any(axis=1), breached.argmax(axis=1) + 1.0, np.nan)
 
@@ -720,8 +749,15 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
     stock_ret = (logc[exit_] - logc[entry]) * np.where(tradable_ok, 1.0, np.nan)
     lc = np.log(cash.reindex(sessions).ffill().to_numpy())
     ls = np.log(spy.reindex(sessions).ffill().to_numpy())
-    cash_ret = np.nan_to_num(lc[exit_] - lc[entry])
+    cash_ret = lc[exit_] - lc[entry]          # missing before the cash fund existed: no label, not zero
     spy_ret = ls[exit_] - ls[entry]
+
+    # Position risks, on the actual holding: entry at close t+1, adverse excursion over the lows of
+    # t+2..t+1+h relative to the entry close, never above zero; terminal on the exit close.
+    entry_px = c[entry]
+    later_lows = _forward(lo, entry, horizon)              # lows of entry+1 .. entry+h
+    mae = np.minimum(np.nanmin(later_lows, axis=1) / entry_px - 1, 0.0) * np.where(tradable_ok, 1.0, np.nan)
+    pos_ret = np.expm1(stock_ret)
 
     def frame(values, mask_to=None):
         v = np.asarray(values, dtype=float)
@@ -742,12 +778,15 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
         "both_same_bar": frame(both_same_bar, r),
         "large_loss": frame(r <= -th.loss_k * sigma_h, r),
         "deep_drawdown": frame(drawdown <= dd_line, r),
+        "mae_position": frame(mae),
+        "pos_large_loss": frame(pos_ret <= np.expm1(-th.loss_k * sigma_h), stock_ret),
+        "pos_deep_drawdown": frame(mae <= dd_line, mae),
         "dd_breach_day": frame(dd_day, r),
         "trend_state": frame(state, r),
     })
     # Where sigma_h is unknown (too little history), no threshold applies: no event label.
     unknown = out["sigma_h"].isna()
-    out.loc[unknown, ["large_loss", "deep_drawdown", "trend_state"]] = np.nan
+    out.loc[unknown, ["large_loss", "deep_drawdown", "trend_state", "pos_large_loss", "pos_deep_drawdown"]] = np.nan
     label_end = pd.Series(sessions[np.minimum(rows + 1 + horizon, n - 1)], index=dates)
     label_end[~tradable_ok[:, 0]] = pd.NaT
     out["label_end"] = label_end.reindex(out.index.get_level_values(0)).to_numpy()
@@ -785,9 +824,9 @@ def _features(known: dict, splits: list | None) -> dict:
         out["gross_margin"] = _ratio(gross, revenue)
         out["op_margin"] = _ratio(get("op_income", "annual").get(end_y), revenue)
         out["net_margin"] = _ratio(get("net_income", "annual").get(end_y), revenue)
-        ocf = get("ocf", "annual").get(end_y)
-        if ocf is not None:
-            fcf = ocf - (get("capex", "annual").get(end_y) or 0.0)
+        ocf, capex = get("ocf", "annual").get(end_y), get("capex", "annual").get(end_y)
+        if ocf is not None and capex is not None:     # a missing capex is unknown, not zero
+            fcf = ocf - capex
             out["fcf_y"], out["fcf_margin"] = fcf, _ratio(fcf, revenue)
         out["net_income_y"] = get("net_income", "annual").get(end_y, np.nan)
     end_q, rq = _latest(get("revenue", "quarter"))
@@ -807,6 +846,7 @@ def _features(known: dict, splits: list | None) -> dict:
     end_s, sh = _latest(shares)
     if end_s:
         out["shares_i"] = sh
+        out["shares_end_ord"] = float(_day(end_s).toordinal())   # the date the count is as of
         before = _year_before(shares, end_s, slack=60)
         if before is not None:
             prior_end = (_day(end_s) - timedelta(days=365)).isoformat()
@@ -845,10 +885,16 @@ def history(facts: dict, dates: pd.DatetimeIndex, splits: list | None = None) ->
 ```
 
 ```python
-def valuation(fund: pd.DataFrame, raw_price: pd.Series) -> pd.DataFrame:
-    """Yields on the market value at each date: the price as it then traded times the share
-    count then reported (both pre-split when a split came later, so they match)."""
-    cap = raw_price.reindex(fund.index) * fund["shares_i"]
+def valuation(fund: pd.DataFrame, raw_price: pd.Series, splits: list | None = None) -> pd.DataFrame:
+    """Yields on the market value at each date: the price as it then traded times the share count
+    reported, carried to that date's split basis (a split between the count's date and the
+    valuation date multiplies the count), so price and shares always match."""
+    shares = fund["shares_i"].copy()
+    for i, (d, ordv) in enumerate(zip(fund.index, fund.get("shares_end_ord", pd.Series(np.nan, index=fund.index)),
+                                      strict=True)):
+        if np.isfinite(ordv):
+            shares.iloc[i] *= _split_factor(splits, date.fromordinal(int(ordv)).isoformat(), d.date().isoformat())
+    cap = raw_price.reindex(fund.index) * shares
     cap = cap.where(cap > 0)
     return pd.DataFrame({"earnings_yield": fund["net_income_y"] / cap, "sales_yield": fund["revenue_y"] / cap,
                          "fcf_yield": fund["fcf_y"] / cap, "book_yield": fund["equity_i"] / cap}, index=fund.index)
@@ -889,20 +935,24 @@ def spread_cost(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame) -> p
 def build(data: StockData, horizon: int, dates: pd.DatetimeIndex | None = None, th: Thresholds = Thresholds(),
           groups=DEFAULT_GROUPS, start: str = "2006-01-01", macro: pd.DataFrame | None = None) -> pd.DataFrame:
     """The panel for one horizon. ``macro``: precomputed economic features (shared across horizons)."""
-    tickers = data.stocks
+    tickers = sorted(data.stocks)          # a fixed order: results never depend on input order
     sessions = data.close.index
     if dates is None:
         dates = decision_dates(sessions, start=start, every=every_for(horizon)).union(pd.DatetimeIndex([sessions[-1]]))
+    # Point-in-time membership is applied before any cross-sectional ranking: ranks compare a stock
+    # only with that date's members, and requested non-members never move a member's rank.
+    member = member_mask(data, dates, tickers)
     frames = []
     if "technical" in groups:
         for name, frame in _technical(data, tickers, dates).items():
             if name not in GROUPS["technical"] and name != "vol_3m":
                 continue
             sampled = frame.reindex(dates)
-            frames.append((sampled if name in UNRANKED else _rank(sampled)).stack(future_stack=True).rename(name))
+            frames.append((sampled if name in UNRANKED else rank_against(sampled, member))
+                          .stack(future_stack=True).rename(name))
     if "fundamental" in groups:
         for name, frame in _fundamental(data, tickers, dates).items():
-            frames.append(_rank(frame).stack(future_stack=True).rename(name))
+            frames.append(rank_against(frame, member).stack(future_stack=True).rename(name))
     panel = pd.concat(frames, axis=1) if frames else pd.DataFrame(
         index=pd.MultiIndex.from_product([dates, tickers]))
     panel.index.names = ["date", "ticker"]
@@ -925,11 +975,12 @@ def build(data: StockData, horizon: int, dates: pd.DatetimeIndex | None = None, 
         .reindex(idx.get_level_values(0)).to_numpy()
     targets = labels(close, high, low, cash, data.close["SPY"], dates, horizon, th)
     panel = panel.join(targets)
-    added = pd.Series({t: pd.Timestamp(i["added"]) for t, i in data.info.items() if i.get("added")})
-    when = added.reindex(idx.get_level_values(1)).to_numpy()
-    in_index = pd.isna(when) | (idx.get_level_values(0).to_numpy() >= when)
-    requested = idx.get_level_values(1).isin(data.requested)
-    panel["in_index"] = in_index | requested
+    # ``in_index``: a member of the reference universe on that date. Only these rows train or score
+    # models. Requested stocks outside it are forecast, never trained on, so asking about a stock
+    # cannot change the models or anyone else's forecast.
+    panel["in_index"] = member.stack(future_stack=True).reindex(idx).fillna(False).to_numpy(dtype=bool)
+    panel["requested"] = idx.get_level_values(1).isin(data.requested)
+    panel["removed"] = idx.get_level_values(1).isin([t for t, i in data.info.items() if i.get("removed")])
     # A row needs a price on its date and a year of history.
     have = close.reindex(dates).stack(future_stack=True).reindex(idx).notna().to_numpy()
     year = raw_vol.reindex(dates).stack(future_stack=True).reindex(idx).notna().to_numpy() & \
@@ -1017,7 +1068,10 @@ def make(con, store, cache_dir, run_id: str | None = None, horizon: int = 20, as
     state = store.ledger.state(sleeve, as_of)
     rows = [f for f in run["forecasts"] if f["horizon"] == horizon]
     tickers = [f["ticker"] for f in rows]
-    last = _prices(cache_dir, [*tickers, *state.positions]).ffill().iloc[-1]
+    # Prices as of the decision date, never later ones; a price over a week old is flagged below.
+    known = _prices(cache_dir, [*tickers, *state.positions]).ffill().loc[:pd.Timestamp(as_of)]
+    last = known.iloc[-1] if len(known) else pd.Series(dtype=float)
+    price_day = known.index[-1].date() if len(known) else None
     held_value = sum(q * float(last.get(t, 0) or 0) for t, q in state.positions.items())
     sleeve_value = held_value + state.cash.total
     available = state.cash.available
@@ -1031,20 +1085,35 @@ def make(con, store, cache_dir, run_id: str | None = None, horizon: int = 20, as
                 "p_large_loss": fc.get("p_large_loss"), "evidence": (f.get("evidence_status") or {}).get("return"),
                 "reasons": list(f.get("reasons") or [])}
         flagged = f["status"] != "ok" or any(r.startswith(("stale", "insufficient", "no trading")) for r in line["reasons"])
+        if price_day is None or (as_of - price_day).days > 7:
+            flagged = True
+            line["reasons"].append(f"price as of {price_day}: too old for {as_of}")
+        risk = fc.get("p_large_loss")
+        risk_ok = isinstance(risk, (int, float)) and np.isfinite(risk) and 0 <= risk <= 1
         if f["status"] != "ok" or fc.get("net") is None:
             line["action"] = "abstain"
+        elif not risk_ok and fc["net"] > 0:
+            # A missing or invalid risk estimate blocks approval; it is never read as zero risk.
+            line["action"] = "watch (risk estimate missing or invalid: approval blocked)"
         elif fc["net"] <= 0:
             line["action"] = "consider reducing (no short orders)" if held > 0 else "avoid (no short orders)"
-        elif line["evidence"] == "backed" and (fc.get("p_large_loss") or 0) <= rules["max_large_loss_prob"] and not flagged:
+        elif line["evidence"] == "backed" and risk <= rules["max_large_loss_prob"] and not flagged:
             line["action"] = "buy candidate"
             buys.append(line)
         else:
             why = "return evidence not backed by the final test" if line["evidence"] != "backed" else \
-                "large-loss probability above the cap" if (fc.get("p_large_loss") or 0) > rules["max_large_loss_prob"] \
+                "large-loss probability above the cap" if risk > rules["max_large_loss_prob"] \
                 else "data-quality flag"
             line["action"] = f"watch ({why})"
         lines.append(line)
-    buys = sorted(buys, key=lambda x: -x["net"])[: rules["max_names"]]
+    # The name limit counts what Trading already holds, not only new buys.
+    held_names = {t for t, q in state.positions.items() if q > 1e-9}
+    new_slots = max(0, rules["max_names"] - len(held_names))
+    ranked = sorted(buys, key=lambda x: -x["net"])
+    buys = [b for b in ranked if b["ticker"] in held_names] + [b for b in ranked if b["ticker"] not in held_names][:new_slots]
+    for b in ranked:
+        if b not in buys:
+            b["action"] = f"watch (name limit: {rules['max_names']} names including holdings)"
     sizes = {}
     if buys:
         per = min(rules["max_position_share"] * sleeve_value, available / len(buys))
@@ -1071,4 +1140,283 @@ def make(con, store, cache_dir, run_id: str | None = None, horizon: int = 20, as
         con.execute("INSERT INTO stock_ideas VALUES (?, ?, ?, ?, ?, ?)",
                     (idea_id, run["id"], now_utc(), sleeve, horizon, json.dumps(payload, default=str)))
     return {"id": idea_id, **payload}
+```
+
+## Position engine (tradingagents/stocks/positions.py)
+
+```python
+@dataclass(frozen=True)
+class Policy:
+    """An exit policy. ``kind``: 'fixed' (exit at the deadline only) or 'barrier' (close-confirmed
+    profit and risk levels, with the deadline). Levels are multiples of sigma_H, the daily EWMA
+    volatility at the decision times sqrt(H), turned into arithmetic levels with expm1."""
+    name: str = "barrier_20"
+    kind: str = "barrier"
+    horizon: int = 20               # H: the maximum holding period, in sessions
+    profit_k: float = 1.0
+    risk_k: float = 1.0
+
+    def version(self) -> str:
+        return "pol-" + hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()[:10]
+
+    def levels(self, sigma_daily: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(profit level, risk level) as arithmetic returns from the entry close."""
+        s = np.asarray(sigma_daily, dtype=float) * np.sqrt(self.horizon)
+        if self.kind == "fixed":
+            return np.full(s.shape, np.inf), np.full(s.shape, -np.inf)
+        return np.expm1(self.profit_k * s), np.expm1(-self.risk_k * s)
+```
+
+```python
+def trades(px: pd.DataFrame, low_adj: pd.DataFrame, close_adj: pd.DataFrame, div: pd.DataFrame,
+           decisions: pd.DataFrame, policy: Policy, cost_rt: np.ndarray | None = None) -> pd.DataFrame:
+    """The outcome of entering each decision row under ``policy`` (vectorized).
+
+    ``decisions``: rows with columns ``date`` (decision close t), ``ticker`` and ``sigma`` (daily
+    EWMA volatility at t). Returns entry and exit dates, the exit reason, holding sessions, gross
+    and net arithmetic return (price change plus dividends, less ``cost_rt``), the adverse
+    excursion during the position, and whether the outcome is complete.
+    """
+    sessions = px.index
+    cols = px.columns.get_indexer(decisions["ticker"])
+    t_idx = sessions.get_indexer(pd.to_datetime(decisions["date"]))
+    if (cols < 0).any() or (t_idx < 0).any():
+        raise ValueError("every decision needs its ticker and date in the price frame")
+    H = policy.horizon
+    P, L, C, D = (f.to_numpy(dtype=float) for f in (px, low_adj, close_adj, div))
+    entry = t_idx + 1
+    n = len(sessions)
+    entry_px = np.where(entry < n, P[np.minimum(entry, n - 1), cols], np.nan)
+    # Path from the session after entry: closes (for decisions), lows (excursion), dividends.
+    fwd_px = _forward(P, entry, cols, H)                       # sessions entry+1 .. entry+H
+    fwd_div = _forward(D, entry, cols, H)
+    # Lows on the executable basis: the adjusted low times that day's executable/adjusted ratio.
+    ratio = P / C
+    fwd_low = _forward(L * ratio, entry, cols, H)
+    profit, risk = policy.levels(decisions["sigma"].to_numpy(dtype=float))
+    ret = fwd_px / entry_px[:, None] - 1
+    hit_t = ret >= profit[:, None]
+    hit_s = ret <= risk[:, None]
+    # A close-confirmed trigger at session k (1-based after entry) exits at k+1; the deadline exit is
+    # at H whatever happens. A trigger at H-1 or H therefore exits at H.
+    first_t = np.where(hit_t.any(axis=1), hit_t.argmax(axis=1) + 1, H + 1)
+    first_s = np.where(hit_s.any(axis=1), hit_s.argmax(axis=1) + 1, H + 1)
+    trigger = np.minimum(first_t, first_s)
+    exit_k = np.minimum(trigger + 1, H)                         # sessions after entry
+    reason = np.where(trigger + 1 <= H, np.where(first_s <= first_t, "stop", "target"), "deadline")
+    rows = np.arange(len(decisions))
+    exit_px = fwd_px[rows, exit_k - 1]
+    held = np.arange(1, H + 1)[None, :] <= exit_k[:, None]
+    divs = np.nansum(np.where(held, fwd_div, 0.0), axis=1)
+    lows = np.where(held, fwd_low, np.nan)
+    with np.errstate(all="ignore"):
+        mae = np.minimum(np.nanmin(lows, axis=1) / entry_px - 1, 0.0)
+        gross = (exit_px + divs) / entry_px - 1
+    complete = np.isfinite(entry_px) & np.isfinite(exit_px) & (entry + exit_k < n)
+    # A path with a missing price before the exit (a delisting, a halt) has no known outcome.
+    gap = np.isnan(np.where(held, fwd_px, 0.0)).any(axis=1)
+    complete &= ~gap
+    cost = np.zeros(len(decisions)) if cost_rt is None else np.asarray(cost_rt, dtype=float)
+    entry_dates = np.where(entry < n, sessions[np.minimum(entry, n - 1)], pd.NaT)
+    exit_dates = np.where(entry + exit_k < n, sessions[np.minimum(entry + exit_k, n - 1)], pd.NaT)
+    out = pd.DataFrame({
+        "date": pd.to_datetime(decisions["date"]).to_numpy(), "ticker": decisions["ticker"].to_numpy(),
+        "entry_date": entry_dates, "exit_date": exit_dates,
+        "reason": np.where(complete, reason, "incomplete"), "held_sessions": np.where(complete, exit_k, np.nan),
+        "entry_px": entry_px, "exit_px": np.where(complete, exit_px, np.nan),
+        "dividends": np.where(complete, divs, np.nan),
+        "gross": np.where(complete, gross, np.nan), "net": np.where(complete, gross - cost, np.nan),
+        "mae": np.where(complete, mae, np.nan), "profit_level": profit, "risk_level": risk,
+        "cost_rt": cost, "complete": complete})
+    out["policy"] = policy.name
+    return out
+```
+
+## Daily decision gates and exits (tradingagents/stocks/daily.py)
+
+```python
+def evidence(con, policy_name: str, features: list[str], thresholds: Thresholds, r: dict) -> dict:
+    """Whether the policy's study passed on development, and whether the prospective record confirms it."""
+    found = None
+    for row in con.execute("SELECT id, config_json, scores_json FROM research_trials WHERE name = 'decision_study:h20'"
+                           " ORDER BY id DESC"):
+        cfg = json.loads(row["config_json"] or "{}")
+        if cfg.get("smoke") is False and cfg.get("thresholds_version") == thresholds.version() \
+                and cfg.get("features") == features and policy_name in (cfg.get("policies") or {}):
+            found = row
+            break
+    if found is None:
+        return {"trial": None, "development": "untested", "prospective": "none", "validated": False,
+                "note": "no full decision study for this policy, thresholds and features"}
+    s = json.loads(found["scores_json"])
+    sim = (s.get("simulation") or {}).get(policy_name) or {}
+    dev = sim.get("development:equal") or {}
+    q = ((s.get("quality") or {}).get(policy_name) or {}).get("development") or {}
+    checks = {
+        "beats_spy_after_costs": bool((dev.get("vs_spy_ci") or [None])[0] is not None and dev["vs_spy_ci"][0] > 0),
+        "beats_cash": bool(dev.get("total", -1) > dev.get("cash_total", 0)),
+        "drawdown_ok": bool(dev.get("max_drawdown", -1) >= r["max_drawdown_limit"]),
+        "calibration_ok": bool(q and (q.get("quality_logit_sig") or {}).get("log_loss", 9) <= q.get("log_loss_base", 0)),
+    }
+    passed = all(checks.values())
+    shadow = con.execute("SELECT state_json FROM shadow_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    pros = json.loads(shadow["state_json"]).get("record", {}) if shadow else {}
+    confirmed = passed and pros.get("round_trips", 0) >= r["prospective_min_trades"] and pros.get("excess_vs_spy", -1) > 0
+    return {"trial": found["id"], "development": "passed" if passed else "failed", "checks": checks,
+            "prospective": pros, "validated": bool(confirmed),
+            "chosen_rule": sim.get("chosen")}
+```
+
+```python
+def review_lot(lot: dict, cutoff: pd.Timestamp, sessions: pd.DatetimeIndex, px: pd.Series, sigma_at_entry: float,
+               policy, sleeve_value: float, r: dict, today: pd.DataFrame) -> dict:
+    """HOLD, REDUCE, EXIT or REVIEW for one lot, close-confirmed at the cutoff, executed the next close."""
+    from tradingagents.ledger.sessions import next_session
+
+    entry = pd.Timestamp(lot["entry_date"])
+    t = lot["ticker"]
+    price = float(px.get(t, np.nan))
+    nxt = pd.Timestamp(next_session(cutoff.date()))
+    entry_i = sessions.searchsorted(entry)
+    deadline = sessions[min(entry_i + policy.horizon, len(sessions) - 1)] if entry_i + policy.horizon < len(sessions) \
+        else pd.Timestamp(next_session(entry.date(), policy.horizon))
+    profit, risk = policy.levels(np.array([sigma_at_entry if np.isfinite(sigma_at_entry) else 0.02]))
+    out = {"ticker": t, "shares": lot["shares"], "entry_date": str(entry.date()), "entry_px": lot["entry_px"],
+           "deadline": str(deadline.date()), "price": price, "profit_level": float(profit[0]), "risk_level": float(risk[0]),
+           "age_sessions": int(((sessions > entry) & (sessions <= cutoff)).sum()), "reasons": []}
+    if not np.isfinite(price) or not lot.get("entry_px"):
+        return {**out, "action": "REVIEW", "reasons": ["no current price or no entry price: a person decides"]}
+    ret = price / lot["entry_px"] - 1
+    value = lot["shares"] * price
+    out.update({"unrealized": ret, "value": value, "share_of_sleeve": value / sleeve_value if sleeve_value else None})
+    if entry >= cutoff:
+        return {**out, "action": "HOLD", "reasons": ["bought this session: no same-day exit"]}
+    if nxt >= deadline:
+        return {**out, "action": "EXIT", "execute": str(nxt.date()), "reasons": ["holding deadline reached (no extension)"]}
+    if ret <= risk[0]:
+        return {**out, "action": "EXIT", "execute": str(nxt.date()),
+                "reasons": [f"close-confirmed risk level: {ret:+.1%} at or below {risk[0]:+.1%}; the next close may gap further"]}
+    if ret >= profit[0]:
+        return {**out, "action": "EXIT", "execute": str(nxt.date()),
+                "reasons": [f"close-confirmed profit level: {ret:+.1%} at or above {profit[0]:+.1%}"]}
+    cap = r["max_position_share"] * sleeve_value
+    if value > cap * 1.05:
+        fraction = 1 - cap / value
+        return {**out, "action": "REDUCE", "fraction": fraction, "execute": str(nxt.date()),
+                "reasons": [f"{value / sleeve_value:.0%} of the sleeve, above the {r['max_position_share']:.0%} cap"]}
+    if t in today.index:
+        out["continuation_info"] = {"expected_net_new_entry": float(today.loc[t, "expected_net"]),
+                                    "note": "the ML continuation exit is information only until validated"}
+    return {**out, "action": "HOLD", "reasons": ["within its levels and deadline"]}
+```
+
+```python
+def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value: float, spendable: float,
+            ira: dict, prices: pd.Series, validated: bool, cutoff, execute) -> list[dict]:
+    """ENTER (validated) or PAPER ENTER (experimental) and WAIT, with sizes and blocked constraints."""
+    out = []
+    cand = today[today["in_index"]].sort_values("expected_net", ascending=False)
+    active = (held - exiting)
+    slots = max(0, r["max_names"] - len(active))
+    budget = spendable
+    for t, row in cand.head(25).iterrows():
+        blocks, reasons = [], []
+        risk = row["p_risk"]
+        if not (isinstance(risk, float) and np.isfinite(risk)):
+            blocks.append("risk estimate missing or invalid")
+        elif risk > r["max_large_loss_prob"]:
+            blocks.append(f"P(large loss during the position) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
+        if not np.isfinite(row["expected_net"]) or row["expected_net"] < r["min_expected_net"]:
+            blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
+        if not np.isfinite(row["p_win"]) or row["p_win"] < r["min_p_win"]:
+            blocks.append(f"P(profitable after costs) {row['p_win']:.0%} below {r['min_p_win']:.0%}")
+        if t in held:
+            blocks.append("already held")
+        price = float(prices.get(t, np.nan))
+        if not np.isfinite(price):
+            blocks.append("no current price")
+        dollars = min(r["max_position_share"] * sleeve_value, budget / max(slots, 1)) if slots else 0.0
+        if not slots:
+            blocks.append(f"name limit: {r['max_names']} names including holdings")
+        if dollars < r["min_order"]:
+            blocks.append(f"settled cash: ${budget:,.2f} available after reservations")
+        ira_total = ira["total"] or 1.0
+        if (ira["by_ticker"].get(t, 0.0) + dollars) / ira_total > r["combined_name_cap"]:
+            blocks.append(f"IRA concentration: would exceed {r['combined_name_cap']:.0%} of the whole IRA in {t}")
+        line = {"ticker": t, "expected_net": row["expected_net"], "net_sd": row["net_sd"], "net_q10": row["net_q10"],
+                "expected_excess_vs_spy": row["expected_excess"], "p_win": row["p_win"], "p_risk": risk,
+                "cost_rt": row["cost_rt"], "score_pct": row["score_pct"], "sigma": row["sigma"], "price": price,
+                "blocked": blocks,
+                "execute": str(execute)}
+        if blocks:
+            line["action"] = "WAIT"
+        else:
+            line.update({"dollars": round(dollars, 2), "shares": round(dollars / price, 6),
+                         "expected_benefit_usd": round(dollars * row["expected_net"], 2),
+                         "action": "ENTER" if validated else "WAIT", "paper_action": "PAPER ENTER"})
+            if not validated:
+                line["blocked"] = ["evidence: not validated (experimental mode shows PAPER ENTER)"]
+            budget -= dollars
+            slots -= 1
+        out.append(line)
+    return out
+```
+
+## Capital settings (tradingagents/ledger/capital.py)
+
+```python
+def reallocation(store, as_of, prices: dict[str, float] | None = None) -> dict:
+    """A reviewable proposal to bring each sleeve's net funding to its capital target.
+
+    Only settled, unreserved cash can move, and only what the source sleeve really has: the
+    proposal never creates money. It changes nothing until a transfer is recorded.
+    """
+    cap = load(store)
+    out = {"as_of": str(as_of), "targets": asdict(cap), "sleeves": {}, "transfers": [], "notes": []}
+    for sleeve, target in (("trading", cap.trading_capital_usd), ("investing", cap.investing_capital_usd)):
+        state = store.ledger.state(sleeve, as_of, prices)
+        out["sleeves"][sleeve] = {"target": target, "funded": round(funded(store, sleeve, as_of), 2),
+                                  "equity": round(state.equity, 2) if prices is not None else None,
+                                  "settled_cash": round(state.cash.available, 2),
+                                  "unsettled": round(state.cash.unsettled, 2), "reserved": round(state.cash.reserved, 2)}
+    gap = out["sleeves"]["trading"]["target"] - out["sleeves"]["trading"]["funded"]
+    if abs(gap) >= 0.01:
+        source, dest, amount = ("investing", "trading", gap) if gap > 0 else ("trading", "investing", -gap)
+        movable = out["sleeves"][source]["settled_cash"]
+        move = round(min(amount, movable), 2)
+        if move >= 0.01:
+            out["transfers"].append({"from": source, "to": dest, "cash": move})
+        if move < round(amount, 2):
+            out["notes"].append(f"{source} has ${movable:,.2f} of settled cash; ${amount - move:,.2f} more would need "
+                                "sales there first (proposed separately), or a smaller target")
+    total_target = cap.trading_capital_usd + cap.investing_capital_usd
+    total_funded = out["sleeves"]["trading"]["funded"] + out["sleeves"]["investing"]["funded"]
+    if total_target > total_funded + 0.01:
+        out["notes"].append(f"targets add up to ${total_target:,.2f} but ${total_funded:,.2f} has been put in: the "
+                            "difference needs a deposit, recorded when it arrives; no transfer can create it")
+    out["notes"].append("Nothing moves until a transfer is recorded. Targets are net funding, not value: profits and "
+                        "losses stay with the sleeve that earned them.")
+    return out
+```
+
+```python
+def daily_plan(store, as_of, reserved_today: float = 0.0) -> dict:
+    """The planned Investing purchase for the next market session, bounded by settled cash."""
+    from tradingagents.ledger.sessions import is_session, next_session, session_on_or_after
+
+    cap = load(store)
+    day = session_on_or_after(as_of)
+    state = store.ledger.state("investing", as_of)
+    available = max(0.0, state.cash.available - reserved_today)
+    buy = round(min(cap.daily_investment_usd, available), 2)
+    notes = []
+    if not is_session(as_of):
+        notes.append(f"{as_of} is not a market session; the plan is for {day}")
+    if buy < cap.daily_investment_usd:
+        notes.append(f"settled cash ${available:,.2f} covers ${buy:,.2f} of the ${cap.daily_investment_usd:,.2f} "
+                     "planned; the rest is skipped this session (it does not carry over)")
+    notes.append("A purchase plan, not a deposit: record deposits when they arrive.")
+    return {"session": str(day), "next_session": str(next_session(day)), "planned": cap.daily_investment_usd,
+            "settled_available": round(available, 2), "buy": buy, "shortfall": round(cap.daily_investment_usd - buy, 2),
+            "notes": notes}
 ```
