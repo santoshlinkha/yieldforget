@@ -112,7 +112,11 @@ def spaced_dates(dates: pd.DatetimeIndex, sessions: pd.DatetimeIndex, horizon: i
 
 
 def portfolio(frame: pd.DataFrame, score: str, sessions: pd.DatetimeIndex, horizon: int) -> dict:
-    """Long-only top fifth by ``score`` (expected return net of cost), with three benchmarks."""
+    """Long-only top fifth by ``score`` (expected return net of cost), with three benchmarks.
+
+    Each period is an equal-weight basket: its return is the mean of the names' simple returns, less cost,
+    taken back to a log return so periods compound. Annualized figures use the periods' actual spacing
+    (dates skip when a day has too few names), not the minimum spacing."""
     f = frame[frame["label"].notna()]
     dates = spaced_dates(pd.DatetimeIndex(_dates(f).unique()), sessions, horizon)
     rules = {"model": score, "momentum": "mom_12_1"}
@@ -122,7 +126,7 @@ def portfolio(frame: pd.DataFrame, score: str, sessions: pd.DatetimeIndex, horiz
         day = f.xs(d, level="date")
         if len(day) < 25:
             continue
-        rec = {"date": d, "all": float(day["label"].mean())}
+        rec = {"date": d, "all": float(np.log1p(np.expm1(day["label"]).mean()))}
         picks = {k: set(day[c].nlargest(max(1, len(day) // 5)).index) for k, c in rules.items() if c in day}
         picks["trend"] = set(day.index[day["current_trend"] == 1]) if "current_trend" in day else set()
         for k, names in picks.items():
@@ -131,12 +135,14 @@ def portfolio(frame: pd.DataFrame, score: str, sessions: pd.DatetimeIndex, horiz
                 continue
             turnover = 1 - len(names & held[k]) / len(names) if held[k] else 1.0
             cost = float(day.loc[list(names), "cost_rt"].mean()) * turnover
-            rec[k] = float(day.loc[list(names), "label"].mean()) - cost
+            rec[k] = float(np.log1p(np.expm1(day.loc[list(names), "label"]).mean() - cost))
             rec[f"{k}_turnover"] = turnover
             held[k] = names
         rows.append(rec)
     t = pd.DataFrame(rows).set_index("date")
-    out = {"periods": int(len(t)), "per_year": 252 / (horizon + 1)}
+    pos = {d: i for i, d in enumerate(sessions)}
+    gaps = np.diff([pos[d] for d in t.index])
+    out = {"periods": int(len(t)), "per_year": 252 / float(gaps.mean()) if len(gaps) else 252 / (horizon + 1)}
     for k in ("model", "momentum", "trend", "all"):
         if k not in t:
             continue

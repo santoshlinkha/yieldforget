@@ -2,8 +2,9 @@
 
 At each rebalance date the optimizer sees only prices up to that day's close: the
 crash estimates, crash scenarios, returns and correlations it uses are rebuilt
-from that history alone. It trades at that close, the mix drifts with the market
-from the next day on, and the next rebalance starts from wherever that left it.
+from that history alone. It trades ``lag`` sessions later (default one: the next
+close, since a plan made from a close cannot also trade at it), the mix drifts with
+the market from then on, and the next rebalance starts from wherever that left it.
 
 Two checks of the promise:
 - the strategy's own worst drop over the whole run, against its loss limit;
@@ -174,15 +175,28 @@ def rebalance_plan(closes: pd.DataFrame, candidates: list[str], settings: Optimi
     return schedule, history
 
 
+def _executed(schedule: list, sessions: pd.DatetimeIndex, lag: int) -> list:
+    """Each planned mix moved ``lag`` sessions on, to the close it can actually trade at; a plan with no
+    session left after it is dropped."""
+    out = []
+    for day, mix in schedule:
+        i = sessions.get_loc(day) + lag
+        if i < len(sessions):
+            out.append((sessions[i], mix))
+    return out
+
+
 def run_backtest(closes: pd.DataFrame, candidates: list[str], settings: OptimizerSettings,
                  start: str = "2012-01-03", every: int = 21, current_mix: dict[str, float] | None = None,
                  progress: Callable[[int, int], None] | None = None, cost_bps: float = 0.0,
                  schedule: list | None = None, history: list[Rebalance] | None = None,
-                 benchmarks: dict[str, dict[str, float]] | None = None) -> BacktestResult:
+                 benchmarks: dict[str, dict[str, float]] | None = None, lag: int = 1) -> BacktestResult:
     """Rebalance every ``every`` trading days from ``start``, as the optimizer would have.
 
     ``schedule`` and ``history`` from an earlier ``rebalance_plan`` over the same
-    days skip the optimizing, to score one plan at several costs.
+    days skip the optimizing, to score one plan at several costs. Each mix trades
+    ``lag`` sessions after the close it was planned from (0 reproduces the old
+    same-close assumption, which overstates what could have been done).
     """
     cash_ticker = settings.cash_proxy
     if cash_ticker not in closes:
@@ -198,11 +212,13 @@ def run_backtest(closes: pd.DataFrame, candidates: list[str], settings: Optimize
 
     if schedule is None:
         schedule, history = rebalance_plan(closes, candidates, settings, rebalance_days, progress)
+    sessions = all_returns.index
     for (day, mix), r in zip(schedule, history, strict=True):
-        r.next_year_drop = _held_drop(all_returns, cash, day, mix)
+        i = sessions.get_loc(day) + lag
+        r.next_year_drop = _held_drop(all_returns, cash, sessions[i], mix) if i < len(sessions) else None
 
     cost = cost_bps / 1e4
-    curve, traded = _simulate(returns, cash, schedule, cost)
+    curve, traded = _simulate(returns, cash, _executed(schedule, sessions, lag), cost)
     curves = {"Optimizer": curve}
     for name, mix in {**(BENCHMARKS if benchmarks is None else benchmarks),
                       "Your mix now": current_mix or {}}.items():
@@ -211,11 +227,12 @@ def run_backtest(closes: pd.DataFrame, candidates: list[str], settings: Optimize
         # A fund that did not exist yet holds its share in cash until it does.
         fixed = [(day, {t: w for t, w in mix.items() if returns[t].loc[:day].notna().any()})
                  for day in rebalance_days]
-        curves[name] = _simulate(returns, cash, fixed, cost)[0]
+        curves[name] = _simulate(returns, cash, _executed(fixed, sessions, lag), cost)[0]
 
     weekly = curve.index[::5]
     years = (days[-1] - days[0]).days / 365.25
-    notes = []
+    notes = [f"Each mix trades {lag} session{'' if lag == 1 else 's'} after the close it was planned from."
+             if lag else "Each mix trades at the same close it was planned from (optimistic)."]
     if current_mix and "Your mix now" in curves:
         late = [t for t in current_mix if returns[t].first_valid_index() > returns.index[0]]
         if late:
