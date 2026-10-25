@@ -114,12 +114,24 @@ def evidence(con, policy_name: str, features: list[str], thresholds: Thresholds,
 
 # --- the model bundle: fitted once per week of data, reused for every decision and every sizing ---
 
-def bundle_key(cutoff: pd.Timestamp, policy, features, thresholds) -> str:
-    from tradingagents.ledger.recommendations import code_version
+def model_code_hash() -> str:
+    """A hash of the source that shapes the fitted models (not of decision or sizing code), so a change to
+    sizing or display reuses this week's models while a change to features, labels or models refits them."""
+    import inspect
 
+    from tradingagents.research import forecast, models
+
+    from . import adapters, fundamentals, macro, panel, positions, study, targets
+
+    text = "".join(inspect.getsource(m) for m in (targets, panel, fundamentals, macro, adapters, positions, study,
+                                                     models, forecast))
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def bundle_key(cutoff: pd.Timestamp, policy, features, thresholds) -> str:
     week = f"{cutoff.isocalendar().year}-W{cutoff.isocalendar().week:02d}"
     text = json.dumps({"week": week, "policy": policy.version(), "features": features, "thresholds": thresholds.version(),
-                       "version": BUNDLE_VERSION, "code": code_version()}, sort_keys=True)
+                       "version": BUNDLE_VERSION, "model_code": model_code_hash()}, sort_keys=True)
     return hashlib.sha256(text.encode()).hexdigest()[:20]
 
 
@@ -270,40 +282,43 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
     slots = max(0, r["max_names"] - len(active))
     budget = spendable
     for t, row in cand.head(25).iterrows():
-        blocks, reasons = [], []
+        # Model gates decide whether the signal is good enough at all (they also decide PAPER ENTER, which
+        # the shadow account sizes on its own cash); account gates decide whether this account can act.
+        model_blocks, account_blocks = [], []
         risk = row["p_risk"]
         if not (isinstance(risk, float) and np.isfinite(risk)):
-            blocks.append("risk estimate missing or invalid")
+            model_blocks.append("risk estimate missing or invalid")
         elif risk > r["max_large_loss_prob"]:
-            blocks.append(f"P(large loss during the position) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
+            model_blocks.append(f"P(large loss during the position) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
         if not np.isfinite(row["expected_net"]) or row["expected_net"] < r["min_expected_net"]:
-            blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
+            model_blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
         if not np.isfinite(row["p_win"]) or row["p_win"] < r["min_p_win"]:
-            blocks.append(f"P(profitable after costs) {row['p_win']:.0%} below {r['min_p_win']:.0%}")
-        if t in held:
-            blocks.append("already held")
+            model_blocks.append(f"P(profitable after costs) {row['p_win']:.0%} below {r['min_p_win']:.0%}")
         price = float(prices.get(t, np.nan))
         if not np.isfinite(price):
-            blocks.append("no current price")
+            model_blocks.append("no current price")
+        if t in held:
+            account_blocks.append("already held")
         dollars = min(r["max_position_share"] * sleeve_value, budget / max(slots, 1)) if slots else 0.0
         if not slots:
-            blocks.append(f"name limit: {r['max_names']} names including holdings")
+            account_blocks.append(f"name limit: {r['max_names']} names including holdings")
         if dollars < r["min_order"]:
-            blocks.append(f"settled cash: ${budget:,.2f} available after reservations")
+            account_blocks.append(f"settled cash: ${budget:,.2f} available after reservations")
         ira_total = ira["total"] or 1.0
         if (ira["by_ticker"].get(t, 0.0) + dollars) / ira_total > r["combined_name_cap"]:
-            blocks.append(f"IRA concentration: would exceed {r['combined_name_cap']:.0%} of the whole IRA in {t}")
+            account_blocks.append(f"IRA concentration: would exceed {r['combined_name_cap']:.0%} of the whole IRA in {t}")
         line = {"ticker": t, "expected_net": row["expected_net"], "net_sd": row["net_sd"], "net_q10": row["net_q10"],
                 "expected_excess_vs_spy": row["expected_excess"], "p_win": row["p_win"], "p_risk": risk,
                 "cost_rt": row["cost_rt"], "score_pct": row["score_pct"], "sigma": row["sigma"], "price": price,
-                "tied_with": int(row["tied_with"]), "blocked": blocks,
-                "execute": str(execute)}
-        if blocks:
+                "tied_with": int(row["tied_with"]), "blocked": model_blocks + account_blocks, "execute": str(execute)}
+        if not model_blocks:
+            line["paper_action"] = "PAPER ENTER"           # the shadow account sizes it on its own cash
+        if model_blocks or account_blocks:
             line["action"] = "WAIT"
         else:
             line.update({"dollars": round(dollars, 2), "shares": round(dollars / price, 6),
                          "expected_benefit_usd": round(dollars * row["expected_net"], 2),
-                         "action": "ENTER" if validated else "WAIT", "paper_action": "PAPER ENTER"})
+                         "action": "ENTER" if validated else "WAIT"})
             if not validated:
                 line["blocked"] = ["evidence: not validated (experimental mode shows PAPER ENTER)"]
             budget -= dollars

@@ -57,12 +57,12 @@ def test_a_decision_has_dates_modes_sizes_and_is_frozen(env):
     assert lots["S04"]["action"] in ("REDUCE", "EXIT")
     # No study backs this policy, so nothing is validated: buys are paper only.
     assert rec["mode"] == "experimental" and all(x["action"] == "WAIT" for x in rec["entries"])
-    paper = [x for x in rec["entries"] if x.get("paper_action") == "PAPER ENTER"]
+    sized = [x for x in rec["entries"] if x.get("dollars")]           # what this account could actually do
     staying = sum(1 for x in rec["lots"] if x["action"] != "EXIT")      # names still held after the next close
-    assert len(paper) + staying <= 5
-    for x in paper:
+    assert len(sized) + staying <= 5
+    for x in sized:
         assert x["dollars"] <= 0.25 * rec["account"]["sleeve_value"] + 1e-6
-    assert sum(x["dollars"] for x in paper) <= rec["account"]["settled_cash"] - 0 + 1e-6
+    assert sum(x["dollars"] for x in sized) <= rec["account"]["settled_cash"] + 1e-6
     assert rec["settings"]["capital"]["trading_capital_usd"] == 1000.0
     stored = daily.load(store.con, rec["id"])
     capital.update(store, {"trading_capital_usd": 3000})
@@ -166,3 +166,14 @@ def test_a_cash_fund_in_the_sleeve_is_cash_not_a_lot_to_review(env, monkeypatch)
     assert all(x["ticker"] != "SGOV" for x in rec["lots"])
     assert rec["cash_fund"]["holdings"] == {"SGOV": 5.0} and rec["account"]["cash_fund_value"] == pytest.approx(502.5)
     assert np.isfinite(rec["account"]["sleeve_value"])
+
+
+def test_paper_entries_depend_on_model_gates_not_on_the_real_accounts_cash():
+    today = pd.DataFrame({"expected_net": [0.01], "net_sd": [0.08], "net_q10": [-0.1], "expected_excess": [0.0],
+                          "p_win": [0.6], "p_risk": [0.05], "sigma": [0.02], "cost_rt": [0.003], "score_pct": [0.99],
+                          "in_index": [True]}, index=["AAA"])
+    r = {**daily.DEFAULT_RULES, "max_names": 5, "max_position_share": 0.25, "min_order": 1.0, "max_large_loss_prob": 0.15}
+    line = daily.entries(today, set(), set(), r, 1000.0, 0.0, {"total": 6000.0, "by_ticker": {}},
+                         pd.Series({"AAA": 10.0}), True, None, "2026-10-26")[0]
+    assert line["action"] == "WAIT" and line["paper_action"] == "PAPER ENTER"     # no settled cash, good signal
+    assert any("settled cash" in b for b in line["blocked"])
