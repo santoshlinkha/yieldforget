@@ -84,3 +84,34 @@ def test_as_of_data_drops_every_row_after_the_cutoff():
     cut = as_of_data(data, days[1])
     assert all(f.index.max() == days[1] for f in (cut.close, cut.high, cut.low, cut.volume))
     assert cut.actions == data.actions          # kept whole: undoing the adjustment needs every dividend
+
+
+def test_a_recorded_split_scales_the_rebuilt_lots(tmp_path):
+    from tradingagents.ledger.store import Store
+    from tradingagents.stocks.daily import lots_from_ledger
+
+    store = Store(tmp_path / "book")
+    d = pd.Timestamp("2026-09-01").date()
+    store.ledger.contribute(1000.0, d, sleeve="trading", settle_date=d)
+    store.ledger.fill("trading", "buy", "AAA", 2.0, 100.0, d, settle_date=d)
+    store.ledger.fill("trading", "buy", "AAA", 1.0, 130.0, pd.Timestamp("2026-09-02").date())
+    store.ledger.record("corporate_action", "trading", pd.Timestamp("2026-09-10").date(), ticker="AAA",
+                        quantity=3.0, note="2-for-1 split")
+    lots = lots_from_ledger(store, "trading", pd.Timestamp("2026-09-11").date())
+    assert [(lot["shares"], lot["entry_px"]) for lot in lots] == [(4.0, 50.0), (2.0, 65.0)]
+    assert sum(lot["shares"] for lot in lots) == store.ledger.state("trading", pd.Timestamp("2026-09-11").date()).positions["AAA"]
+
+
+def test_a_shadow_lot_takes_a_later_split_once():
+    from tradingagents.stocks.shadow import _apply_splits
+
+    sessions = pd.bdate_range("2026-09-01", "2026-10-23")
+    book = Book(sessions, cash=100.0)
+    book.buy(sessions[0], "AAA", 100.0, 100.0, POLICIES["barrier_20"], 0.02, 0.0)
+    state = {"split_basis": {"AAA|2026-09-01": ""}}
+    actions = {"AAA": {"splits": [["2026-09-15", 2.0]], "dividends": []}}
+    _apply_splits(state, book, actions, pd.Timestamp("2026-09-10"))          # before the split: nothing
+    assert book.lots[0].shares == pytest.approx(1.0)
+    _apply_splits(state, book, actions, pd.Timestamp("2026-09-16"))
+    _apply_splits(state, book, actions, pd.Timestamp("2026-09-17"))          # a second update: not again
+    assert (book.lots[0].shares, book.lots[0].entry_px) == (pytest.approx(2.0), pytest.approx(50.0))

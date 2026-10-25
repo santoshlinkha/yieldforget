@@ -43,6 +43,28 @@ def _book(state, sessions) -> Book:
     return book
 
 
+def _latest_split(actions: dict, ticker: str, cutoff) -> str:
+    known = [str(d)[:10] for d, ratio in (actions.get(ticker) or {}).get("splits") or []
+             if ratio and str(d)[:10] <= str(cutoff.date())]
+    return max(known, default="")
+
+
+def _apply_splits(state: dict, book: Book, actions: dict, cutoff) -> None:
+    """Each lot's prices are split-adjusted as of the data it was bought with (its basis: the latest split
+    known then). A split after that basis re-scales the whole price history, so the lot's shares are
+    multiplied and its entry price divided by the ratio, once; the new basis is recorded so a later
+    update never applies the same split again."""
+    basis = state.setdefault("split_basis", {})
+    for lot in book.lots:
+        key = f"{lot.ticker}|{lot.entry_date.date()}"
+        if key in basis:
+            for d, ratio in (actions.get(lot.ticker) or {}).get("splits") or []:
+                if ratio and basis[key] < str(d)[:10] <= str(cutoff.date()):
+                    lot.shares *= ratio
+                    lot.entry_px /= ratio
+        basis[key] = _latest_split(actions, lot.ticker, cutoff)
+
+
 def _dump(book: Book) -> dict:
     return {"cash": book.cash, "settling": {str(k.date()): v for k, v in book.settling.items()},
             "lots": [{**lot.__dict__, "entry_date": str(lot.entry_date.date()), "deadline": str(lot.deadline.date())}
@@ -73,12 +95,15 @@ def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: li
                                    "previous_trades": len(previous.get("closed", [])),
                                    "previous_lots": len(previous.get("lots", []))}} if previous else {})}
     book = _book(state, sessions)
+    _apply_splits(state, book, data.actions, cutoff)
     pending = state.get("pending", [])
     due = state.get("due", [])
     days = sessions[(sessions > pd.Timestamp(state["last"])) & (sessions <= cutoff)]
     closed = state.get("closed", [])
     for day in days:
         book.settle(day)
+        # Dividends are credited on the ex-date: an approximation, since the cash arrives on the pay date
+        # (days to weeks later) and so cannot be spent in between. The error is a few days of one dividend.
         book.dividends(day, div.loc[day])
         prices = px.loc[day]
         if state.get("spy_units") is None and pending:
@@ -138,6 +163,9 @@ def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: li
               "account_excess": (eq[-1][1] - eq[-1][2]) / state["capital"] if eq else None,
               "account_excess_ci": [None if v is None or not np.isfinite(v) else float(v) for v in ci],
               "account_days": len(daily_excess)}
+    for lot in book.lots:   # lots bought in this update: priced on today's adjustment basis
+        state.setdefault("split_basis", {}).setdefault(f"{lot.ticker}|{lot.entry_date.date()}",
+                                                      _latest_split(data.actions, lot.ticker, cutoff))
     new_state = {**state, **_dump(book), "pending": pending, "due": due, "closed": closed, "last": str(cutoff.date()),
                  "record": record}
     with transaction(store.con):

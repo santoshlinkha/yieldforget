@@ -57,9 +57,20 @@ def rules(store) -> dict:
 # --- the account ---
 
 def lots_from_ledger(store, sleeve: str, as_of) -> list[dict]:
-    """Open lots, first in first out, from the sleeve's fills and share transfers."""
+    """Open lots, first in first out, from the sleeve's fills and share transfers. A split, recorded as a
+    corporate action that adds (or, for a reverse split, removes) shares with no cash, scales every open lot
+    of the stock by the same ratio and divides its entry price by it, so cost and position stay whole."""
     lots: dict[str, list[dict]] = {}
     for e in store.ledger.events(sleeve, as_of):
+        if e["kind"] == "corporate_action" and e["ticker"] and e["quantity"] and not e["cash"]:
+            group = lots.get(e["ticker"], [])
+            held = sum(lot["shares"] for lot in group)
+            if held > 1e-12 and held + e["quantity"] > 1e-12:
+                ratio = (held + e["quantity"]) / held
+                for lot in group:
+                    lot["shares"] *= ratio
+                    lot["entry_px"] = lot["entry_px"] / ratio if lot["entry_px"] else lot["entry_px"]
+            continue
         if not e["ticker"] or e["kind"] not in ("fill", "transfer", "opening_position") or not e["quantity"]:
             continue
         t, q = e["ticker"], e["quantity"]
