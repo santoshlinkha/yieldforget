@@ -388,11 +388,16 @@ class App:
         spending policy lists Google as a fallback and a Google key is set."""
         config = self.agent_config(g)
         attempts = [config]
+        # Roles moved to another provider (e.g. the debates on Groq) keep their seats when Gemini takes
+        # over; if that attempt fails too, the next one runs every role on Gemini.
+        elsewhere = {r: v for r, v in (config.get("agent_models") or {}).items() if v.get("provider") != "google"}
         if "google" in g["ai_fallbacks"] and os.environ.get("GOOGLE_API_KEY"):
             for model in GEMINI_FALLBACKS:
-                if (config["llm_provider"], config["deep_think_llm"]) != ("google", model):
+                if (config["llm_provider"], config["deep_think_llm"]) == ("google", model):
+                    continue
+                for moves in ([elsewhere, {}] if elsewhere else [{}]):
                     attempts.append({**config, "llm_provider": "google", "quick_think_llm": model,
-                                     "deep_think_llm": model, "backend_url": None, "agent_models": {}})
+                                     "deep_think_llm": model, "backend_url": None, "agent_models": moves})
         return attempts
 
     def ai_usage(self) -> dict:
@@ -706,7 +711,67 @@ class App:
             job.log.append(f"{ticker}: {errors[-1]}")
         raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
 
-    def _write_decision(self, ticker: str, day: str, folder: Path, result: dict, cfg: dict) -> dict:
+    def manual_prompt(self, ticker: str, day: str) -> dict:
+        """The prompt for running the analysis in a chat app; builds from cached data, calls no AI."""
+        from tradingagents.agents.manual import build_prompt
+        from tradingagents.dataflows.config import set_config
+        from tradingagents.dataflows.vendors.yahoo import history as yh
+        from tradingagents.stocks.daily import CASH_FUNDS
+
+        ticker, day = ticker.strip().upper(), self._check_day(day)
+        set_config(self.config)
+        held = bool(self.store.ledger.state("combined", _today()).positions.get(ticker)) and ticker not in CASH_FUNDS
+        profile = {}
+        try:
+            profile = yh.profile(ticker, self.cache_dir) or {}
+        except Exception:  # the name is a nicety
+            pass
+        row = (self.signals(ticker)["rows"] or [{}])[0]
+        ev = []
+        if row.get("verdict"):
+            ev.append(f"Rule verdict: {row['verdict']['verdict']} ({row['verdict']['summary']})")
+            ev += [f"- {c['name']}: {c['detail']}" for c in row["verdict"]["checks"]]
+        sg = row.get("signal")
+        if sg and sg.get("status") == "ok":
+            f, b = sg["forecast"], sg["base_rates"]
+            ev.append(f"Stock models, next 20 sessions (data to {sg['data_to']}): P(breakout above the recent range) "
+                      f"{f['p_up_break']:.0%} vs {b['up_break']:.0%} usual; P(breakdown below it) {f['p_down_break']:.0%} vs "
+                      f"{b['down_break']:.0%} usual; trend: {sg['trend']}. These signals are untested.")
+        prompt = build_prompt(ticker, day, profile.get("longName") or profile.get("shortName") or "", held, "\n".join(ev))
+        return {"ticker": ticker, "date": day, "prompt": prompt, "chars": len(prompt), "tokens_est": len(prompt) // 4}
+
+    def manual_answer(self, body: dict) -> dict:
+        """A chat app's answer to the manual prompt: saved as a report, its rating recorded, the final decision written."""
+        from tradingagents.agents.manual import decision_markdown, parse_answer
+        from tradingagents.dataflows.symbols import safe_ticker_component
+        from tradingagents.memory import TradingMemoryLog
+
+        ticker = str(body.get("ticker") or "").strip().upper()
+        day = self._check_day(str(body.get("date") or ""))
+        text = str(body.get("text") or "")
+        source = str(body.get("source") or "ChatGPT Plus (pasted)")[:60]
+        if not ticker or len(text.strip()) < 40:
+            raise ValueError("paste the whole answer, ending with its JSON block")
+        decision = parse_answer(text)
+        folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
+        (folder / "5_portfolio").mkdir(parents=True, exist_ok=True)
+        (folder / "chat_answer.md").write_text(f"# Answer from {source}\n\n{text}\n", encoding="utf-8")
+        md = decision_markdown(decision)
+        pm = folder / "5_portfolio" / "decision.md"
+        if not pm.is_file():   # an agent run's own decision for that day is kept
+            pm.write_text(md, encoding="utf-8")
+        log = TradingMemoryLog(self.config)
+        before = {(e["date"], e["ticker"].upper()) for e in log.load_entries()}
+        log.store_decision(ticker, day, md, decision["rating"])
+        recorded = (day, ticker) not in before
+        final = self._write_decision(ticker, day, folder, {"rating": decision["rating"], "fell_back": False}, None,
+                                     models=source)
+        return {"ticker": ticker, "date": day, "rating": decision["rating"], "final": final, "recorded": recorded,
+                "note": None if recorded else "a rating for this ticker and day was already on record (it stays; "
+                                                 "the verdict uses that one)"}
+
+    def _write_decision(self, ticker: str, day: str, folder: Path, result: dict, cfg: dict | None,
+                        models: str | None = None) -> dict:
         """The run's final decision as one action, written first in its reports (0_FINAL_DECISION.md)."""
         from tradingagents.llm_clients import roles
         from tradingagents.stocks.daily import CASH_FUNDS
@@ -716,7 +781,7 @@ class App:
         ai = ai_decision({"rating": result["rating"], "date": day}, held)
         row = (self.signals(ticker)["rows"] or [{}])[0]
         rule = (row.get("verdict") or {})
-        used = sorted({f"{p}/{m}" for p, m in roles.resolve(cfg).values()})
+        used = [models] if models else sorted({f"{p}/{m}" for p, m in roles.resolve(cfg).values()})
         pm = folder / "5_portfolio" / "decision.md"
         why = {"BUY": "the agents favour buying", "HOLD": "the agents say keep what you hold",
                "SELL": "the agents say reduce or exit", "AVOID": "the agents are bearish and you do not hold it",
@@ -1423,6 +1488,8 @@ def make_handler(app: App):
                     self._json(app.signals(query.get("ticker")))
                 elif url.path == "/api/analyze":
                     self._json(app.analysis_state())
+                elif url.path == "/api/manual-prompt":
+                    self._json(app.manual_prompt(query.get("ticker", ""), query.get("date", "")))
                 elif url.path == "/api/ai-decisions":
                     self._json(app.ai_decisions())
                 elif url.path == "/api/requests":
@@ -1546,6 +1613,8 @@ def make_handler(app: App):
                     self._started(app.start_screen(), "The quality screen")
                 elif self.path == "/api/analyze":
                     self._started(app.start_analysis(body), "An agent analysis")
+                elif self.path == "/api/manual-answer":
+                    self._json(app.manual_answer(body))
                 elif self.path == "/api/ai-decisions":
                     self._started(app.start_ai_decisions(body), "An agent analysis")
                 elif self.path == "/api/ai-budget":

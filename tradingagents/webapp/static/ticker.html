@@ -192,6 +192,19 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
               <span class="muted small" id="agCost"></span></div>
             <p class="status" id="agState"></p>
           </div>
+          <details class="runbox" style="display:block" id="manualBox"><summary><b>Or use ChatGPT Plus (no API cost)</b> <span class="muted small">copy one prompt, paste the answer back</span></summary>
+            <ol class="small muted" style="margin:8px 0 8px 18px;padding:0">
+              <li>Click <b>Copy the prompt</b>: it holds the prices, indicators, fundamentals, news, economy and the app's own evidence as of the day above, and asks the chat to play the whole team.</li>
+              <li>Paste it into ChatGPT (or Gemini or Claude in your browser) and send it.</li>
+              <li>Copy the whole answer, paste it below and click <b>Save the answer</b>. It must end with the JSON block the prompt asks for.</li>
+            </ol>
+            <div class="runbar"><button class="ghost" id="mpCopy">Copy the prompt</button><span class="muted small" id="mpInfo"></span></div>
+            <textarea id="mpPrompt" readonly style="display:none;width:100%;height:120px;margin-top:8px;font:12px ui-monospace,Consolas,monospace"></textarea>
+            <label class="flabel" for="mpAnswer" style="display:block;margin-top:10px">The chat's answer</label>
+            <textarea id="mpAnswer" placeholder="Paste the whole answer here" style="width:100%;height:160px;font:13px/1.4 inherit;background:var(--surface);color:var(--text);border:1px solid var(--border-strong);border-radius:8px;padding:8px"></textarea>
+            <div class="runbar" style="margin-top:8px"><label class="small">From <input type="text" id="mpSource" value="ChatGPT Plus" style="width:140px;font:inherit;padding:5px 8px;border:1px solid var(--border-strong);border-radius:6px;background:var(--surface);color:var(--text)"></label>
+              <button id="mpSave">Save the answer</button><span class="small" id="mpState"></span></div>
+          </details>
         </div>
         <div id="reports"></div></div>
       <div class="card"><h2>Expected return</h2><div id="fc"></div></div>
@@ -652,6 +665,29 @@ $("agRun").onclick = async () => {
   if (!confirm(`Run the agents on ${symbol} as of ${$("agDate").value} with ${analysts.length} analyst(s)? This is a paid AI run, held to your budget.`)) return;
   try { await getJSON("/api/analyze", {ticker: symbol, date: $("agDate").value, analysts}); pollAnalysis(false); }
   catch (e) { $("agState").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+};
+
+// --- the manual route: one prompt for a chat app, its answer read back ---
+$("mpCopy").onclick = async () => {
+  $("mpInfo").textContent = "Gathering the data…"; $("mpCopy").disabled = true;
+  try {
+    const p = await getJSON(`/api/manual-prompt?ticker=${encodeURIComponent(symbol)}&date=${$("agDate").value}`);
+    $("mpPrompt").value = p.prompt; $("mpPrompt").style.display = "";
+    let copied = false;
+    try { await navigator.clipboard.writeText(p.prompt); copied = true; } catch (e) { $("mpPrompt").select(); }
+    $("mpInfo").textContent = `${copied ? "Copied" : "Select the text below and copy it"}: ${p.chars.toLocaleString()} characters (about ${p.tokens_est.toLocaleString()} tokens), as of ${p.date}.`;
+  } catch (e) { $("mpInfo").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+  $("mpCopy").disabled = false;
+};
+$("mpSave").onclick = async () => {
+  $("mpState").textContent = "Reading the answer…";
+  try {
+    const r = await getJSON("/api/manual-answer", {ticker: symbol, date: $("agDate").value, text: $("mpAnswer").value, source: $("mpSource").value});
+    $("mpState").innerHTML = `Final decision: <span class="verdict ${r.final.action}">${r.final.action}</span> · rating ${esc(r.rating)}` +
+      (r.note ? ` <span class="muted">(${esc(r.note)})</span>` : "") + ". Saved under the reports below.";
+    $("mpAnswer").value = "";
+    load(); loadSignals();
+  } catch (e) { $("mpState").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
 };
 
 load();
