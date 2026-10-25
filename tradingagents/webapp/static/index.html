@@ -896,37 +896,53 @@ function fcRunLabel() {
   if (!(lastFc && lastFc.job.running)) $("fcRun").disabled = n === 0;
 }
 let fcMode = new URLSearchParams(location.search).get("fcMode") || store.get("fcMode", "run");
+// Set only when it changed: a poll that brings the same data must not repaint (that is what flickered).
+function setHTML(id, html) { const el = $(id); if (el && el._html !== html) { el.innerHTML = html; el._html = html; } }
+let fcCombined = {key: null, data: null, loading: null};
 // Every model's latest forecast at one horizon, each ticker's combined row above its models' rows.
-async function renderCombined(horizon) {
-  let c;
-  try { c = await api(`/api/forecasts/combined?horizon=${horizon}&universe=${$("fcUniverse").value}`); }
-  catch (e) { $("fcRunInfo").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+async function renderCombined(horizon, runId) {
+  const key = `${horizon}|${$("fcUniverse").value}|${runId || ""}`;
+  if (fcCombined.key !== key) {
+    fcCombined = {key, data: null, loading: null};
+    setHTML("fcTable", "<tr><td class='muted l'>Combining every model's latest forecast…</td></tr>");
+  }
+  if (!fcCombined.data) {
+    if (!fcCombined.loading) fcCombined.loading = api(`/api/forecasts/combined?horizon=${horizon}&universe=${$("fcUniverse").value}`);
+    let c;
+    try { c = await fcCombined.loading; }
+    catch (e) { fcCombined.loading = null; setHTML("fcRunInfo", `<p class="note">${esc(e.message)}</p>`); return; }
+    if (fcCombined.key !== key) return;    // a newer view was asked for while this one loaded
+    fcCombined.data = c;
+  }
   if (fcMode !== "combined") return;
+  drawCombined(fcCombined.data, horizon, runId);
+}
+function drawCombined(c, horizon, runId) {
   const total = c.weights.reduce((t, w) => t + w.raw, 0);
   const used = c.weights.filter(w => w.raw > 0).sort((a, b) => b.raw - a.raw), unused = c.weights.filter(w => !(w.raw > 0));
-  $("fcRunInfo").innerHTML = `<p class="muted">${c.weights.length} model${c.weights.length > 1 ? "s" : ""} at ${horizon} sessions, information cutoff ${esc(c.info_cutoff || "–")}. ` +
+  setHTML("fcRunInfo", `<p class="muted">${c.weights.length} model${c.weights.length > 1 ? "s" : ""} at ${horizon} sessions, information cutoff ${esc(c.info_cutoff || "–")}. ` +
     (c.basis === "equal" ? "<b>No model has significant walk-forward evidence at this horizon, so the ranking models are weighted equally</b>: treat the combination as an experiment. "
       : `Weighted by tested skill (walk-forward IC, only where Holm p &lt; 0.05): ${used.map(w => `${esc(w.model)} ${pct(w.raw / total, 0)}`).join(", ")}. `) +
     (unused.length ? `No weight: ${unused.map(w => `${esc(w.model)} (${esc(w.why)})`).join("; ")}. ` : "") +
-    `A model and its "+chronos" version count separately, though they mostly agree. <b>Apart</b>: how far the weighted models' means differ.</p>`;
+    `A model and its "+chronos" version count separately, though they mostly agree. <b>Apart</b>: how far the weighted models' means differ.</p>`);
   const key = fcSort.key === "ticker" ? "mean" : fcSort.key;
   const val = row => row.combined ? row.combined[key] ?? 0 : -Infinity;
   const rows = [...c.rows].sort((a, b) => fcSort.dir * (val(a) - val(b)) || 0);
   const FC_SHOWN = 15, shown = fcAll ? rows : rows.slice(0, FC_SHOWN);
   $("fcMore").style.display = rows.length > FC_SHOWN ? "" : "none";
   $("fcToggle").textContent = fcAll ? `Show the first ${FC_SHOWN}` : `Show all ${rows.length}`;
-  $("fcToggle").onclick = () => { fcAll = !fcAll; renderCombined(horizon); };
+  $("fcToggle").onclick = () => { fcAll = !fcAll; drawCombined(c, horizon, runId); };
   const sd = x => x == null ? "–" : "±" + (x * 100).toFixed(2) + "%";
   const cells = f => `<td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${sd(f.estimation_sd)}</td>`;
   const head = [["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
-  $("fcTable").innerHTML = "<tr><th>Ticker</th><th class='l'>Model</th><th>Weight</th>" +
+  setHTML("fcTable", "<tr><th>Ticker</th><th class='l'>Model</th><th>Weight</th>" +
     head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
     shown.map(t => (t.combined
       ? `<tr class="comb"><td><b>${tk(t.ticker)}</b> <span class="muted">${esc(t.name || "")}</span></td><td class="l"><b>Combined</b></td><td>100%</td>${cells(t.combined)}<td class="name muted">${t.combined.models} model${t.combined.models > 1 ? "s" : ""}, apart ${sd(t.combined.spread)}</td></tr>`
       : `<tr class="comb"><td><b>${tk(t.ticker)}</b> <span class="muted">${esc(t.name || "")}</span></td><td class="l muted" colspan="8">no model with weight forecasts it</td><td></td></tr>`) +
-      t.models.map(m => `<tr class="sub"><td></td><td class="l">${esc(m.model)}</td><td>${m.weight > 0 ? pct(m.weight, 0) : "0"}</td>${cells(m)}<td class="name">${esc(m.weight > 0 ? (m.flags || []).join("; ") : m.why)}</td></tr>`).join("")).join("");
+      t.models.map(m => `<tr class="sub"><td></td><td class="l">${esc(m.model)}</td><td>${m.weight > 0 ? pct(m.weight, 0) : "0"}</td>${cells(m)}<td class="name">${esc(m.weight > 0 ? (m.flags || []).join("; ") : m.why)}</td></tr>`).join("")).join(""));
   $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
-    fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderCombined(horizon); });
+    fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; drawCombined(c, horizon, runId); });
 }
 function renderBatch(res) {
   const rows = res && res.batch || [];
@@ -962,11 +978,16 @@ function renderForecasts(d) {
   renderBatch(d.job.result);
   $("fcUse").parentElement.title = inv.return_model === "forecast"
     ? `The Investing plan uses the latest ${inv.forecast_model} run at ${inv.forecast_horizon} sessions` : "The Investing plan uses the standard rule";
-  if (!r) { $("fcRunInfo").innerHTML = '<p class="muted">No forecast run yet.</p>'; $("fcTable").innerHTML = ""; }
+  if (!r) { setHTML("fcRunInfo", '<p class="muted">No forecast run yet.</p>'); setHTML("fcTable", ""); }
+  else if (fcMode === "combined") {
+    // A finished job may have added a model: fetch the combination again once it is done.
+    if (fcWasRunning && !d.job.running) fcCombined.key = null;
+    renderCombined(r.horizon, r.id);
+  }
   else {
     const c = r.calibration || {};
-    $("fcRunInfo").innerHTML = `<p class="muted"><b>${esc(r.model)}</b>, ${r.horizon} sessions, information cutoff ${esc(r.info_cutoff)} · trained ${esc(r.train_start)} to ${esc(r.train_end)} · ${esc(r.backend)}, ${r.seconds.toFixed(1)} s, peak ${r.peak_memory_mb ? r.peak_memory_mb.toFixed(0) + " MB" : "–"} · ` +
-      (c.trial ? `backed by trial ${c.trial}: IC ${c.mean_ic.toFixed(3)} (95% ${c.ic_ci[0].toFixed(3)} to ${c.ic_ci[1].toFixed(3)}), within-date calibration ${c.calibration_xs == null ? "–" : c.calibration_xs.toFixed(2)} (what the plan uses), coverage ${pct(c.coverage_90, 0)}` : "<b>no walk-forward trial backs it</b>: the plan gives it no weight") + `</p>`;
+    setHTML("fcRunInfo", `<p class="muted"><b>${esc(r.model)}</b>, ${r.horizon} sessions, information cutoff ${esc(r.info_cutoff)} · trained ${esc(r.train_start)} to ${esc(r.train_end)} · ${esc(r.backend)}, ${r.seconds.toFixed(1)} s, peak ${r.peak_memory_mb ? r.peak_memory_mb.toFixed(0) + " MB" : "–"} · ` +
+      (c.trial ? `backed by trial ${c.trial}: IC ${c.mean_ic.toFixed(3)} (95% ${c.ic_ci[0].toFixed(3)} to ${c.ic_ci[1].toFixed(3)}), within-date calibration ${c.calibration_xs == null ? "–" : c.calibration_xs.toFixed(2)} (what the plan uses), coverage ${pct(c.coverage_90, 0)}` : "<b>no walk-forward trial backs it</b>: the plan gives it no weight") + `</p>`);
     const sorted = [...r.forecasts].sort((a, b) => fcSort.dir * ((a[fcSort.key] ?? 0) - (b[fcSort.key] ?? 0)));
     const FC_SHOWN = 20;
     const rows = fcAll ? sorted : sorted.slice(0, FC_SHOWN);
@@ -974,11 +995,10 @@ function renderForecasts(d) {
     $("fcToggle").textContent = fcAll ? `Show the first ${FC_SHOWN}` : `Show all ${sorted.length}`;
     $("fcToggle").onclick = () => { fcAll = !fcAll; renderForecasts(lastFc); };
     const head = [["ticker", "Ticker"], ["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
-    $("fcTable").innerHTML = "<tr>" + head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${fcSort.key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
-      rows.map(f => `<tr><td><b>${tk(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join("");
+    setHTML("fcTable", "<tr>" + head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${fcSort.key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
+      rows.map(f => `<tr><td><b>${tk(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join(""));
     $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
       fcSort = {key: th.dataset.k, dir: fcSort.key === th.dataset.k ? -fcSort.dir : -1}; renderForecasts(lastFc); });
-    if (fcMode === "combined") renderCombined(r.horizon);
   }
   $("fcModeBar").querySelectorAll("button").forEach(b => {
     b.setAttribute("aria-pressed", b.dataset.m === fcMode);
@@ -991,10 +1011,10 @@ function renderForecasts(d) {
   Object.values(latest).forEach(x => { const k = `${x.universe}|${x.horizon}`; groups[k] = groups[k] || {universe: x.universe, horizon: x.horizon, scores: {}}; Object.assign(groups[k].scores, x.scores); });
   const order = {etf: 0, stock: 1, sp500: 2};
   const UNI = {etf: "ETFs", stock: "S&P 500 stocks, price features (survivorship-biased)", sp500: "S&P 500 stocks with analyst data (survivorship-biased)"};
-  $("fcTrials").innerHTML = "<tr><th class='l'>Model</th><th>IC (95%)</th><th>R²</th><th>Calib. (within date)</th><th>Cover.</th><th>Brier / null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
+  setHTML("fcTrials", "<tr><th class='l'>Model</th><th>IC (95%)</th><th>R²</th><th>Calib. (within date)</th><th>Cover.</th><th>Brier / null</th><th>Net top fifth</th><th>p (Holm)</th></tr>" +
     Object.values(groups).sort((a, b) => (order[a.universe] ?? 9) - (order[b.universe] ?? 9) || a.horizon - b.horizon).map(g =>
       `<tr class="group"><td colspan="8">${esc(UNI[g.universe] || g.universe)} · ${g.horizon} sessions</td></tr>` +
-      Object.values(g.scores).map(m => `<tr><td class="l">${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` <span class="muted">(${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})</span>`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(3)} / ${m.brier_null.toFixed(3)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`).join("")).join("");
+      Object.values(g.scores).map(m => `<tr><td class="l">${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` <span class="muted">(${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})</span>`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(3)} / ${m.brier_null.toFixed(3)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`).join("")).join(""));
   const j = d.job;
   $("fcStatus").textContent = j.running ? j.progress : j.error ? "Failed: " + j.error : "";
   if (fcWasRunning && !j.running) { fcView = null; loadLive(); }   // a finished batch: show its newest run
@@ -1004,7 +1024,7 @@ function renderForecasts(d) {
 }
 async function loadForecasts() {
   try { const d = await api(`/api/forecasts?universe=${$("fcUniverse").value}` + (fcView ? `&run=${encodeURIComponent(fcView)}` : "")); renderForecasts(d); if (d.job.running) setTimeout(loadForecasts, 3000); }
-  catch (e) { $("fcRunInfo").innerHTML = `<p class="note">${esc(e.message)}</p>`; }
+  catch (e) { setHTML("fcRunInfo", `<p class="note">${esc(e.message)}</p>`); }
 }
 async function loadHardware() {
   try {
