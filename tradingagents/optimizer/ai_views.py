@@ -18,11 +18,13 @@ from collections.abc import Callable
 
 from tradingagents.agents.rating import RATING_REVIEW
 from tradingagents.dataflows.date_window import get_current_date
+from tradingagents.llm_clients import roles
 from tradingagents.memory import TradingMemoryLog
 
 # ETFs have no company statements, and every extra analyst multiplies the cost of a run.
 DEFAULT_ANALYSTS = ("market",)
 RATING_SCHEMA = "rating-v1"
+ANALYST_ROLES = ("market", "social", "news", "fundamentals")
 # Rough cost guards for one run, used to reserve budget before it starts.
 EST_REQUESTS_PER_ANALYST = 8
 EST_REQUESTS_BASE = 10
@@ -61,13 +63,17 @@ def collect_ratings(tickers, config: dict, analysts=DEFAULT_ANALYSTS, trade_date
                 return {"rating": graph.propagate(ticker, trade_date)[1]}
 
             provider = config["llm_provider"]
+            moved = roles.validate(config.get("agent_models"))
+            used = roles.models_used(config, [r for r in roles.ROLES if r not in ANALYST_ROLES or r in analysts])
             try:
                 result, how = gateway.run(
                     task="rating", provider=provider, model=config["deep_think_llm"], schema_version=RATING_SCHEMA,
                     info_cutoff=trade_date,
                     inputs={"ticker": ticker, "analysts": sorted(analysts), "quick": config["quick_think_llm"],
-                            "deep": config["deep_think_llm"], "debate_rounds": config.get("max_debate_rounds")},
-                    also_priced=[(provider, config["quick_think_llm"])],
+                            "deep": config["deep_think_llm"], "debate_rounds": config.get("max_debate_rounds"),
+                            # Only when roles are moved, so earlier cached ratings keep their keys.
+                            **({"agents": moved} if moved else {})},
+                    also_priced=[(provider, config["quick_think_llm"]), *used],
                     work=work, est_usd=est_usd,
                     est_requests=EST_REQUESTS_BASE + EST_REQUESTS_PER_ANALYST * len(analysts),
                     allow_paid=allow_paid)

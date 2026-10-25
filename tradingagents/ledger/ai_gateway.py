@@ -151,7 +151,7 @@ class Gateway:
         for p, m in [(provider, model), *also_priced]:
             self.price(p, m)
         self._claim(key, task, est_usd, est_requests)
-        callback = UsageCallback(self, key, task, provider, model)
+        callback = UsageCallback(self, key, task, provider, model, models=[(provider, model), *also_priced])
         try:
             result = work(callback)
         except BaseException as exc:
@@ -237,10 +237,30 @@ class UsageCallback(BaseCallbackHandler):
 
     raise_error = True   # a refusal must stop the run, not be logged and ignored
 
-    def __init__(self, gateway: Gateway, key: str, task: str, provider: str, model: str):
+    def __init__(self, gateway: Gateway, key: str, task: str, provider: str, model: str,
+                 models: list[tuple[str, str]] | None = None):
         self.gateway, self.key, self.task, self.provider, self.model = gateway, key, task, provider, model
+        # Every (provider, model) the work may call: a run can put agent roles on different providers.
+        self.models = list(dict.fromkeys(models or [(provider, model)]))
         self._started: dict = {}
+        self._asked: dict = {}     # run_id -> the model the request named
         self.requests = 0
+
+    def _which(self, *names) -> tuple[str, str]:
+        """The (provider, model) a request belongs to, from the model names it reported; a versioned
+        name ("deepseek-v4-flash-2026-07-01") matches its base ID. Unknown: the job's own model."""
+        for name in filter(None, names):
+            for p, m in self.models:
+                if name == m:
+                    return p, m
+            for p, m in sorted(self.models, key=lambda pm: -len(pm[1])):
+                if name.startswith(m) or name.endswith("/" + m):
+                    return p, m
+        return self.provider, self.model
+
+    def _note_request(self, run_id, kwargs):
+        params = kwargs.get("invocation_params") or {}
+        self._asked[run_id] = params.get("model") or params.get("model_name")
 
     def _check(self, run_id):
         left = self.gateway.remaining()
@@ -261,20 +281,23 @@ class UsageCallback(BaseCallbackHandler):
 
     def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs):
         self._check(run_id)
+        self._note_request(run_id, kwargs)
 
     def on_llm_start(self, serialized, prompts, *, run_id, **kwargs):
         self._check(run_id)
+        self._note_request(run_id, kwargs)
 
     def on_llm_end(self, response, *, run_id, **kwargs):
         self.requests += 1
         u = _usage(response)
         started = self._started.pop(run_id, None)
-        # Priced as the model that answered when it says so (a run can use a quick and a deep model).
-        model = u["model"] if u["model"] and f"{self.provider}/{u['model']}" in self.gateway.policy.prices else self.model
-        self.gateway.record(self.key, self.task, self.provider, model, input_tokens=u["input"],
+        # Priced as the model that answered (a run can use a quick and a deep model, on several providers).
+        provider, model = self._which(self._asked.pop(run_id, None), u["model"])
+        self.gateway.record(self.key, self.task, provider, model, input_tokens=u["input"],
                             output_tokens=u["output"], cached=u["cached"], reasoning=u["reasoning"],
                             latency_ms=int((time.monotonic() - started) * 1000) if started else None)
 
     def on_llm_error(self, error, *, run_id, **kwargs):
         self._started.pop(run_id, None)
-        self.gateway.record(self.key, self.task, self.provider, self.model, status="error", note=str(error)[:300])
+        provider, model = self._which(self._asked.pop(run_id, None))
+        self.gateway.record(self.key, self.task, provider, model, status="error", note=str(error)[:300])

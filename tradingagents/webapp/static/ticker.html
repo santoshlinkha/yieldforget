@@ -305,9 +305,8 @@ async function load() {
   else if (mo.note) $("moat").innerHTML = `<p class="muted">${esc(mo.note)}</p>`;
   else if (failed(mo)) $("moat").innerHTML = failed(mo);
   else {
-    const cls = {"strong indicators": "buy", "some indicators": "hold", "few indicators": "sell"}[mo.verdict] || "";
-    $("moat").innerHTML = `<div class="consensus"><span class="big ${cls}">${esc(mo.verdict[0].toUpperCase() + mo.verdict.slice(1))}</span>
-        <span class="muted">${mo.passed} of ${mo.scored} checks passed${mo.years ? `, annual statements ${esc(mo.years)}` : ""}${mo.basis ? `; ${esc(mo.basis)}` : ""}</span></div>
+    $("moat").innerHTML = `<div class="consensus"><span class="big">${mo.passed} of ${mo.scored}</span>
+        <span class="muted">checks passed${mo.years ? `, annual statements ${esc(mo.years)}` : ""}${mo.basis ? `; ${esc(mo.basis)}` : ""}</span></div>
       <table><tr><th class="l">Check</th><th class="l">This company</th><th class="l">Needs</th><th>Result</th></tr>` +
       mo.checks.map(c => `<tr><td class="l">${esc(c.name)}</td><td class="l">${esc(c.value)}</td><td class="l muted">${esc(c.rule)}</td>
         <td>${c.passed == null ? "<span class='muted'>no data</span>" : c.passed ? "<span class='up'>pass</span>" : "<span class='down'>fail</span>"}</td></tr>`).join("") +

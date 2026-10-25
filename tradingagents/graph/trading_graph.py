@@ -14,7 +14,7 @@ from tradingagents.dataflows.config import run_config, run_config_context, set_c
 from tradingagents.dataflows.date_window import get_current_date, is_historical
 from tradingagents.dataflows.symbols import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.llm_clients import build_llm_kwargs, create_llm_client
+from tradingagents.llm_clients import build_llm_kwargs, create_llm_client, roles
 from tradingagents.memory import TradingMemoryLog, settlement
 from tradingagents.memory.reflection import Reflector
 from tradingagents.reporting import write_report_tree
@@ -75,26 +75,28 @@ class TradingAgentsGraph:
         os.makedirs(self.config["data_cache_dir"], exist_ok=True)
         os.makedirs(self.config["results_dir"], exist_ok=True)
 
-        llm_kwargs = build_llm_kwargs(self.config)
+        # One client per distinct (provider, model): roles moved to another provider by
+        # config["agent_models"] get their own, everyone else shares the quick or deep one.
+        clients = {}
 
-        if self.callbacks:
-            llm_kwargs["callbacks"] = self.callbacks
+        def llm(provider: str, model: str):
+            if (provider, model) not in clients:
+                kwargs = build_llm_kwargs({**self.config, "llm_provider": provider})
+                if self.callbacks:
+                    kwargs["callbacks"] = self.callbacks
+                # The backend URL belongs to the run's own provider, not to another one.
+                same = provider == self.config["llm_provider"].lower()
+                clients[provider, model] = create_llm_client(
+                    provider=provider, model=model, base_url=self.config.get("backend_url") if same else None,
+                    **kwargs,
+                ).get_llm()
+            return clients[provider, model]
 
-        deep_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["deep_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-        quick_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["quick_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-
-        self.deep_thinking_llm = deep_client.get_llm()
-        self.quick_thinking_llm = quick_client.get_llm()
+        provider = self.config["llm_provider"].lower()
+        self.deep_thinking_llm = llm(provider, self.config["deep_think_llm"])
+        self.quick_thinking_llm = llm(provider, self.config["quick_think_llm"])
+        self.role_models = roles.resolve(self.config)
+        self.llms = {role: llm(*pm) for role, pm in self.role_models.items()}
 
         self.memory_log = TradingMemoryLog(self.config)
 
@@ -115,12 +117,13 @@ class TradingAgentsGraph:
             self.deep_thinking_llm,
             self.conditional_logic,
             max_tool_rounds,
+            llms=self.llms,
         )
 
         self.propagator = Propagator(
             max_recur_limit=max_recur_limit,
         )
-        self.reflector = Reflector(self.quick_thinking_llm)
+        self.reflector = Reflector(self.llms["reflector"])
 
         # Graph-shape-affecting run choices, kept for the checkpoint signature.
         self.selected_analysts = tuple(selected_analysts)
@@ -274,7 +277,8 @@ class TradingAgentsGraph:
         local paths are never recorded.
         """
         cfg = self.config
-        return {
+        moved = roles.validate(cfg.get("agent_models"))
+        return {**({"agent_models": moved} if moved else {}),
             "version": tradingagents.__version__,
             "llm_provider": cfg.get("llm_provider"),
             "deep_think_llm": cfg.get("deep_think_llm"),

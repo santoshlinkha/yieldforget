@@ -412,7 +412,17 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         </div>
         <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
         <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
-        <p class="muted small">Quality score: share of the moat, strength and profitability tests passed (a "check" counts half). Consensus: 1 strong buy to 5 strong sell. Combined rank: the average of the percentile ranks of quality, consensus and target upside.</p>
+        <details class="small"><summary><b>How the scores and ranks are measured</b></summary>
+          <ul class="muted">
+            <li><b>Quality score (0–100)</b>: the share of the ticker page's tests the stock passes: the moat checks (gross margin, return on capital, margin stability, free cash flow, and so on) plus the financial strength items (debt to equity, interest coverage, current ratio) and the profitability items (FCF, ROIC above 15%, margin trends). A pass counts 1, a "check" ½, a flag 0; tests without data are left out. Example: 13 of 14 tests passed = 92.9.</li>
+            <li><b>Quality rank</b>: position by quality score alone, 1 = highest. Equal scores share a rank (many stocks score 100).</li>
+            <li><b>Consensus</b>: this month's analyst ratings averaged on 1 = strong buy, 2 = buy, 3 = hold, 4 = sell, 5 = strong sell. Lower is more bullish.</li>
+            <li><b>Target upside</b>: the mean analyst price target ÷ the last close − 1.</li>
+            <li><b>Combined score (0–100)</b>: each stock gets three percentiles among the stocks screened (quality score, consensus with stronger buys higher, target upside); the combined score is their average × 100. 100 would be the best on all three. Hover over a score to see its three parts. A stock missing one measure is averaged on the other two (noted next to its name).</li>
+            <li><b>Combined rank</b>: stocks ordered by combined score, 1 = highest; ties go to the higher quality score, then the ticker.</li>
+            <li><b>Valuation</b> is shown but not in the score, so a good company and a cheap one stay distinguishable. None of these was tested for predicting returns; it is a screen of facts and opinions as of today.</li>
+          </ul>
+        </details>
       </div>
     </section>
 
@@ -530,6 +540,15 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <button class="ghost" id="runAi">Run AI ratings</button>
           <div class="muted" id="aiStatus" style="margin-top:8px"></div>
           <div class="log" id="aiLog"></div>
+        </div>
+        <div class="card" id="agentsCard" style="grid-column:1 / -1">
+          <h3>Agent models</h3>
+          <p class="muted">Which provider and model each agent runs on. Putting the two sides of each debate on different providers (bull vs bear, aggressive vs conservative) stops one model arguing with itself; a third provider can judge. Blank rows use the default. Every model needs a price (dollars per million tokens) so its cost stays within the AI budget; a model with no price is refused before any call is made.</p>
+          <div class="row" style="margin:0 0 8px"><button class="ghost" id="agSuggest">Suggest a split across my keys</button><button class="ghost" id="agReset">All on the default</button><span class="muted small" id="agKeys"></span></div>
+          <div class="table-wrap"><table id="agTable" class="compact"></table></div>
+          <h4 style="margin:12px 0 4px">Prices of the models used ($ per million tokens)</h4>
+          <div class="table-wrap"><table id="agPrices" class="compact"></table></div>
+          <div class="row"><button id="agSave">Save agent models and prices</button><span class="muted small" id="agStatus"></span></div>
         </div>
         <div class="card">
           <h3>What to scan</h3>
@@ -967,14 +986,17 @@ $("fcUse").onchange = async () => {
 
 // --- the quality and Wall Street screen ---
 let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false;
-const QS_COLS = [["rank", "Rank"], ["ticker", "Ticker"], ["quality_score", "Quality"], ["moat_passed", "Moat"],
-  ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags"], ["implied_growth", "Implied growth"],
+const QS_COLS = [["rank", "Combined rank"], ["ticker", "Ticker"], ["combined_score", "Combined score"],
+  ["quality_rank", "Quality rank"], ["quality_score", "Quality score"], ["moat_passed", "Moat"],
+  ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags (checks)"], ["implied_growth", "Implied growth"],
   ["forward_pe", "Fwd P/E"], ["analyst_mean", "Consensus"], ["analysts", "Analysts"], ["target_upside", "Target upside"]];
 function qsValue(r, k) {
   if (k === "strength_flags") return r.strength ? r.strength.flag : null;
   if (k === "valuation_flags") return r.valuation ? r.valuation.flag + 0.5 * r.valuation.warn : null;
   return r[k];
 }
+const qsPct = v => v == null ? "missing" : (100 * v).toFixed(0);
+const qsParts = r => `quality ${qsPct(r.quality_pct)} + consensus ${qsPct(r.analyst_pct)} + target upside ${qsPct(r.upside_pct)} (percentiles), averaged`;
 function renderScreen() {
   if (!qsData || !qsData.latest) { $("qsTable").innerHTML = "<tr><td class='muted l'>Not built yet: build it once (a few minutes the first time).</td></tr>"; return; }
   const q = $("qsFilter").value.trim().toLowerCase();
@@ -992,17 +1014,19 @@ function renderScreen() {
   $("qsToggle").onclick = () => { qsAll = !qsAll; renderScreen(); };
   const arrow = c => qsSort.key === c ? (qsSort.dir < 0 ? " ▾" : " ▴") : "";
   $("qsTable").innerHTML = "<tr>" + QS_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${c === "ticker" ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
-    shown.map(r => `<tr><td>${r.rank}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.name || "")}</span>${r.note ? ` <span class="muted small">(${esc(r.note)})</span>` : ""}</td>
-      <td>${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td><td title="${esc(r.moat)}">${r.moat_passed}/${r.moat_scored}</td>
+    shown.map(r => `<tr><td>${r.rank}</td><td class="l" style="max-width:190px"><b>${tk(r.ticker)}</b><div class="muted small">${esc(r.name || "")}${r.note ? ` (${esc(r.note)})` : ""}</div></td>
+      <td title="${qsParts(r)}">${r.combined_score == null ? "–" : r.combined_score.toFixed(1)}</td>
+      <td>${r.quality_rank == null ? "–" : r.quality_rank}</td>
+      <td title="${r.quality_tests} tests">${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td><td title="${esc(r.moat)}">${r.moat_passed}/${r.moat_scored}</td>
       <td class="${r.strength && r.strength.flag ? "neg" : ""}">${r.strength ? r.strength.flag : "–"}</td>
-      <td class="${r.valuation && r.valuation.flag ? "neg" : ""}">${r.valuation ? `${r.valuation.flag} (+${r.valuation.warn} check)` : "–"}</td>
+      <td class="${r.valuation && r.valuation.flag ? "neg" : ""}">${r.valuation ? `${r.valuation.flag} (${r.valuation.warn})` : "–"}</td>
       <td>${r.implied_growth == null ? "–" : pct(r.implied_growth, 1)}</td><td>${r.forward_pe == null ? "–" : (+r.forward_pe).toFixed(1)}</td>
       <td title="${esc(r.analyst_label || "")}">${r.analyst_mean == null ? "–" : `${r.analyst_mean.toFixed(2)} <span class="muted small">${esc(r.analyst_label)}</span>`}</td>
       <td>${r.analysts || "–"}</td><td class="${(r.target_upside || 0) >= 0 ? "pos" : "neg"}">${r.target_upside == null ? "–" : spct(r.target_upside)}</td></tr>`).join("");
   $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
     const c = th.dataset.k;
     // First click: best first (rank and consensus ascending, the rest descending).
-    const natural = ["rank", "analyst_mean", "strength_flags", "valuation_flags", "forward_pe", "ticker"].includes(c) ? 1 : -1;
+    const natural = ["rank", "quality_rank", "analyst_mean", "strength_flags", "valuation_flags", "forward_pe", "ticker"].includes(c) ? 1 : -1;
     qsSort = {key: c, dir: qsSort.key === c ? -qsSort.dir : natural};
     renderScreen();
   });
@@ -1428,6 +1452,60 @@ $("sleeve").onchange = async () => {
 $("useAi").onchange = () => { store.set("useAi", $("useAi").checked); refresh(); };
 $("scan").onchange = () => { store.set("scan", $("scan").checked); refresh(); };
 
+// --- agent models: a provider and model per role, and the prices the budget needs ---
+let agData = null, agMap = {};
+function agResolved() {
+  const d = agData.default;
+  return agData.roles.map(r => {
+    const m = agMap[r.role];
+    return {...r, provider: m ? m.provider : d.provider, model: m ? m.model : (r.tier === "deep" ? d.deep : d.quick), moved: !!m};
+  });
+}
+function agRender() {
+  const rows = agResolved(), keys = new Set(agData.providers_with_keys);
+  $("agKeys").textContent = `Keys found for: ${agData.providers_with_keys.join(", ") || "none"}`;
+  const opts = sel => agData.providers.map(p => `<option value="${p}" ${p === sel ? "selected" : ""}>${p}${keys.has(p) ? "" : " (no key)"}</option>`).join("");
+  $("agTable").innerHTML = "<tr><th class='l'>Agent</th><th class='l'>Stage</th><th class='l'>Provider</th><th class='l'>Model</th><th></th></tr>" +
+    rows.map(r => `<tr><td class="l">${esc(r.label)}</td><td class="l muted">${esc(r.stage)}</td>
+      <td class="l"><select data-role="${r.role}" data-f="provider" style="width:auto">${opts(r.provider)}</select></td>
+      <td class="l"><input type="text" data-role="${r.role}" data-f="model" value="${esc(r.model)}" style="width:180px"></td>
+      <td class="muted small">${r.moved ? "" : "default"}${keys.has(r.provider) ? "" : " <span class='neg'>no key</span>"}</td></tr>`).join("");
+  $("agTable").querySelectorAll("[data-role]").forEach(el => el.onchange = () => {
+    const role = el.dataset.role, cur = agResolved().find(x => x.role === role);
+    const next = {provider: cur.provider, model: cur.model, [el.dataset.f]: el.value.trim()};
+    if (el.dataset.f === "provider") next.model = (agData.catalog[next.provider] || {})[cur.tier] || "";
+    agMap[role] = next;
+    agRender();
+  });
+  const prices = agData.settings.ai_prices || {};
+  const used = [...new Set(rows.map(r => `${r.provider}/${r.model}`))].sort();
+  $("agPrices").innerHTML = "<tr><th class='l'>Provider/model</th><th>Input</th><th>Cached input</th><th>Output</th></tr>" +
+    used.map(k => { const p = prices[k] || {}; return `<tr><td class="l">${esc(k)}${prices[k] ? "" : " <span class='neg small'>no price: refused</span>"}</td>` +
+      ["input", "cached_input", "output"].map(f => `<td><input type="number" min="0" step="0.01" data-k="${esc(k)}" data-f="${f}" value="${p[f] ?? ""}" style="width:90px"></td>`).join("") + "</tr>"; }).join("");
+}
+async function loadAgents() {
+  try { agData = await api("/api/ai"); } catch (e) { $("agStatus").textContent = e.message; return; }
+  agMap = {...(agData.settings.ai_agent_models || {})};
+  agRender();
+}
+$("agSuggest").onclick = () => {
+  if (!Object.keys(agData.suggested).length) { $("agStatus").textContent = "Only one provider has a key: add another key to split the debates."; return; }
+  agMap = {...agData.suggested}; agRender(); $("agStatus").textContent = "Suggested: review, set prices, then save.";
+};
+$("agReset").onclick = () => { agMap = {}; agRender(); };
+$("agSave").onclick = async () => {
+  const prices = {...(agData.settings.ai_prices || {})};
+  $("agPrices").querySelectorAll("input[data-k]").forEach(el => {
+    const k = el.dataset.k; if (el.value === "") return;
+    prices[k] = {...(prices[k] || {}), [el.dataset.f]: +el.value};
+  });
+  for (const [k, p] of Object.entries(prices)) if (p.input == null || p.output == null) { $("agStatus").textContent = `${k}: give both an input and an output price`; return; }
+  try {
+    await api("/api/settings", {scope: "global", values: {ai_agent_models: agMap, ai_prices: prices}});
+    $("agStatus").textContent = "Saved."; loadAgents();
+  } catch (e) { $("agStatus").textContent = e.message; }
+};
+
 async function pollAi() {
   const a = await api("/api/ratings");
   $("runAi").disabled = a.running;
@@ -1463,7 +1541,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); loadCapital(); loadDecisions(); loadScreen(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); loadCapital(); loadDecisions(); loadScreen(); loadAgents(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over

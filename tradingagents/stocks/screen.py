@@ -11,9 +11,10 @@ For each stock (today's S&P 500 plus the watchlist):
 - **Wall Street**: this month's analyst counts (strong buy to strong sell) as a consensus score from 1
   (strong buy) to 5 (strong sell), the number of analysts, and the upside to the mean price target.
 
-**Combined rank**: the average of three percentile ranks among the stocks screened (quality score,
+**Combined score** (0-100) and **combined rank**: the average of three percentile ranks among the stocks screened (quality score,
 analyst consensus with stronger buys ranked higher, price-target upside); a stock missing one of them is
-ranked on the others and says so. Ties break by quality score, then ticker. It is a screen of facts and
+ranked on the others and says so. Ties break by quality score, then ticker. **Quality rank** orders by
+the quality score alone (equal scores share a rank). It is a screen of facts and
 opinions as of today, not a forecast: none of it was tested for predicting returns (see the decision
 study for what was), and Wall Street data is Yahoo's version as of today.
 
@@ -34,6 +35,8 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 WEIGHT = {"ok": 1.0, "warn": 0.5, "flag": 0.0}
+DERIVED = ("quality_pct", "analyst_pct", "upside_pct", "combined", "combined_score", "missing", "quality_rank",
+           "rank", "note")
 
 
 def _consensus(analysts: dict | None) -> tuple[float | None, int, str | None]:
@@ -98,10 +101,14 @@ def rank(rows: list[dict]) -> list[dict]:
     for k, v in parts.items():
         frame[k] = v
     frame["combined"] = frame[list(parts)].mean(axis=1, skipna=True)
+    frame["combined_score"] = (100 * frame["combined"]).round(1)
     frame["missing"] = frame[list(parts)].isna().sum(axis=1)
+    # Quality rank: 1 = the highest quality score; equal scores share a rank.
+    frame["quality_rank"] = frame["quality_score"].rank(ascending=False, method="min")
     frame = frame.sort_values(["combined", "quality_score", "ticker"], ascending=[False, False, True], na_position="last")
     frame["rank"] = np.arange(1, len(frame) + 1)
-    out = frame.replace({np.nan: None}).to_dict("records")
+    frame["quality_rank"] = frame["quality_rank"].astype("Int64")
+    out = frame.astype(object).where(frame.notna(), None).to_dict("records")
     for r in out:
         if r["missing"]:
             r["note"] = f"ranked on {3 - int(r['missing'])} of 3 measures"
@@ -149,6 +156,11 @@ def build(cache_dir: Path, tickers: list[str], results_dir: Path, workers: int =
 
 
 def latest(results_dir: Path) -> dict | None:
+    """The newest saved screen, re-ranked (pure arithmetic, so older files gain new rank columns)."""
     folder = Path(results_dir) / "screen"
     files = sorted(folder.glob("quality_*.json")) if folder.is_dir() else []
-    return json.loads(files[-1].read_text(encoding="utf-8")) if files else None
+    if not files:
+        return None
+    out = json.loads(files[-1].read_text(encoding="utf-8"))
+    out["rows"] = rank([{k: v for k, v in r.items() if k not in DERIVED} for r in out.get("rows", [])])
+    return out

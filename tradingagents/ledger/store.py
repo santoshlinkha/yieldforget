@@ -36,6 +36,8 @@ GLOBAL_DEFAULTS = {
     "ai_shortlist": 10,
     "ai_fallbacks": [],       # other providers a failed paid call may move to; none by default
     "ai_estimates": {"rating": 0.30, "market_brief": 0.02},   # dollars reserved per job before it runs
+    # Agent roles on their own provider and model (llm_clients.roles); empty: all on the run's provider.
+    "ai_agent_models": {},
     "compute_backend": "auto",
     # Stock research: the saved watchlist, and the limits stock recommendations respect.
     "stock_watchlist": [],
@@ -84,6 +86,10 @@ class Store:
             scope, key = capital.SCOPE, capital.ALIASES[(scope, key)]
         if scope == capital.SCOPE:
             value = capital.validate(key, value)   # the backend checks every amount, whoever sends it
+        if (scope, key) == ("global", "ai_agent_models"):
+            from tradingagents.llm_clients.roles import validate
+
+            value = validate(value)
         self.get(scope, key)   # refuses unknown keys
         text = json.dumps(value)
         with transaction(self.con):

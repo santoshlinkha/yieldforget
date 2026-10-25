@@ -37,6 +37,8 @@ def test_ranking_is_stable_under_ties_and_ranks_missing_measures_on_the_rest():
     out = screen.rank(rows)
     assert [r["ticker"] for r in out] == ["DDD", "AAA", "BBB", "CCC"]       # the tie breaks by ticker
     assert out[-1]["note"] == "ranked on 2 of 3 measures"
+    assert [r["quality_rank"] for r in out] == [1, 2, 2, 4]                  # equal quality scores share a rank
+    assert out[0]["combined_score"] == 100.0
     assert [r["ticker"] for r in screen.rank(list(reversed(rows)))] == ["DDD", "AAA", "BBB", "CCC"]
 
 
@@ -49,3 +51,7 @@ def test_reading_the_screen_fetches_nothing(tmp_path, monkeypatch):
     (tmp_path / "screen").mkdir()
     (tmp_path / "screen" / "quality_2026-10-23.json").write_text('{"rows": [], "stocks": 0}')
     assert screen.latest(tmp_path)["stocks"] == 0
+    (tmp_path / "screen" / "quality_2026-10-24.json").write_text(
+        '{"rows": [{"ticker": "AAA", "quality_score": 50, "analyst_mean": 2.0, "target_upside": 0.1, "rank": 9}], "stocks": 1}')
+    row = screen.latest(tmp_path)["rows"][0]
+    assert row["rank"] == 1 and row["quality_rank"] == 1                     # older files gain the new columns

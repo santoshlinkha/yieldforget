@@ -99,10 +99,12 @@ class GraphSetup:
         deep_thinking_llm: Any,
         conditional_logic: ConditionalLogic,
         max_tool_rounds: int,
+        llms: dict[str, Any] | None = None,
     ):
-        """Initialize with required components."""
+        """Initialize with required components; ``llms`` overrides the model per role (see llm_clients.roles)."""
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
+        self.llms = llms or {}
         self.conditional_logic = conditional_logic
         self.max_tool_rounds = max_tool_rounds
 
@@ -120,22 +122,24 @@ class GraphSetup:
         """
         plan = build_analyst_execution_plan(selected_analysts)
 
+        quick = lambda role: self.llms.get(role, self.quick_thinking_llm)  # noqa: E731
+        deep = lambda role: self.llms.get(role, self.deep_thinking_llm)  # noqa: E731
         analyst_factories = {
-            "market": lambda: create_market_analyst(self.quick_thinking_llm),
-            "social": lambda: create_sentiment_analyst(self.quick_thinking_llm),
-            "news": lambda: create_news_analyst(self.quick_thinking_llm),
-            "fundamentals": lambda: create_fundamentals_analyst(self.quick_thinking_llm),
+            "market": lambda: create_market_analyst(quick("market")),
+            "social": lambda: create_sentiment_analyst(quick("social")),
+            "news": lambda: create_news_analyst(quick("news")),
+            "fundamentals": lambda: create_fundamentals_analyst(quick("fundamentals")),
         }
 
-        bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
-        bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
-        research_manager_node = create_research_manager(self.deep_thinking_llm)
-        trader_node = create_trader(self.quick_thinking_llm)
+        bull_researcher_node = create_bull_researcher(quick("bull"))
+        bear_researcher_node = create_bear_researcher(quick("bear"))
+        research_manager_node = create_research_manager(deep("research_manager"))
+        trader_node = create_trader(quick("trader"))
 
-        aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
-        portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
+        aggressive_analyst = create_aggressive_debator(quick("aggressive"))
+        neutral_analyst = create_neutral_debator(quick("neutral"))
+        conservative_analyst = create_conservative_debator(quick("conservative"))
+        portfolio_manager_node = create_portfolio_manager(deep("portfolio_manager"))
 
         workflow = StateGraph(AgentState)
 

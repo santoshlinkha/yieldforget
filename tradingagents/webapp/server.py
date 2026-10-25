@@ -351,8 +351,10 @@ class App:
         tickers = [t for t in dict.fromkeys([*(p.ticker.upper() for p in context.positions),
                                              *self.last_targets]) if t != cash][:int(g["ai_shortlist"])]
 
+        config = {**self.config, "agent_models": g["ai_agent_models"]}
+
         def work(job):
-            ratings, failures = collect_ratings(tickers, self.config, analysts, gateway=self.gateway(),
+            ratings, failures = collect_ratings(tickers, config, analysts, gateway=self.gateway(),
                                                 allow_paid=True, est_usd=g["ai_estimates"]["rating"],
                                                 progress=lambda t, s: job.log.append(f"{t}: {s}"))
             self.ratings, self.ratings_date = ratings, _today()
@@ -363,8 +365,22 @@ class App:
 
     def ai_usage(self) -> dict:
         rows = [dict(r) for r in self.store.con.execute("SELECT * FROM ai_usage ORDER BY id DESC LIMIT 50")]
-        return {"remaining": self.gateway().remaining(), "recent": rows,
-                "settings": self.store.settings("global")}
+        from tradingagents.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
+        from tradingagents.llm_clients.roles import ROLES, first_model, resolve, suggest
+
+        g = self.store.settings("global")
+        config = {**self.config, "agent_models": g["ai_agent_models"]}
+        # Which providers have a key in the environment (never the key itself).
+        keys = sorted(p for p, env in PROVIDER_API_KEY_ENV.items() if env and os.environ.get(env))
+        return {"remaining": self.gateway().remaining(), "recent": rows, "settings": g,
+                "roles": [{"role": r, "label": label, "stage": stage, "tier": tier,
+                           "provider": resolve(config)[r][0], "model": resolve(config)[r][1],
+                           "moved": r in g["ai_agent_models"]} for r, (label, stage, tier) in ROLES.items()],
+                "default": {"provider": self.config["llm_provider"], "quick": self.config["quick_think_llm"],
+                            "deep": self.config["deep_think_llm"]},
+                "providers": sorted(PROVIDER_API_KEY_ENV), "providers_with_keys": keys,
+                "catalog": {p: {"quick": first_model(p, "quick"), "deep": first_model(p, "deep")} for p in keys},
+                "suggested": suggest(self.config["llm_provider"], keys)}
 
     def start_explain(self) -> bool:
         g = self.store.settings("global")
