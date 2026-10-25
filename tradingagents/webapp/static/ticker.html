@@ -474,11 +474,12 @@ async function load() {
         `<p>Average <b>${money(pt.mean)}</b>${now ? `, ${spct(pt.mean / now - 1)} from today's ${money(now)}` : ""}; median ${money(pt.median)}.</p>` +
         `<div class="target"><div class="rail"></div>` +
         [["low", pt.low], ["average", pt.mean], ["high", pt.high]].map(([l, v]) => `<div class="mark" style="left:${x(v)}"></div><div class="lbl" style="left:${x(v)}">${l} ${money(v, 0)}</div>`).join("") +
-        (now ? `<div class="mark now" style="left:${x(now)}"></div><div class="lbl now" style="left:${x(now)}">now</div>` : "") + `</div><div style="height:16px"></div>`;
+        (now ? `<div class="mark now" style="left:${x(now)}"></div><div class="lbl now" style="left:${x(now)}">now ${money(now, 0)}</div>` : "") + `</div><div style="height:16px"></div>`;
     }
     h += an.actions.length ? `<details ${h ? "" : "open"}><summary class="small">Rating changes, newest first (${an.actions_total} on record)</summary><table>` +
       an.actions.map(x => `<tr><td class="l small">${esc(x.date)}</td><td class="l small">${esc(x.Firm)}</td><td class="l small"><span class="${x.Action === "up" ? "up" : x.Action === "down" ? "down" : ""}">${esc(x.ToGrade)}</span>${x.FromGrade && x.FromGrade !== x.ToGrade ? ` <span class="muted">from ${esc(x.FromGrade)}</span>` : ""}</td><td class="small">${x.currentPriceTarget ? money(x.currentPriceTarget, 0) : ""}</td></tr>`).join("") + "</table></details>" : "";
     $("analysts").innerHTML = h || "<p class='muted'>No analyst coverage (funds usually have none).</p>";
+    document.querySelectorAll("#analysts .target").forEach(fitTargetLabels);
 
     // EPS and revenue estimates
     const period = {"0q": "This quarter", "+1q": "Next quarter", "0y": "This year", "+1y": "Next year"};
@@ -544,6 +545,33 @@ function mdInline(t) {
        .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<i>$2</i>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<i>$2</i>");
   return h.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
 }
+// The price-target scale's labels: each centred on its mark but kept inside the panel, and a label that
+// would overlap the one before it moves to the next row (above the rail for targets, below for "now").
+function fitTargetLabels(box) {
+  const width = box.clientWidth;
+  if (!width) return;
+  const place = (labels, rows) => {
+    const ends = [];   // the right edge used so far in each row
+    labels.map(el => { el.dataset.x = el.dataset.x || el.style.left; return {el, x: parseFloat(el.dataset.x) / 100 * width, w: el.offsetWidth}; })
+      .sort((a, b) => a.x - b.x)
+      .forEach(({el, x, w}) => {
+        const left = Math.min(Math.max(x - w / 2, 0), width - w);   // centred, clamped to the panel
+        let row = ends.findIndex(end => left >= end + 6);
+        if (row < 0) row = Math.min(ends.length, rows.length - 1);
+        ends[row] = left + w;
+        el.style.left = left + "px";
+        el.style.transform = "none";
+        el.style.top = rows[row] + "px";
+      });
+    return ends.length;
+  };
+  const above = place([...box.querySelectorAll(".lbl:not(.now)")], [-12, -26]);
+  const below = place([...box.querySelectorAll(".lbl.now")], [30, 44]);
+  box.style.marginTop = (above > 1 ? 28 : 14) + "px";
+  if (box.nextElementSibling) box.nextElementSibling.style.height = (below > 1 ? 30 : 16) + "px";
+}
+window.addEventListener("resize", () => document.querySelectorAll("#analysts .target").forEach(fitTargetLabels));
+
 // Open one saved run and show its final decision (or its first report when it has none).
 function openRun(day) {
   const box = document.querySelector(`#reports details[data-day="${day}"]`);
