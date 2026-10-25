@@ -515,7 +515,7 @@ async function load() {
   else {
     const withRun = rp.runs.filter(run => run.decision);
     let h = withRun.length ? `<p class="small">Final decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.decision)}</b></a>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details data-day="${esc(run.date)}"><summary>${run.decision ? `<span class="verdict ${run.decision}" style="font-size:11px;padding:1px 8px;margin-right:6px">${run.decision}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents: ${esc(run.rating)}` : ""}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+    h += rp.runs.length ? rp.runs.map(run => `<details data-day="${esc(run.date)}"><summary>${run.decision ? `<span class="verdict ${run.decision}" style="font-size:11px;padding:1px 8px;margin-right:6px">${run.decision}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents' view: ${esc(run.rating)} (not used)` : ""}: ${run.files.length} report(s)${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
       (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
@@ -675,8 +675,11 @@ async function loadSignals() {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
     h += `<div class="vbox"><span class="verdict big ${vd.verdict}">${vd.verdict}</span><div class="why"><b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.</div></div>` +
       `<details${vd.verdict === "WATCH" ? " open" : ""}><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
-      vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>` +
-      `<p class="small muted">BUY needs every test to pass (or the daily decision's ENTER). AVOID: an Underweight/Sell agent rating, a crash warning, quality under ${vd.rules.min_quality} or consensus ${vd.rules.max_consensus}+. A held stock is SELL on the decision's EXIT/REDUCE, or on a bearish agent rating together with a breakdown or crash warning; otherwise HOLD. Agent ratings count for ${vd.rules.rating_days} days: run the agents above for a fresh one. None of these inputs is validated as a trading signal: this summarizes the evidence; you decide.</p></details>`;
+      (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
+        : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
+      `<p class="small" style="margin:10px 0 4px"><b>Context</b> <span class="muted">(shown, does not change the verdict)</span></p><ul class="vchecks">` +
+      (vd.context || []).map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>` +
+      `<p class="small muted">The verdict comes only from the app's own ${vd.model ? vd.model.horizon : 20}-session model, which ranks every S&amp;P 500 stock on how a trade should do after costs. Not held: BUY needs the top fifth, an expected gain after costs, P(profit) ${pct(vd.rules.min_p_win, 0)}+ and P(large loss) ${pct(vd.rules.max_p_risk, 0)} or less; AVOID is the bottom fifth or an expected loss; WATCH is in between. Held: SELL on the daily decision's EXIT/REDUCE or a bottom-fifth rank with an expected loss; otherwise HOLD. The agents' rating is shown but not used. The model is experimental: its ranking showed a small edge in testing, but trading on it did not beat holding SPY.</p></details>`;
     $("vbadge").innerHTML = `<span class="verdict ${vd.verdict}" title="${esc(vd.summary)}">${vd.verdict}</span>`;
   }
   if (dec) {

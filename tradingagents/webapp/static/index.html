@@ -469,7 +469,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div class="row"><button id="aiRunPicked">Run the AI on the selected stocks</button><span class="muted small" id="aiRunInfo"></span></div>
         <p class="muted small" id="aiState"></p>
         <div class="log" id="aiDecLog"></div>
-        <p class="muted small">AI decision: the agents' rating as an action. Buy or Overweight → <b>BUY</b>; Hold → <b>HOLD</b> (WATCH if you do not hold it); Underweight or Sell → <b>SELL</b> (AVOID if you do not hold it). The rule verdict is the app's fixed checklist (quality, Wall Street, the models' warnings and this rating); open a ticker for both in full and the agents' reports. An AI rating is an LLM's judgment on the evidence it read, not a tested forecast, and it counts toward the rule verdict for 30 days.</p>
+        <p class="muted small"><b>Model verdict</b> decides: the app's own 20-session model, which ranks every S&amp;P 500 stock on how a trade should do after costs (BUY = top fifth with an expected gain, P(profit) 50%+ and P(large loss) 15% or less; AVOID = bottom fifth or an expected loss; HOLD / SELL for what you hold). <b>Agents' view</b> is the agents' rating as an action (Buy or Overweight → BUY, Hold → HOLD or WATCH, Underweight or Sell → SELL or AVOID), shown for comparison only: it decides nothing. Open a ticker for both in full and the agents' reports. The model is experimental: its ranking showed a small edge in testing, but trading on it did not beat holding SPY.</p>
       </div>
       <div class="card">
         <h3>Quant model decision (Trading sleeve)</h3>
@@ -1209,9 +1209,9 @@ function aiRender() {
   };
   if (aiPicked === null) {
     const held = d.rows.filter(r => r.in_trading).map(r => r.ticker);
-    aiPicked = new Set([...held, ...d.rows.filter(r => r.why === "rule verdict BUY").map(r => r.ticker)].slice(0, AI_PICK));
+    aiPicked = new Set([...held, ...d.rows.filter(r => r.why === "model verdict BUY").map(r => r.ticker)].slice(0, AI_PICK));
   }
-  $("aiTable").innerHTML = "<tr><th></th><th class='l'>Ticker</th><th class='l'>Listed because</th><th>AI decision</th><th class='l'>Report</th><th>Rule verdict</th><th>Agree</th></tr>" +
+  $("aiTable").innerHTML = "<tr><th></th><th class='l'>Ticker</th><th class='l'>Listed because</th><th title='Shown for comparison; it decides nothing'>Agents' view (not used)</th><th class='l'>Report</th><th title='The app's own 20-session model'>Model verdict</th><th>Agree</th></tr>" +
     (d.rows.length ? aiShown(d.rows).map(r => {
       const ai = r.ai, agree = ai && r.verdict ? (ai.action === r.verdict ? "✓" : "✗") : "–";
       return `<tr><td><input type="checkbox" data-t="${esc(r.ticker)}" ${aiPicked.has(r.ticker) ? "checked" : ""} aria-label="Analyze ${esc(r.ticker)}"></td>
@@ -1234,7 +1234,7 @@ function aiRender() {
 function aiShown(rows) {
   if (aiAll) return rows;
   let buys = 0;
-  return rows.filter(r => r.held || r.ai || aiPicked.has(r.ticker) || (r.why === "rule verdict BUY" && buys++ < 8));
+  return rows.filter(r => r.held || r.ai || aiPicked.has(r.ticker) || (r.why === "model verdict BUY" && buys++ < 8));
 }
 function aiCost() {
   const n = aiPicked.size, k = $("aiAnalysts").querySelectorAll("input:checked").length, b = aiData.budget;

@@ -613,7 +613,10 @@ class App:
         from tradingagents.stocks import daily, screen, signals
         from tradingagents.stocks.verdict import verdict
 
-        out = signals.board(self.store.con, daily.load(self.store.con), 20, ticker)
+        decision = daily.load(self.store.con)
+        scores = (decision or {}).get("scores") or {}
+        horizon = (decision or {}).get("horizon") or 20
+        out = signals.board(self.store.con, decision, 20, ticker)
         held = {t for t, q in self.store.ledger.state("combined", _today()).positions.items() if q}
         latest = screen.latest(Path(self.config["results_dir"])) or {}
         rows = {r["ticker"]: r for r in latest.get("rows", [])}
@@ -630,8 +633,9 @@ class App:
                                                             "analyst_label", "target_upside", "rank")}
             r["rating"] = ratings.get(t)
             # Nothing on record (a fund, or a stock never screened or forecast): no verdict rather than a guess.
-            known = row or r["signal"] or r["decision"] or t in held
-            r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t)) if known else None
+            known = row or r["signal"] or r["decision"] or t in held or t in scores
+            r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t), score=scores.get(t),
+                                   horizon=horizon) if known else None
         return out
 
     def _screen_row(self, symbol: str) -> dict | None:
@@ -783,23 +787,26 @@ class App:
         rule = (row.get("verdict") or {})
         used = [models] if models else sorted({f"{p}/{m}" for p, m in roles.resolve(cfg).values()})
         pm = folder / "5_portfolio" / "decision.md"
-        why = {"BUY": "the agents favour buying", "HOLD": "the agents say keep what you hold",
-               "SELL": "the agents say reduce or exit", "AVOID": "the agents are bearish and you do not hold it",
-               "WATCH": "the agents say hold, and you do not own it: nothing to buy yet"}.get(ai["action"], "")
-        lines = [f"# FINAL DECISION: {ai['action']}", "",
-                 f"**{ticker}**, analyzed as of {day}. {why[0].upper() + why[1:]} (rating **{result['rating']}**; "
-                 f"{'you hold it' if held else 'you do not hold it'}).", "",
-                 f"- **Agents' rating**: {result['rating']} (Buy / Overweight -> BUY, Hold -> HOLD or WATCH, "
-                 f"Underweight / Sell -> SELL or AVOID)",
-                 f"- **App's rule verdict**: {rule.get('verdict', 'none')}" + (f" ({rule['summary']})" if rule.get("summary") else "")
-                 + (f"; {'agrees' if rule.get('verdict') == ai['action'] else 'disagrees'}" if rule.get("verdict") else ""),
-                 f"- **Models**: {', '.join(used)}" + (" (after a fallback)" if result.get("fell_back") else ""),
-                 "- An AI rating is an LLM's judgment on the evidence it read, not a tested forecast. You place any order.", ""]
+        model = rule.get("model") or {}
+        final = rule.get("verdict") or "WATCH"
+        lines = [f"# FINAL DECISION: {final}", "",
+                 f"**{ticker}**, as of {day}. Decided by the app's own {model.get('horizon', 20)}-session model, "
+                 f"not by the agents: {rule.get('summary', 'the model has not scored this stock')} "
+                 f"({'you hold it' if held else 'you do not hold it'}).", ""]
+        if model:
+            lines += [f"- **Model rank**: #{model['rank']} of {model['of']} S&P 500 stocks today",
+                      f"- **Expected net return**: {model['expected_net']:+.2%} after costs, P(profit) "
+                      f"{model['p_win']:.0%}, P(large loss) {model['p_risk']:.0%}"]
+        lines += [f"- **The agents' view** (shown, not used): rating {result['rating']}, i.e. {ai['action']}"
+                  + (f"; {'agrees' if ai['action'] == final else 'differs'}" if model else ""),
+                  f"- **Agent models**: {', '.join(used)}" + (" (after a fallback)" if result.get("fell_back") else ""),
+                  "- The model is experimental: its ranking showed a small edge in testing, but trading on it did not "
+                  "beat holding SPY. You place any order.", ""]
         if pm.is_file():
             lines += ["## The portfolio manager's decision", "", pm.read_text(encoding="utf-8")]
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "0_FINAL_DECISION.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return {"action": ai["action"], "rating": result["rating"], "held": held, "rule": rule.get("verdict")}
+        return {"action": final, "agents": ai["action"], "rating": result["rating"], "held": held, "model": model}
 
     def start_analysis(self, body: dict) -> bool:
         """The agents' full analysis of one ticker as of a chosen day (paid: asked for by a click)."""
@@ -855,7 +862,7 @@ class App:
                 last_rated[e["ticker"].upper()] = {"rating": e["rating"], "date": e["date"]}
         rated = sorted(last_rated, key=lambda t: last_rated[t]["date"], reverse=True)
         for t, why in [*((t, "you hold it") for t in held), *((t, "analyzed by the agents") for t in rated),
-                       *((t, "rule verdict BUY") for t in buys), *((t, "top of the daily decision") for t in paper)]:
+                       *((t, "model verdict BUY") for t in buys), *((t, "top of the daily decision") for t in paper)]:
             if t in seen:
                 continue
             seen.add(t)
@@ -1178,8 +1185,16 @@ class App:
             by_date = {r["date"]: r for r in ratings}
             for run in found:
                 if run["date"] in by_date:
-                    run["decision"] = ai_decision(by_date[run["date"]], held)["action"]
                     run["rating"] = by_date[run["date"]]["rating"]
+                    run["agents"] = ai_decision(by_date[run["date"]], held)["action"]
+                # The run's final decision is the model's verdict written in its first report.
+                for root in self.report_roots():
+                    first = root / symbol / run["date"] / "reports" / "0_FINAL_DECISION.md"
+                    if first.is_file():
+                        head = first.read_text(encoding="utf-8").splitlines()[0]
+                        if head.startswith("# FINAL DECISION:"):
+                            run["decision"] = head.split(":", 1)[1].strip()
+                        break
             return {"runs": found, "ratings": ratings}
 
         section("price", price)

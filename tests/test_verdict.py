@@ -1,48 +1,48 @@
-"""The per-stock verdict: BUY only when every test passes, AVOID on bearish evidence, SELL for a held stock."""
+"""The per-stock verdict: decided by the internal 20-session model alone; AI ratings and screens are context."""
 
 from datetime import date
 
 import pytest
 
-from tradingagents.stocks.verdict import verdict
+from tradingagents.stocks.verdict import ai_decision, verdict
 
 pytestmark = pytest.mark.unit
 TODAY = date(2026, 10, 24)
-GOOD = {"quality_score": 90, "analyst_mean": 1.8, "target_upside": 0.25}
-CALM = {"status": "ok", "warnings": []}
+TOP = {"rank": 12, "of": 499, "score_pct": 0.95, "expected_net": 0.007, "p_win": 0.56, "p_risk": 0.07, "cost_rt": 0.001}
+MID = {**TOP, "rank": 250, "score_pct": 0.5, "expected_net": 0.002}
+LOW = {**TOP, "rank": 480, "score_pct": 0.05, "expected_net": -0.004}
 BREAKDOWN = {"status": "ok", "warnings": [{"kind": "breakdown", "text": "breakdown risk: 80% vs 42% usual"}]}
 
 
-def test_buy_needs_every_test():
-    assert verdict(False, None, CALM, GOOD, None, TODAY)["verdict"] == "BUY"
-    v = verdict(False, None, BREAKDOWN, GOOD, None, TODAY)
-    assert v["verdict"] == "WATCH" and v["summary"] == "waiting for the breakdown or crash warning to clear"
-    assert verdict(False, None, None, GOOD, None, TODAY)["verdict"] == "WATCH"      # no signals: not enough data
+def test_buy_comes_from_the_model_not_from_ai_or_screens():
+    bad_ai = {"rating": "Sell", "date": "2026-10-23"}
+    v = verdict(False, None, BREAKDOWN, {"quality_score": 30, "analyst_mean": 3.5}, bad_ai, TODAY, score=TOP)
+    assert v["verdict"] == "BUY"                                    # bearish AI, warnings and screens: context only
+    assert {c["name"] for c in v["context"]} >= {"Agents' rating", "Breakdown or crash warning"}
+    assert all(not c["decides"] for c in v["context"])
+    good_ai = {"rating": "Buy", "date": "2026-10-23"}
+    assert verdict(False, None, None, {}, good_ai, TODAY, score=LOW)["verdict"] == "AVOID"
 
 
-def test_bearish_evidence_means_avoid_and_old_ratings_expire():
-    bad = {"rating": "Underweight", "date": "2026-10-23"}
-    assert verdict(False, None, CALM, GOOD, bad, TODAY)["verdict"] == "AVOID"
-    assert verdict(False, None, CALM, GOOD, {"rating": "Sell", "date": "2026-08-01"}, TODAY)["verdict"] == "BUY"
-    assert verdict(False, None, CALM, {**GOOD, "analyst_mean": 3.1}, None, TODAY)["verdict"] == "AVOID"
-    assert verdict(False, None, CALM, {**GOOD, "quality_score": 40}, None, TODAY)["verdict"] == "AVOID"
+def test_middle_ranks_wait_and_failed_gates_block_a_buy():
+    assert verdict(False, None, None, {}, None, TODAY, score=MID)["verdict"] == "WATCH"
+    risky = verdict(False, None, None, {}, None, TODAY, score={**TOP, "p_risk": 0.3})
+    assert risky["verdict"] == "WATCH" and "chance of a large loss" in risky["summary"]
+    assert verdict(False, None, None, {}, None, TODAY, score={**TOP, "expected_net": -0.001})["verdict"] == "AVOID"
+    assert verdict(False, None, None, {}, None, TODAY)["verdict"] == "WATCH"       # not scored
 
 
-def test_a_held_stock_is_sold_only_on_the_decision_or_two_bearish_signs():
-    assert verdict(True, {"action": "EXIT"}, CALM, GOOD, None, TODAY)["verdict"] == "SELL"
-    bad = {"rating": "Sell", "date": "2026-10-20"}
-    assert verdict(True, None, BREAKDOWN, GOOD, bad, TODAY)["verdict"] == "SELL"
-    one = verdict(True, None, BREAKDOWN, GOOD, None, TODAY)
-    assert one["verdict"] == "HOLD" and "caution" in one["summary"]
+def test_a_held_stock_is_sold_on_the_decision_or_a_bottom_rank_with_a_loss():
+    assert verdict(True, {"action": "EXIT"}, None, {}, None, TODAY, score=TOP)["verdict"] == "SELL"
+    assert verdict(True, None, None, {}, None, TODAY, score=LOW)["verdict"] == "SELL"
+    assert verdict(True, None, BREAKDOWN, {}, {"rating": "Sell", "date": "2026-10-23"}, TODAY, score=MID)["verdict"] == "HOLD"
 
 
 def test_the_daily_decision_enter_is_a_buy():
-    assert verdict(False, {"action": "ENTER"}, BREAKDOWN, {}, None, TODAY)["verdict"] == "BUY"
+    assert verdict(False, {"action": "ENTER"}, None, {}, None, TODAY, score=MID)["verdict"] == "BUY"
 
 
-def test_the_agents_rating_becomes_an_action():
-    from tradingagents.stocks.verdict import ai_decision
-
+def test_the_agents_rating_becomes_an_action_for_display():
     today = date.today().isoformat()
     assert ai_decision({"rating": "Overweight", "date": today}, held=False)["action"] == "BUY"
     assert ai_decision({"rating": "Underweight", "date": today}, held=True)["action"] == "SELL"

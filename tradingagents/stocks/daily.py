@@ -408,7 +408,20 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
             line["action"], line["blocked"] = "WAIT", [*line["blocked"], f"data is {freshness} days old"]
     mode = "validated" if ev["validated"] else "experimental"
     snap = capital.snapshot(store)
-    payload = {"lots": reviews, "entries": entry_lines, "freshness_days": freshness,
+    # Every ranked stock's score, not only the shortlist, so any stock's page can show the model's view.
+    # The ranker gives many stocks the same score, so the order breaks ties by P(profit), then ticker, and
+    # rank_pct (1 = first, 0 = last) splits today's stocks into even fifths where score_pct, tied, cannot.
+    ranked = today[today["in_index"]].reset_index().rename(columns={"index": "ticker"})
+    ranked = ranked.sort_values(["score_pct", "p_win", "ticker"], ascending=[False, False, True]).set_index("ticker")
+    n = len(ranked)
+    scores = {t: {"rank": i + 1, "of": n, "rank_pct": round(1 - i / max(n - 1, 1), 4),
+                  "score_pct": round(float(row["score_pct"]), 4),
+                  "expected_net": round(float(row["expected_net"]), 5), "net_sd": round(float(row["net_sd"]), 5),
+                  "p_win": round(float(row["p_win"]), 4), "p_risk": round(float(row["p_risk"]), 4),
+                  "cost_rt": round(float(row["cost_rt"]), 5)}
+              for i, (t, row) in enumerate(ranked.iterrows())}
+    payload = {"lots": reviews, "entries": entry_lines, "freshness_days": freshness, "scores": scores,
+               "horizon": policy.horizon,
                "summary": {a: sum(1 for x in reviews + entry_lines if x["action"] == a)
                            for a in ("ENTER", "WAIT", "HOLD", "REDUCE", "EXIT", "REVIEW")},
                "paper_enters": sum(1 for x in entry_lines if x.get("paper_action") == "PAPER ENTER"),
