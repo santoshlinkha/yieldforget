@@ -673,7 +673,9 @@ async function loadSignals() {
   let h = "";
   if (vd) {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
-    h += `<div class="vbox"><span class="verdict big ${vd.verdict}">${vd.verdict}</span><div class="why"><b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.</div></div>` +
+    const vm = vd.model;
+    h += `<div class="vbox"><span class="verdict big ${vd.verdict}">${vd.verdict}</span><div class="why"><b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.` +
+      (vm ? `<div class="small muted" style="margin-top:4px">Model rank <b>#${vm.rank}</b> of ${vm.of} ${vm.kind === "fund" ? "funds" : "S&amp;P 500 stocks"} · expected ${spct(vm.expected_net, 2)}${vm.kind === "fund" ? " above cash" : " after costs"} over ${vm.horizon} sessions · P(profit) ${pct(vm.p_win, 0)}</div>` : "") + `</div></div>` +
       `<details${vd.verdict === "WATCH" ? " open" : ""}><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
       (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
         : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
