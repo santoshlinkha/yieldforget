@@ -722,7 +722,7 @@ answer quality. Agent (API) runs still assemble their input through tools, not t
 | 10 | Decision ranker (XGBoost learning-to-rank) | `stocks/adapters.py`, `daily.py` | same panel; date groups | within-date score -> rank | LambdaMART-style ranking by date, fitted weekly, cached by code hash | IC 0.020 (0.005, 0.036) development, 0.037 exploratory; heavy score ties |
 | 11 | Score-to-net map | `adapters.score_to_net` | ranker percentile | expected net P&L, sd, 10% quantile | 10 bins, shrunk | top decile realized -0.5% in the study; not monotone today |
 | 12 | Trade-quality model | `adapters.TradeQuality` | panel + score | P(trade profitable after costs) | logistic / XGBoost, optional sigmoid calibration, cross-fitted | worse than the base log loss (0.69) |
-| 13 | Risk model | `daily` bundle | panel | P(large loss while held) | classifier | flat across stocks today (about 7%) |
+| 13 | Risk model | `daily` bundle | panel | P(large loss at the 20-session exit close; terminal, not the worst point while held) | classifier | flat across stocks today (about 7%) |
 | 14 | Position engine and policies | `stocks/positions.py` | prices, dividends | trades for fixed 5/20/60 and barrier 20/60 policies | rule-based; T+1, next-close fills, no same-day exits | best development policy +210% vs SPY +358%; exploratory +5% vs SPY +43% |
 | 15 | Challengers: PatchTST, Chronos-2, TimesFM 2.5, Kronos-mini | `stocks/challengers.py` | price sequences, 150 stocks | return scores | compact PatchTST trained locally; others pretrained | no skill except Kronos-mini in development (0.041), likely contaminated; 0.014 after |
 | 16 | News sentiment (FinBERT) | `stocks/news.py` | stored headlines and summaries | sentiment score, relevance (about / mentions / other), events | pretrained FinBERT, local GPU or CPU | collected prospectively; not used in training |
@@ -731,3 +731,32 @@ answer quality. Agent (API) runs still assemble their input through tools, not t
 | 19 | Market brief | `optimizer/market.py` | macro data and headlines | summary and trends | one LLM call per day, cached | qualitative |
 | 20 | TradingAgents multi-agent graph | `tradingagents/graph` | tool data (prices, indicators, news, statements, macro), memory of past lessons | rating Buy..Sell with thesis | LLM agents (13 roles), one debate round each | shown as the agents' view; not used for decisions; no evaluation yet |
 | 21 | Verdict and entry plan | `stocks/verdict.py`, `signals.py` | items 10-13 (stocks), item 3 (funds), item 7 (dips, breakdown) | BUY / WATCH / HOLD / SELL / AVOID; limit entries with stops and targets | fixed rules on model outputs | inherits items 10-13: experimental |
+
+## 15. Fixes from the audit validation (2026-10-25)
+
+An outside audit was checked against the code. Each confirmed finding was fixed as follows. No recorded
+result was rewritten: old trials, old shadow snapshots and old reports stay as they were, and corrected
+methods apply only to new runs.
+
+| Finding | Fix | Where |
+|---|---|---|
+| X1: re-running a cutoff appended its shadow orders again (39 pending orders, $9,350 against $1,000) | orders are taken once per cutoff; pending orders count against the name limit and reserve cash; shadow version 2 restarts the account and records why | `stocks/shadow.py` |
+| A lot bought on the latest session got that session as its deadline | deadlines past the loaded prices come from the exchange calendar | `positions.Book._next` |
+| C: a verdict said BUY while the evidence gate said not validated | `verdict()` returns `verdict` (the model's view), `action` (what the gate allows: BUY becomes WAIT and SELL becomes HOLD unless validated) and `label`; pages show the action | `stocks/verdict.py`, pages |
+| C: a stock with no risk estimate could pass | a missing or NaN risk estimate fails the large-loss check | `verdict.py` |
+| J: a final decision used the latest model run, even for an older analysis day | it uses the newest decision with data through the analysis day | `server._write_decision` |
+| J: a pasted answer could not be tied to the evidence it was given | each manual prompt saves its packet under a content ID (`packet_id`, first line of the prompt); the answer echoes it; the run folder keeps `evidence_packet.json` and `provenance.json`; cited IDs missing from the packet are flagged | `agents/packet.py`, `server.manual_*` |
+| J: an abstaining answer showed as its placeholder rating | it shows as ABSTAIN | `verdict.rating_on_record`, `ai_decision` |
+| J: a second run for a day overwrote the first | the earlier run moves to `archive/<time>` and stays listed as superseded | `ai_views.fresh_report_folder` |
+| G: "large loss during the position" | the label is terminal: "at the exit close"; "Chance it fills" is "Chance the price reaches it" | pages, `daily.py`, `signals.py` |
+| F: the legacy stock scorer averaged log returns and annualized at the minimum spacing (1.3x to 1.9x too high) | baskets compound from simple returns less cost; annualized on actual spacing | `stocks/evaluate.portfolio` |
+| F: the ETF backtest traded at the close it planned from | trades one session later (`lag=1`; `lag=0` keeps the old figure for comparison) | `optimizer/backtest.py` |
+| D: a past `--as-of` could see later prices and reuse a model fitted later that week | prices are cut at the cutoff after executable prices are computed on the full history; fits use only trades closed and outcomes known by the cutoff; a later bundle is never reused for an earlier cutoff | `stocks/daily.py` |
+| B: validation was not bound to the model it validated | a study must match the policy's horizon and version, features, thresholds and model code; the prospective record must be the current shadow version and policy and beat SPY at the account level with a 20-session block-bootstrap interval above zero | `daily.evidence`, `shadow.py`, `experiments/decision_study.py` |
+| H: recorded splits were ignored when rebuilding lots | a split scales open lots and divides entry prices; shadow lots record their split basis and take a later split once | `daily.lots_from_ledger`, `shadow._apply_splits` |
+| H: dividends | credited on the ex-date in the shadow account (the cash really arrives on the pay date); documented as an approximation | `shadow.py` |
+| I: many trials, selection on development | new decision studies record the deflated Sharpe ratio of daily excess over SPY, charged for the rule grid; recorded, not yet a gate | `walkforward.deflated_sharpe`, `study.summary` |
+
+Consequence: every decision study recorded before 2026-10-25 lacks the model-code binding, so the
+current model reads as untested until a new full study is run. That is deliberate: it is the
+conservative reading of evidence that cannot be tied to the code now running.

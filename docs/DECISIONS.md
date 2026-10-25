@@ -204,3 +204,16 @@ these prices in pretraining (financial K-lines); it did not hold up in the explo
 an exploration lead: the only test that can confirm it is a prospective one (forecasts recorded before
 the outcomes). Chronos-2, TimesFM 2.5 and the compact PatchTST show no ranking skill here. TimesFM 3.0 was
 not run (non-commercial licence); its adapter path is the same as 2.5's once the owner decides.
+
+## 10. Audit fixes (2026-10-25)
+
+- **Validated means validated for this exact model.** The evidence check binds a study to its model code,
+  policy version, features and thresholds, and the prospective record to the shadow version and policy.
+  Studies recorded before the binding count as untested, so the model is not validated until a new full
+  study runs. Until then BUY shows as WAIT and SELL as HOLD, with the model's view labelled "not validated".
+- **No look-ahead in a past decision.** A decision for an earlier day sees only prices, trades and outcomes
+  known at its close, and never reuses a model fitted later.
+- **Nothing is overwritten.** A new agent run or pasted answer archives the earlier run for that day;
+  each pasted answer keeps the exact evidence packet it answered.
+- **Honest backtests.** The ETF backtest trades the session after it plans; the legacy stock scorer
+  compounds correctly and annualizes on real spacing. Old figures stay as recorded.
