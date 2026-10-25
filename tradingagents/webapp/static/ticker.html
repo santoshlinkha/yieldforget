@@ -157,6 +157,8 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .vchecks li { display: flex; gap: 8px; padding: 3px 0; }
 .vchecks .mk { width: 16px; flex: none; text-align: center; font-weight: 700; }
 .vchecks .mk.ok { color: var(--buy); } .vchecks .mk.no { color: var(--sell); } .vchecks .mk.na { color: var(--faint); }
+#reports a.on { font-weight: 700; text-decoration: underline; }
+#reports .runView:not(:empty) { margin: 8px 0 4px; }
 .md { font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px; padding: 14px 16px; }
 .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
@@ -513,23 +515,45 @@ async function load() {
   const rp = d.reports;
   if (failed(rp)) $("reports").innerHTML = failed(rp);
   else {
+    // One record per day: runs of the same day (saved under more than one results folder, or an agent run
+    // and a pasted chat answer) are merged, their reports listed once by name.
+    const byDay = {};
+    for (const run of rp.runs) {
+      const m = byDay[run.date] = byDay[run.date] || {...run, files: [], requests: 0};
+      for (const k of ["agents", "rating", "decision"]) m[k] = m[k] || run[k];
+      m.requests = Math.max(m.requests, run.requests || 0);
+      for (const fl of run.files) if (!m.files.some(x => x.name === fl.name)) m.files.push(fl);
+    }
+    rp.runs = Object.values(byDay).sort((a, b) => (a.date < b.date ? 1 : -1));
     // Each saved run shows the agents' own decision (their rating as an action); the model's verdict is the card above.
     const withRun = rp.runs.filter(run => run.agents);
     let h = withRun.length ? `<p class="small">Agents' decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.agents)}</b></a>`).join(" · ")}</p>` : "";
     h += rp.runs.length ? rp.runs.map(run => `<details data-day="${esc(run.date)}"><summary>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
       (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
-      run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") + "</details>").join("") + `<div id="reportView"></div>`
+      run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") +
+      `<div class="runView"></div></details>`).join("")
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     $("reports").innerHTML = h;
+    // A report opens inside its own run, one at a time; collapsing the run closes it.
+    const show = (a, html) => {
+      const box = a.closest("details"), view = box.querySelector(".runView");
+      $("reports").querySelectorAll(".runView").forEach(v => { if (v !== view) v.innerHTML = ""; });
+      $("reports").querySelectorAll("a.on").forEach(x => x.classList.remove("on"));
+      a.classList.add("on");
+      view.innerHTML = html;
+    };
+    $("reports").querySelectorAll("details[data-day]").forEach(box => box.addEventListener("toggle", () => {
+      if (!box.open) { box.querySelector(".runView").innerHTML = ""; box.querySelectorAll("a.on").forEach(x => x.classList.remove("on")); }
+    }));
     $("reports").querySelectorAll("a[data-calls]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
       const r = await getJSON(`/api/requests?ticker=${encodeURIComponent(symbol)}&date=${a.dataset.calls}`).catch(e => ({error: e.message}));
-      $("reportView").innerHTML = r.error ? `<p class="neg">${esc(r.error)}</p>` : callsView(r.requests);
+      show(a, r.error ? `<p class="neg">${esc(r.error)}</p>` : callsView(r.requests));
     });
     $("reports").querySelectorAll("a[data-path]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
       const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
-      $("reportView").innerHTML = renderMarkdown(await res.text());
+      show(a, renderMarkdown(await res.text()));
     });
     $("reports").querySelectorAll("a[data-open]").forEach(a => a.onclick = ev => { ev.preventDefault(); openRun(a.dataset.open); });
     // /ticker/AVGO#report=2026-10-23 opens that run's final decision (the Decisions page links here).
