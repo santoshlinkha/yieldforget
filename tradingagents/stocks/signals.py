@@ -162,3 +162,39 @@ def board(con, decision: dict | None, horizon: int = 20, ticker: str | None = No
     return {"horizon": horizon, "decision": head, "rows": rows,
             "rules": {"lift_break": LIFT_BREAK, "lift_crash": LIFT_CRASH, "lift_trend": LIFT_TREND, "min_crash": MIN_CRASH,
                       "min_deep": MIN_DEEP, "top_share": TOP_SHARE, "flat_spread": FLAT_SPREAD}}
+
+
+def entry_plan(forecast: dict, close: float, horizon: int = 20) -> dict | None:
+    """Where to buy, and the exits that go with it, from the stock models' own numbers (pure arithmetic).
+
+    Limit prices, each with the model's chance it is reached within ``horizon`` sessions:
+    - the 20-day low (reached when the stock breaks down: P(breakdown)),
+    - the median dip (the model's median drawdown from today's close: about an even chance),
+    - a deep dip (its 5% drawdown quantile: about a 1-in-20 chance).
+    Exits for an entry E follow the barrier policy the decision study uses: stop-loss at
+    E * expm1(-sigma_h) below, take-profit at E * expm1(+sigma_h) above (sigma_h = the stock's
+    volatility over the horizon), with the deadline of ``horizon`` sessions.
+    """
+    f = forecast or {}
+    if not close or not (close > 0) or f.get("sigma_h") is None:
+        return None
+    import math
+
+    sigma = float(f["sigma_h"])
+    levels = []
+    if f.get("lower") and f["lower"] < close:
+        levels.append({"name": "At the 20-day low", "price": float(f["lower"]), "chance": f.get("p_down_break")})
+    if f.get("dd_q50") is not None and f["dd_q50"] < 0:
+        levels.append({"name": "Median dip", "price": close * (1 + float(f["dd_q50"])), "chance": 0.5})
+    if f.get("dd_q05") is not None and f["dd_q05"] < 0:
+        levels.append({"name": "Deep dip", "price": close * (1 + float(f["dd_q05"])), "chance": 0.05})
+    levels.sort(key=lambda x: -x["price"])
+
+    def exits(entry):
+        return {"stop": entry * (1 + math.expm1(-sigma)), "profit": entry * (1 + math.expm1(sigma))}
+
+    rows = [{"name": "Buy at the next close", "price": close, "chance": 1.0, **exits(close)},
+            *({**lv, **exits(lv["price"])} for lv in levels)]
+    for r in rows:
+        r["vs_close"] = r["price"] / close - 1
+    return {"close": close, "horizon": horizon, "sigma_h": sigma, "rows": rows}

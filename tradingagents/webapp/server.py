@@ -636,7 +636,24 @@ class App:
             known = row or r["signal"] or r["decision"] or t in held or t in scores
             r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t), score=scores.get(t),
                                    horizon=horizon) if known else None
+            if ticker and r["signal"] and r["signal"].get("status") == "ok":
+                r["entry"] = self._entry_plan(t, r["signal"])
         return out
+
+    def _entry_plan(self, symbol: str, sig: dict) -> dict | None:
+        """The entry plan from the saved forecast and the close it was made at (cached prices; no fetch)."""
+        import pandas as pd
+
+        from tradingagents.research.prices import bars
+        from tradingagents.stocks.signals import entry_plan
+
+        try:
+            close = bars([symbol], self.cache_dir)["Close"][symbol].dropna()
+            close = close[close.index <= pd.Timestamp(sig["data_to"])]
+            return entry_plan(sig["forecast"], float(close.iloc[-1]), sig.get("horizon", 20)) if len(close) else None
+        except Exception as exc:  # the card then shows no plan rather than a wrong one
+            logger.info("no entry plan for %s: %s", symbol, exc)
+            return None
 
     def _screen_row(self, symbol: str) -> dict | None:
         """The screen's row for a stock outside the saved screen, from the cached data its page already read."""

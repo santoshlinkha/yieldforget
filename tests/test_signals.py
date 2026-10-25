@@ -48,3 +48,15 @@ def test_actions_cover_candidates_and_holdings():
     a = signals.actions(dec)
     assert a["AAA"]["paper_action"] == "PAPER ENTER" and a["BBB"] == {"action": "EXIT", "reasons": ["deadline"], "kind": "held"}
     assert signals.actions(None) == {}
+
+
+def test_the_entry_plan_orders_limits_and_puts_exits_one_volatility_away():
+    import math
+
+    plan = signals.entry_plan({"sigma_h": 0.10, "lower": 95.0, "p_down_break": 0.6, "dd_q50": -0.04, "dd_q05": -0.15}, 100.0)
+    names = [r["name"] for r in plan["rows"]]
+    assert names == ["Buy at the next close", "Median dip", "At the 20-day low", "Deep dip"]
+    now = plan["rows"][0]
+    assert now["stop"] == pytest.approx(100 * (1 + math.expm1(-0.10))) and now["profit"] == pytest.approx(100 * (1 + math.expm1(0.10)))
+    assert plan["rows"][2]["chance"] == 0.6 and plan["rows"][1]["price"] == pytest.approx(96.0)
+    assert signals.entry_plan({}, 100.0) is None

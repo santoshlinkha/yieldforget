@@ -695,6 +695,19 @@ async function loadSignals() {
     h += `<p class="small muted">${head ? `Not among the candidates or holdings of the decision for ${esc(head.executes)} (data to ${esc(head.data_to)}): only the top-ranked stocks and Trading holdings get an action.`
       : "No daily decision made yet: Decisions → Make today's decision."}</p>`;
   }
+  const ep = row.entry;
+  if (ep) {
+    const money2 = x => "$" + x.toFixed(2);
+    h += `<h3 class="sec">Entry plan <span class="muted small" style="font-weight:400">next ${ep.horizon} sessions</span></h3>` +
+      `<table><tr><th class="l">Entry</th><th>Price</th><th>vs close</th><th>Chance it fills</th><th>Stop-loss</th><th>Take-profit</th></tr>` +
+      ep.rows.map((r, i) => `<tr><td class="l">${esc(r.name)}</td><td><b>${money2(r.price)}</b></td><td class="muted">${i ? spct(r.vs_close) : "–"}</td>` +
+        `<td>${r.chance == null ? "–" : i ? pct(r.chance, 0) : "now"}</td><td class="neg">${money2(r.stop)}</td><td class="pos">${money2(r.profit)}</td></tr>`).join("") + `</table>` +
+      `<p class="small muted">${vd && vd.verdict === "BUY" ? "The model says BUY: buy at the next close, or place a limit at a dip and accept that it may not fill."
+        : vd && vd.verdict === "AVOID" ? "The model says AVOID: these levels are for reference only."
+        : "The model does not say BUY yet: if you buy anyway, a limit at a dip lowers the price you pay."} ` +
+      `Limit prices come from the stock models: the 20-day low (its chance is the breakdown probability), and the model's median and worst-5% expected dip from today's close. ` +
+      `Each entry's stop-loss and take-profit sit one ${ep.horizon}-session volatility (${pct(ep.sigma_h, 1)}) below and above it, closed at the close, with a ${ep.horizon}-session deadline: the exit rule the decision study tested. Experimental; not validated.</p>`;
+  }
   if (sg && sg.status === "ok") {
     const f = sg.forecast;
     const tp = [["up", f.trend_up], ["down", f.trend_down], ["sideways", f.trend_sideways], ["unclear", f.trend_unclear]];
