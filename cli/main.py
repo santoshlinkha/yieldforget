@@ -705,7 +705,8 @@ def _print_decision(rec):
         console.print(f"  {x['action']:7} {x['ticker']:6} entered {x['entry_date']} deadline {x['deadline']}: "
                       + "; ".join(x["reasons"]))
     for x in rec["entries"][:10]:
-        extra = f" (paper: {x['paper_action']} ${x['dollars']:.2f})" if x.get("paper_action") else ""
+        size = f" ${x['dollars']:.2f}" if x.get("dollars") else " (the shadow account sizes it)"
+        extra = f" [{x['paper_action']}{size}]" if x.get("paper_action") else ""
         console.print(f"  {x['action']:7} {x['ticker']:6} expected net {x['expected_net']:+.2%} "
                       f"(+/- {x['net_sd']:.1%}), P(win) {x['p_win']:.0%}, P(large loss) {x['p_risk']:.0%}{extra}"
                       + (f" - blocked: {'; '.join(x['blocked'])}" if x["blocked"] else ""))
@@ -730,6 +731,38 @@ def stocks_decisions(decision: str = typer.Option(None, help="One decision id (d
     for h in daily.history(store.con):
         console.print(f"{h['id'][:8]} {h['info_cutoff']} -> {h['execution_date']} {h['mode']:12} {h['summary']} "
                       f"paper enters {h['paper_enters']} (settings v{h['settings_version']})")
+
+
+@stocks_app.command("screen")
+@_book_errors
+def stocks_screen(build: bool = typer.Option(False, "--build", help="Fetch (cached) and rebuild the screen first"),
+                  top: int = typer.Option(25, help="How many rows to show"),
+                  sort: str = typer.Option("rank", help="rank, quality_score, target_upside, analyst_mean, ..."),
+                  portfolio: str = PORTFOLIO_OPT):
+    """The quality checklist and Wall Street screen of S&P 500 stocks (and the watchlist), ranked."""
+    from pathlib import Path
+
+    from tradingagents.dataflows.vendors.index_members import get_sp500_members
+    from tradingagents.stocks import screen
+    from tradingagents.stocks.data import parse_tickers
+
+    store = _book_store(portfolio)
+    results = Path(DEFAULT_CONFIG["results_dir"])
+    if build:
+        tickers = sorted(set(get_sp500_members(_stock_cache())) |
+                         set(parse_tickers(" ".join(store.get("global", "stock_watchlist") or []))))
+        out = screen.build(_stock_cache(), tickers, results, progress=lambda m: console.print(f"[dim]{m}[/dim]"))
+    else:
+        out = screen.latest(results)
+        if out is None:
+            raise ValueError("no screen yet: run with --build")
+    ascending = sort in ("rank", "analyst_mean", "forward_pe")
+    rows = sorted(out["rows"], key=lambda r: (r.get(sort) is None, (r.get(sort) or 0) * (1 if ascending else -1)))
+    console.print(f"{out['stocks']} stocks, data to {out['as_of']}; sorted by {sort}")
+    for r in rows[:top]:
+        up = "-" if r["target_upside"] is None else f"{r['target_upside']:+.1%}"
+        console.print(f"{r['rank']:4} {r['ticker']:6} quality {r['quality_score'] or 0:5.1f}  moat {r['moat_passed']}/{r['moat_scored']}  "
+                      f"consensus {r['analyst_mean'] or '-'} ({r['analysts']})  target {up}")
 
 
 @stocks_app.command("shadow")

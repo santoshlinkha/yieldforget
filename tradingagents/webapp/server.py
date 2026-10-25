@@ -128,6 +128,7 @@ class App:
         self.daily = Job()   # the daily Chronos-2 record, apart from the runs started on the page
         self.stocks = Job()  # a stock research batch
         self.decisions = Job()  # the daily stock decision (and, when asked, this week's model fit)
+        self.screen = Job()     # the quality and Wall Street screen
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -544,6 +545,26 @@ class App:
         return {"shortlist": wanted[:limit], "readings": out}
 
     # --- capital: the three amounts, against what the books actually hold ---
+
+    def screen_state(self) -> dict:
+        from tradingagents.stocks import screen
+
+        return {"latest": screen.latest(Path(self.config["results_dir"])), "job": self.screen.state()}
+
+    def start_screen(self) -> bool:
+        from tradingagents.stocks import screen
+        from tradingagents.stocks.data import parse_tickers
+
+        tickers = sorted(set(get_sp500_members(self.cache_dir)) |
+                         set(parse_tickers(" ".join(self.store.get("global", "stock_watchlist") or []))))
+
+        def work(job):
+            job.progress = f"scoring {len(tickers)} stocks (cached data is reused)"
+            out = screen.build(self.cache_dir, tickers, Path(self.config["results_dir"]),
+                               progress=lambda m: setattr(job, "progress", m))
+            return {"stocks": out["stocks"], "errors": len(out["errors"])}
+
+        return self.screen.start(work)
 
     def decisions_state(self) -> dict:
         """The latest saved decision, the history, the shadow record and the capital view: reads only."""
@@ -1070,6 +1091,8 @@ def make_handler(app: App):
                     self._json(app.ai_usage())
                 elif url.path == "/api/forecasts/combined":
                     self._json(app.combined_forecasts(int(query.get("horizon") or 20), query.get("universe") or "etf"))
+                elif url.path == "/api/screen/quality":
+                    self._json(app.screen_state())
                 elif url.path == "/api/decisions":
                     self._json(app.decisions_state())
                 elif url.path == "/api/capital":
@@ -1185,6 +1208,8 @@ def make_handler(app: App):
                     self._json({"ok": True})
                 elif self.path == "/api/market/explain":
                     self._started(app.start_explain(), "The market explanation")
+                elif self.path == "/api/screen/quality":
+                    self._started(app.start_screen(), "The quality screen")
                 elif self.path == "/api/decisions/run":
                     self._started(app.start_decisions(body), "A decision run")
                 elif self.path == "/api/capital":

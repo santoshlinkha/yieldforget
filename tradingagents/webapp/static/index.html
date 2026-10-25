@@ -402,6 +402,18 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <div class="table-wrap"><table id="scanTable"></table></div>
         <div class="row" id="scanMore" style="display:none"><button class="ghost" id="scanToggle"></button></div>
       </div>
+      <div class="card" id="qsCard">
+        <h3>Stocks: quality checklist and Wall Street</h3>
+        <p class="muted">For each S&amp;P 500 stock (and your watchlist): the ticker page's quality checklist (moat, financial strength, profitability) as one score, valuation kept apart, and Wall Street's consensus and price-target upside, combined into one rank. Facts and opinions as of today, not a tested forecast. Click a column to sort; click a ticker for its full page.</p>
+        <div class="row" style="margin:0 0 10px">
+          <button id="qsBuild">Build or refresh the screen</button>
+          <input type="text" id="qsFilter" placeholder="Filter by ticker, name or sector" style="max-width:300px">
+          <span class="muted small" id="qsStatus"></span>
+        </div>
+        <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
+        <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
+        <p class="muted small">Quality score: share of the moat, strength and profitability tests passed (a "check" counts half). Consensus: 1 strong buy to 5 strong sell. Combined rank: the average of the percentile ranks of quality, consensus and target upside.</p>
+      </div>
     </section>
 
     <section class="tab" id="decisions">
@@ -953,6 +965,60 @@ $("fcUse").onchange = async () => {
   catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }
 };
 
+// --- the quality and Wall Street screen ---
+let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false;
+const QS_COLS = [["rank", "Rank"], ["ticker", "Ticker"], ["quality_score", "Quality"], ["moat_passed", "Moat"],
+  ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags"], ["implied_growth", "Implied growth"],
+  ["forward_pe", "Fwd P/E"], ["analyst_mean", "Consensus"], ["analysts", "Analysts"], ["target_upside", "Target upside"]];
+function qsValue(r, k) {
+  if (k === "strength_flags") return r.strength ? r.strength.flag : null;
+  if (k === "valuation_flags") return r.valuation ? r.valuation.flag + 0.5 * r.valuation.warn : null;
+  return r[k];
+}
+function renderScreen() {
+  if (!qsData || !qsData.latest) { $("qsTable").innerHTML = "<tr><td class='muted l'>Not built yet: build it once (a few minutes the first time).</td></tr>"; return; }
+  const q = $("qsFilter").value.trim().toLowerCase();
+  let rows = qsData.latest.rows.filter(r => !q || `${r.ticker} ${r.name} ${r.sector}`.toLowerCase().includes(q));
+  const k = qsSort.key;
+  rows = [...rows].sort((a, b) => {
+    const x = qsValue(a, k), y = qsValue(b, k);
+    if (x == null && y == null) return a.ticker < b.ticker ? -1 : 1;
+    if (x == null) return 1; if (y == null) return -1;
+    return (typeof x === "string" ? x.localeCompare(y) : x - y) * qsSort.dir || (a.ticker < b.ticker ? -1 : 1);
+  });
+  const SHOWN = 40, shown = qsAll ? rows : rows.slice(0, SHOWN);
+  $("qsMore").style.display = rows.length > SHOWN ? "" : "none";
+  $("qsToggle").textContent = qsAll ? `Show the first ${SHOWN}` : `Show all ${rows.length}`;
+  $("qsToggle").onclick = () => { qsAll = !qsAll; renderScreen(); };
+  const arrow = c => qsSort.key === c ? (qsSort.dir < 0 ? " ▾" : " ▴") : "";
+  $("qsTable").innerHTML = "<tr>" + QS_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${c === "ticker" ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
+    shown.map(r => `<tr><td>${r.rank}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.name || "")}</span>${r.note ? ` <span class="muted small">(${esc(r.note)})</span>` : ""}</td>
+      <td>${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td><td title="${esc(r.moat)}">${r.moat_passed}/${r.moat_scored}</td>
+      <td class="${r.strength && r.strength.flag ? "neg" : ""}">${r.strength ? r.strength.flag : "–"}</td>
+      <td class="${r.valuation && r.valuation.flag ? "neg" : ""}">${r.valuation ? `${r.valuation.flag} (+${r.valuation.warn} check)` : "–"}</td>
+      <td>${r.implied_growth == null ? "–" : pct(r.implied_growth, 1)}</td><td>${r.forward_pe == null ? "–" : (+r.forward_pe).toFixed(1)}</td>
+      <td title="${esc(r.analyst_label || "")}">${r.analyst_mean == null ? "–" : `${r.analyst_mean.toFixed(2)} <span class="muted small">${esc(r.analyst_label)}</span>`}</td>
+      <td>${r.analysts || "–"}</td><td class="${(r.target_upside || 0) >= 0 ? "pos" : "neg"}">${r.target_upside == null ? "–" : spct(r.target_upside)}</td></tr>`).join("");
+  $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+    const c = th.dataset.k;
+    // First click: best first (rank and consensus ascending, the rest descending).
+    const natural = ["rank", "analyst_mean", "strength_flags", "valuation_flags", "forward_pe", "ticker"].includes(c) ? 1 : -1;
+    qsSort = {key: c, dir: qsSort.key === c ? -qsSort.dir : natural};
+    renderScreen();
+  });
+}
+async function loadScreen() {
+  try { qsData = await api("/api/screen/quality"); } catch (e) { $("qsStatus").textContent = e.message; return; }
+  const j = qsData.job, l = qsData.latest;
+  $("qsStatus").textContent = j.running ? j.progress + "…" : j.error ? "Failed: " + j.error :
+    l ? `${l.stocks} stocks, data to ${l.as_of}, built ${l.built_at.slice(0, 16).replace("T", " ")} UTC${Object.keys(l.errors).length ? `; ${Object.keys(l.errors).length} could not be scored` : ""}` : "";
+  $("qsBuild").disabled = j.running;
+  if (j.running) setTimeout(loadScreen, 4000);
+  renderScreen();
+}
+$("qsBuild").onclick = async () => { try { await api("/api/screen/quality", {}); loadScreen(); } catch (e) { showError(e.message); } };
+$("qsFilter").oninput = renderScreen;
+
 // --- daily stock decisions ---
 const ACT = {ENTER: "pos", EXIT: "neg", REDUCE: "neg", HOLD: "", WAIT: "muted", REVIEW: "neg"};
 async function loadDecisions() {
@@ -1397,7 +1463,7 @@ $("runAi").onclick = async () => {
     }
   } catch (e) { showError(e.message); }
   $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); loadCapital(); loadDecisions(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
+  pollAi(); loadCapital(); loadDecisions(); loadScreen(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
   // The record runs from day one: catch it up on every visit, or start it if there is none.
   pollTracker().then(t => {
     if (!t || t.running) return;   // a record that could not be read is never started over
