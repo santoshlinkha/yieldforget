@@ -647,23 +647,19 @@ async function loadTrade() {
     const x = t.best;
     $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side buy">BUY</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
         <button class="ghost small-btn" id="boughtBest" title="Record that you bought it (Portfolio tab)">I bought this</button></div>
-      <table class="compact" style="margin-top:10px"><tr><th class="l">Buy</th><td><b>${esc(x.entry.text)}</b> <span class="muted">(the tested policy: no limit price; last close ${usd(x.last_close)} on ${esc(x.reference_date || "")}, a reference, not an order price)</span></td></tr>` +
-      (x.score_tied_with ? `<tr><th class="l">Tie</th><td class="muted">${x.score_tied_with} other stock(s) have exactly the same model score; listed alphabetically, not by preference</td></tr>` : "") +
-      `<tr><th class="l">Sell at target</th><td class="pos">${spct(x.target_pct, 1)} above your fill <span class="muted">(${usd(x.target)} if filled at the last close)</span></td></tr>
-       <tr><th class="l">Sell at stop</th><td class="neg">${spct(x.stop_pct, 1)} from your fill <span class="muted">(${usd(x.stop)} if filled at the last close)</span></td></tr>
-       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (on a close; sold at the next close)</td></tr>` +
-      (x.patient ? `<tr><th class="l">Untested</th><td class="muted">A limit at ${usd(x.patient.price)} (median expected dip) is a different policy that was never tested: about an even chance the price trades there within ${x.horizon} sessions, which is not a fill, and returns after such fills are unknown.</td></tr>` : "") +
-      `</table>`
-      : (t.blocked_top || []).length ? `<p class="muted small">No stock passes the model's gates. The top of the ranking and what blocks it:</p><table class="compact">` +
-        t.blocked_top.map(b => `<tr><td class="l"><b>${tk(b.ticker)}</b></td><td class="l small">${esc((b.blocked || []).join("; "))}</td></tr>`).join("") + "</table>" : "") +
-      (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
+      <table class="compact" style="margin-top:10px"><tr><th class="l">Buy price</th><td><b>limit ${usd(x.buy_limit)}</b> <span class="muted">(the last close; the model enters at the next close)</span></td></tr>` +
+      (x.patient ? `<tr><th class="l">Or, patient</th><td>limit ${usd(x.patient.price)} <span class="muted">(its median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not a fill; stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)})</span></td></tr>` : "") +
+      `<tr><th class="l">Sell at target</th><td class="pos">${usd(x.target)} (${spct(x.target_pct, 1)})</td></tr>
+       <tr><th class="l">Sell at stop</th><td class="neg">${usd(x.stop)} (${spct(x.stop_pct, 1)})</td></tr>
+       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (on a close)</td></tr></table>`
+      : "") + (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
     $("sellBox").innerHTML = t.sells.length ? `<table class="compact"><tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Bought</th><th>Unrealized</th><th>Sell at target</th><th>Sell at stop</th><th>Deadline</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
         <td>${money(s.last_close)}</td><td>${money(s.entry)}</td><td>${s.unrealized == null ? "–" : spct(s.unrealized)}</td><td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
-    $("runnersTable").innerHTML = t.runners_up.length ? "<tr><th class='l'>Ticker</th><th>Last close</th><th>Target</th><th>Stop</th><th class='l'>AI agents</th></tr>" +
-      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td>${usd(x.last_close)}</td><td class="pos">${spct(x.target_pct, 1)}</td><td class="neg">${spct(x.stop_pct, 1)}</td><td class="l small" data-agentcell="${esc(x.ticker)}">…</td></tr>`).join("")
+    $("runnersTable").innerHTML = t.runners_up.length ? "<tr><th class='l'>Ticker</th><th>Buy limit</th><th>Target</th><th>Stop</th><th class='l'>AI agents</th></tr>" +
+      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td>${usd(x.buy_limit)}</td><td class="pos">${usd(x.target)}</td><td class="neg">${usd(x.stop)}</td><td class="l small" data-agentcell="${esc(x.ticker)}">…</td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = !t.runners_up.length;
     $("runnersAll").onclick = async () => {
@@ -672,7 +668,7 @@ async function loadTrade() {
       agentTicker = t.runners_up[0].ticker; loadAgentReport(); runnerAgents(t.runners_up);
     };
     runnerAgents(t.runners_up);
-    if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfPrice").value = x.last_close.toFixed(2); $("pfUnits").focus(); };
+    if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfPrice").value = x.buy_limit.toFixed(2); $("pfUnits").focus(); };
     $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted.";
   }
 

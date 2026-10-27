@@ -40,9 +40,10 @@ def _candidate(e: dict, budget: float, horizon: int, patient: dict | None, data_
     # price, and the stop and target are set from the actual fill. Dollar levels from the last close are shown
     # as an illustration of the percentages.
     price = float(e["price"])
-    out = {"ticker": e["ticker"], "last_close": round(price, 2), "reference_date": data_to,
+    out = {"ticker": e["ticker"], "last_close": round(price, 2), "buy_limit": round(price, 2), "reference_date": data_to,
            "entry": {"basis": "next_close", "session": e.get("execute"),
                      "text": f"at the close of {e.get('execute') or 'the next session'}, whatever it is"},
+           "shares": round(budget / price, 6) if budget > 0 and price > 0 else 0.0,
            "shares_at_reference": round(budget / price, 6) if budget > 0 and price > 0 else 0.0,
            "dollars": round(budget, 2),
            "expected_net": e.get("expected_net"), "p_win": e.get("p_win"), "p_risk": e.get("p_risk"),
@@ -93,6 +94,8 @@ def plan(decision: dict | None, budget: float, patient_limits: dict[str, dict] |
                      "the buy is its best idea on paper, not a validated signal. Size it as an experiment.")
     if not best:
         notes.append("No stock passes the model's gates today: waiting is the answer.")
+    for n in dict.fromkeys(n for e in passing[:1 + RUNNERS_UP] for n in e.get("notes") or []):
+        notes.append(n[0].upper() + n[1:] + ".")
     from .positions import POLICIES, execution_spec
 
     pol = POLICIES.get(((decision.get("model") or {}).get("policy") or {}).get("name") or "barrier_20", POLICIES["barrier_20"])

@@ -31,7 +31,7 @@ def test_the_best_buy_passes_the_gates_is_not_held_and_carries_its_exits():
     best = p["best"]
     assert best["ticker"] == "AAA" and best["last_close"] == 100.0 and best["shares_at_reference"] == pytest.approx(0.3)
     assert best["entry"]["basis"] == "next_close" and best["reference_date"] == "2026-10-26"
-    assert "buy_limit" not in best                     # the tested policy has no limit price
+    assert best["buy_limit"] == 100.0 and best["shares"] == pytest.approx(0.3)
     s = 0.02 * math.sqrt(20)
     assert best["stop"] == round(100 * math.exp(-s), 2) and best["target"] == round(100 * math.exp(s), 2)
     assert best["patient"]["price"] == 97.0 and best["patient"]["status"] == "untested policy"

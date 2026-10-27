@@ -49,9 +49,9 @@ CASH_FUNDS = ("SGOV", "BIL")
 TIE_ORDER = "alphabetical"        # the listing order inside a tie of model scores: not a preference      # cash equivalents: valued as cash, never reviewed as stock lots
 DEFAULT_RULES = {"min_expected_net": 0.005, "min_p_win": 0.5, "combined_name_cap": 0.10, "prospective_min_trades": 20,
                  "max_drawdown_limit": -0.35,
-                 # When the risk model gives every member the same probability it cannot rank risk: "block" (the
-                 # gate is not assessed, so nothing passes it) or "skip" (pass it, said on every line).
-                 "risk_gate_when_uninformative": "block"}
+                 # When the risk model gives every member the same probability it cannot rank risk: "skip" (pass the
+                 # gate, said on every line and on the Trade page; the default) or "block" (nothing passes it).
+                 "risk_gate_when_uninformative": "skip"}
 RISK_MIN_SPREAD = 0.005    # P(large loss) spread (max - min over today's members) below which it is uninformative
 
 

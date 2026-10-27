@@ -48,18 +48,18 @@ def test_tied_scores_are_listed_alphabetically_not_by_the_unskilled_p_profit():
 def test_an_uninformative_risk_model_blocks_with_its_reason_or_passes_only_by_setting():
     today = _today([0.9, 0.5], informative=False)
     prices = pd.Series(10.0, index=today.index)
-    lines = daily.entries(today, set(), set(), R, 1000.0, 1000.0, IRA, prices, True, None, "x")
+    lines = daily.entries(today, set(), set(), {**R, "risk_gate_when_uninformative": "block"}, 1000.0, 1000.0, IRA,
+                          prices, True, None, "x")
     assert all(any("risk gate not assessed" in b for b in x["blocked"]) for x in lines)
     assert not any(x.get("paper_action") for x in lines)
-    skip = daily.entries(today, set(), set(), {**R, "risk_gate_when_uninformative": "skip"}, 1000.0, 1000.0, IRA,
-                         prices, True, None, "x")
+    skip = daily.entries(today, set(), set(), R, 1000.0, 1000.0, IRA, prices, True, None, "x")   # the default
     assert skip[0]["paper_action"] == "PAPER ENTER" and "passed anyway" in skip[0]["notes"][0]
     assert not daily.risk_informative(np.full(10, 0.0714)) and daily.risk_informative(np.array([0.05, 0.2]))
     score = {"rank": 1, "of": 499, "rank_pct": 0.99, "expected_net": 0.01, "p_win": 0.55, "p_risk": 0.07,
              "p_risk_informative": False, "cost_rt": 0.003}
     v = verdict.verdict(False, None, None, {}, None, score=score)
     risk = next(c for c in v["checks"] if c["name"].startswith("Chance of a large loss"))
-    assert risk["ok"] is False and "not assessed" in risk["detail"] and v["verdict"] == "WATCH"
+    assert risk["ok"] is True and "the same for every stock" in risk["detail"] and v["verdict"] == "BUY"
 
 
 def test_the_page_shows_the_tested_entry_policy_and_exits_from_the_fill():
