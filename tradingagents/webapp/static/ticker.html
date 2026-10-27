@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<title>Ticker</title>
+<title>Ticker · Yieldforge</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -193,13 +193,13 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 </style>
 </head>
 <body>
-<header class="appbar"><div class="wrap"><a href="/">← SGOV Trading Desk</a><span class="muted small" id="asof"></span></div></header>
+<header class="appbar"><div class="wrap"><a href="/">← Yieldforge</a><span class="muted small" id="asof"></span></div></header>
 <main class="wrap">
   <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span><span id="vbadge"></span></div>
   <p class="muted small" id="desc"></p>
   <div id="err"></div>
   <div class="grid">
-    <div>
+    <div id="colL">
       <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div id="chart" style="margin-top:12px"></div></div>
       <div class="card"><h2>Wall Street analyst ratings</h2><div id="analysts"></div></div>
       <div class="card"><h2>Wall Street EPS and revenue estimates</h2><div id="estimates"></div></div>
@@ -210,8 +210,9 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
       <div class="card"><h2>Dividends, splits and share count</h2><div id="corp"></div></div>
       <div class="card"><h2>Financial statements</h2><div id="fin"></div></div>
       <div class="card"><h2>About</h2><div id="about"></div></div>
+      <div class="card" id="newsCard"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
     </div>
-    <div>
+    <div id="colR">
       <div class="card"><h2>In your account</h2><div id="mine"></div></div>
       <div class="card"><h2>Verdict, signals and action</h2><div id="sig"><p class="muted">Loading…</p></div></div>
       <div class="card"><h2>Agents' entry plan</h2><div id="eplan"><p class="muted">Loading…</p></div></div>
@@ -242,7 +243,6 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
         </div>
         <div id="reports"></div></div>
       <div class="card"><h2>Expected return</h2><div id="fc"></div></div>
-      <div class="card"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
     </div>
   </div>
 </main>
@@ -456,7 +456,7 @@ async function loadEntryPlans() {
 
 async function load() {
   loadEntryPlans();
-  document.title = symbol;
+  document.title = `${symbol} · Yieldforge`;
   $("sym").textContent = symbol;
   let d;
   try {
@@ -957,6 +957,24 @@ $("mpSave").onclick = async () => {
   } catch (e) { $("mpState").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
 };
 
+// --- keep the two columns even: the News card goes to whichever column is shorter without it ---
+function balanceColumns() {
+  const L = $("colL"), R = $("colR"), news = $("newsCard");
+  if (!L || !R || !news) return;
+  if (getComputedStyle(L.parentElement).gridTemplateColumns.split(" ").length < 2) {   // one column: News last
+    if (news.parentElement !== R) R.appendChild(news);
+    return;
+  }
+  // Try both places (layout is measured synchronously, nothing is painted) and keep the shorter page.
+  const tallest = col => { col.appendChild(news); return Math.max(L.offsetHeight, R.offsetHeight); };
+  const here = news.parentElement, other = here === L ? R : L;
+  const stay = Math.max(L.offsetHeight, R.offsetHeight), move = tallest(other);
+  if (move >= stay - 40) here.appendChild(news);   // a small gain is not worth a jump
+}
+let balanceTimer = null;
+const scheduleBalance = () => { clearTimeout(balanceTimer); balanceTimer = setTimeout(balanceColumns, 150); };
+if (window.ResizeObserver) { const ro = new ResizeObserver(scheduleBalance); ["colL", "colR"].forEach(id => $(id) && ro.observe($(id))); }
+window.addEventListener("resize", scheduleBalance);
 load();
 loadSignals();
 pollAnalysis(true);

@@ -188,7 +188,7 @@ def web(
     schedule: str = typer.Option("my_buys.json", "--schedule", help="JSON file with recurring buys"),
     port: int = typer.Option(8765, "--port", help="Port on localhost"),
 ):
-    """Open the daily optimizer web app on this machine."""
+    """Open Yieldforge, the web app, on this machine."""
     import webbrowser
 
     from tradingagents.webapp import serve
@@ -199,7 +199,7 @@ def web(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from None
     url = f"http://127.0.0.1:{port}/"
-    console.print(f"Daily optimizer at {url} (Ctrl+C to stop)")
+    console.print(f"Yieldforge at {url} (Ctrl+C to stop)")
     webbrowser.open(url)
     try:
         server.serve_forever()
