@@ -263,6 +263,10 @@ def test_brief_falls_back_to_gemini_only_when_the_policy_allows(monkeypatch):
     assert [p for p, _ in _models(config, ("google",))[1:]] == ["google", "google"]
     monkeypatch.delenv("GOOGLE_API_KEY")
     assert len(_models(config, ("google",))) == 1
+    monkeypatch.setenv("OPENROUTER_API_KEY", "y")
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    chain = _models({"llm_provider": "google", "quick_think_llm": "gemini-3.8-flash"}, ("google", "openrouter"), ["a:free"])
+    assert chain == [("google", "gemini-3.8-flash"), ("openrouter", "a:free")]   # Flash fails: OpenRouter next
 
 
 def test_risk_levels_rise_and_are_saved(tmp_path):

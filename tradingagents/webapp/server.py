@@ -395,10 +395,17 @@ class App:
         return config
 
     def agent_attempts(self, g: dict) -> list[dict]:
-        """The configs an agent run tries in order: the configured one, then the free Gemini models when the
-        spending policy lists Google as a fallback and a Google key is set."""
+        """The configs an agent run tries in order: the configured one (Gemini Flash), then the free OpenRouter
+        models, then the other free Gemini models, each only when the spending policy lists that provider as
+        a fallback and its key is set. OpenRouter comes before the other Gemini models because those share the
+        Google key's quota and outages: when Flash fails, they usually fail with it."""
         config = self.agent_config(g)
         attempts = [config]
+        if "openrouter" in g["ai_fallbacks"] and os.environ.get("OPENROUTER_API_KEY"):
+            for model in g["ai_openrouter_models"]:
+                if (config["llm_provider"], config["deep_think_llm"]) != ("openrouter", model):
+                    attempts.append({**config, "llm_provider": "openrouter", "quick_think_llm": model,
+                                     "deep_think_llm": model, "backend_url": None, "agent_models": {}})
         # Roles moved to another provider (e.g. the debates on Groq) keep their seats when Gemini takes
         # over; if that attempt fails too, the next one runs every role on Gemini.
         elsewhere = {r: v for r, v in (config.get("agent_models") or {}).items() if v.get("provider") != "google"}
@@ -409,12 +416,6 @@ class App:
                 for moves in ([elsewhere, {}] if elsewhere else [{}]):
                     attempts.append({**config, "llm_provider": "google", "quick_think_llm": model,
                                      "deep_think_llm": model, "backend_url": None, "agent_models": moves})
-        # Then the free OpenRouter models, every role on one model, when the key is set.
-        if "openrouter" in g["ai_fallbacks"] and os.environ.get("OPENROUTER_API_KEY"):
-            for model in g["ai_openrouter_models"]:
-                if (config["llm_provider"], config["deep_think_llm"]) != ("openrouter", model):
-                    attempts.append({**config, "llm_provider": "openrouter", "quick_think_llm": model,
-                                     "deep_think_llm": model, "backend_url": None, "agent_models": {}})
         return attempts
 
     def ai_usage(self) -> dict:

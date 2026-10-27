@@ -132,7 +132,12 @@ rotation alerts.
 LLM agents, not trained here: four analysts (market, sentiment, news, fundamentals) fetch data through tools
 (the same price store, SEC, FRED, Yahoo news, StockTwits/Reddit), then a bull/bear debate, a research manager,
 a trader, a risk debate (aggressive/conservative/neutral) and a portfolio manager write a rating.
-Models: free Gemini first, then free OpenRouter models, then others you configure (Settings > Agent models).
+Models, tried in order until one answers (each only when its key is set and the provider is in the
+spending policy's fallbacks): **Gemini 3.8 Flash** → the free **OpenRouter** models (Nemotron 3 Ultra,
+Gemma 4 31B, Inkling) → **Gemini 3.5 Flash-Lite**. OpenRouter comes before the other Gemini model because
+that one shares the Google key's quota and outages. The same order applies to the market brief, the stock
+ratings and the moat notes (`optimizer.market._models`); roles you move to another provider in Settings >
+Agent models keep their seats on the first attempt.
 Combined: **context only** (the internal model decides). They receive model evidence only if it is validated
 (none is today). The "Copy the prompt" box reproduces the same agents' API calls for ChatGPT.
 
@@ -159,7 +164,26 @@ Order of authority: the **validation gate** decides whether anything is a real b
 internal model (A) decides the order and the levels; everything else (B, C, D, E, F) is evidence shown
 beside it with its own status.
 
-## 4. Where each status comes from
+## 4. Reading the outputs you see (Trade page, decision of 2026-10-26)
+
+What each number on the best buy and runners-up means, and how much it can be trusted today:
+
+| Shown | Where it comes from | What to make of it |
+|---|---|---|
+| **Rank / #1** | the ranker's score among today's 499 members (ties share a percentile), then P(profit), then the ticker | The ranker's scores move in steps, so stocks tie. On 2026-10-26 GEN and DVA had the same score (0.0131); GEN is first only because its P(profit) was 54.03% vs 53.85%. Treat the top several as equals. |
+| **Why a stock ranks high** | per-feature contributions of the XGBoost ranker | On 2026-10-26 one feature dominated: high liabilities ÷ assets (+0.014 of GEN's 0.013 score), plus small pushes from low liquidity, high 3-month volatility, a deep fall from its 1-year high, a high earnings yield and 3 months behind its sector. The model learned from 2012–2024 that cheap, beaten-down, leveraged, less liquid stocks did slightly better over 20 sessions. It is a factor tilt, not a view on the company. |
+| **Expected net** (e.g. +0.54%) | the out-of-fold map from score to the barrier trade's net P&L, in 10 bands | Every stock in a band gets the same number: 66 stocks shared +0.54% on 2026-10-26. It ranks bands, not stocks. |
+| **vs SPY** (e.g. −0.44%) | the same map, against SPY over the same days | Negative even for the top band: on past data the top-ranked trades did not beat SPY on average. |
+| **P(profit)** (≈ 54%) | trade-quality model (logistic + sigmoid) | Close to the base rate for every stock. Measured as worse than always saying the base rate (`docs/QUANT_UPGRADES.md`), so it is weak as a tie-break. |
+| **P(large loss)** (7.1%) | position-risk model, label: down ≥ 1.5× the stock's own volatility | The same 7.1% for every stock, so it carries no information and never blocks. The `quant-upgrades` branch replaces it with P(an 8% fall while held), which does vary between stocks. |
+| **Buy limit** | the last close | The model's entry is the next session's close; the limit stops a gap up from filling. |
+| **Stop / target** | ± one 20-session volatility (EWMA): GEN 21.40 / 27.84 from 24.41, i.e. −12% / +14% | Sold at the next close after a close beyond either, or after 20 sessions. Volatile stocks get wider exits. |
+| **Patient dip** (e.g. 23.19, "50%") | the signal model's median expected dip within 20 sessions | About an even chance the price *trades* there (a touch, not a fill). Its downside estimates are too optimistic (12–15% of outcomes fall below the 10% line). |
+| **WAIT · model BUY, not validated** | the validation gate | A real ENTER needs a decision study that beats SPY after costs and 20+ paper trades ahead of SPY. Neither has happened, so every candidate shows WAIT. |
+| **Shares / $** = 0 | the trading budget | Nothing is set aside for trading yet (budget $0). |
+| **Agents' rating** | AI agents (section F) | Context only; it never changes the verdict. |
+
+## 5. Where each status comes from
 
 | Model | Evidence | Today |
 |---|---|---|

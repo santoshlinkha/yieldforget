@@ -284,10 +284,16 @@ MACRO DATA (FRED):
     raise ValueError("No AI provider could write the explanation. " + " | ".join(errors))
 
 
-def _models(config: dict, fallbacks: tuple[str, ...] = ()) -> list[tuple[str, str]]:
-    """The configured quick model, then Gemini only when the spending policy lists it as a
-    fallback and a Google key is set."""
+def _models(config: dict, fallbacks: tuple[str, ...] = (), openrouter_models: list[str] | None = None) -> list[tuple[str, str]]:
+    """The configured quick model, then the free OpenRouter models, then Gemini, each only when the spending
+    policy lists that provider as a fallback and its key is set."""
     models = [(config["llm_provider"], config["quick_think_llm"])]
+    if "openrouter" in fallbacks and os.environ.get("OPENROUTER_API_KEY"):
+        if openrouter_models is None:
+            from tradingagents.ledger.store import GLOBAL_DEFAULTS
+
+            openrouter_models = GLOBAL_DEFAULTS["ai_openrouter_models"]
+        models += [("openrouter", m) for m in openrouter_models if ("openrouter", m) != models[0]]
     if "google" in fallbacks and config["llm_provider"] != "google" and os.environ.get("GOOGLE_API_KEY"):
         models += [("google", "gemini-3.8-flash"), ("google", "gemini-3.5-flash")]   # the second when the first is busy
     return models

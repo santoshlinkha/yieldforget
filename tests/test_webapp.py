@@ -160,7 +160,7 @@ def test_a_pasted_answer_is_kept_with_its_prompt_and_a_second_one_archives_the_f
     assert '"Sell"' in (day / "reports" / "chat_answer.md").read_text()
 
 
-def test_failed_providers_move_on_through_gemini_then_free_openrouter_models(tmp_path, monkeypatch):
+def test_failed_gemini_flash_moves_on_to_free_openrouter_models_then_other_gemini_models(tmp_path, monkeypatch):
     from tradingagents.webapp import server as srv
 
     monkeypatch.setenv("GOOGLE_API_KEY", "x")
@@ -172,10 +172,10 @@ def test_failed_providers_move_on_through_gemini_then_free_openrouter_models(tmp
     g = app.store.settings("global")
     chain = [(c["llm_provider"], c["deep_think_llm"]) for c in app.agent_attempts(g)]
     assert chain[0] == ("google", "gemini-3.8-flash")
-    assert [p for p, _ in chain[1:]] == ["google"] * (len(chain) - 1 - 3) + ["openrouter"] * 3
+    assert [p for p, _ in chain[1:]] == ["openrouter"] * 3 + ["google"] * (len(chain) - 1 - 3)
     assert all(m.endswith(":free") for p, m in chain if p == "openrouter")
     prices = app.gateway().policy.prices
-    assert prices["openrouter/" + chain[-1][1]].input == 0.0          # free models are priced at $0
+    assert prices["openrouter/" + chain[1][1]].input == 0.0           # free models are priced at $0
     assert srv._short_error(RuntimeError("Error code: 429 - rate limited upstream")) == "rate limited"
     monkeypatch.delenv("OPENROUTER_API_KEY")
     assert all(c["llm_provider"] != "openrouter" for c in app.agent_attempts(g))   # no key, no OpenRouter
