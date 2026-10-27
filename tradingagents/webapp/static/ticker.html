@@ -263,6 +263,7 @@ select option { background: var(--surface); color: var(--text); }
     <div id="colR">
       <div class="card"><h2>In your account</h2><div id="mine"></div></div>
       <div class="card"><h2>Verdict, signals and action</h2><div id="sig"><p class="muted">Loading…</p></div></div>
+      <div class="card"><h2>Forecasts from each model</h2><div id="zooBox"><p class="muted">Loading…</p></div></div>
       <div class="card"><h2>Agents' entry plan</h2><div id="eplan"><p class="muted">Loading…</p></div></div>
       <div class="card"><h2>Saved analysis reports</h2>
         <div id="runAgents">
@@ -720,6 +721,25 @@ async function load() {
     if (linked && !openRun.done) { openRun.done = true; openRun(linked); }
   }
 }
+const ZOO_SHORT = {xgb_rank: "XGB (54)", xgb_rank_all: "XGB (all)", lgbm_lambdarank: "LambdaRank", lgbm_regression: "LGBM reg.",
+  ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", momentum_12_1: "Momentum",
+  low_volatility: "Low vol.", analysts_target_upside: "Target upside", eps_surprise: "EPS surprise"};
+const ZOO_FITTED = ["xgb_rank", "xgb_rank_all", "lgbm_lambdarank", "lgbm_regression", "ridge_pooled", "ridge_per_stock", "chronos2"];
+async function loadZooTicker() {
+  let d;
+  try { d = await getJSON("/api/model-zoo?ticker=" + encodeURIComponent(symbol)); } catch (e) { $("zooBox").innerHTML = `<p class="neg">${esc(e.message)}</p>`; return; }
+  if (!d.available) { $("zooBox").innerHTML = '<p class="muted small">No run of the models yet: Models tab → Run all models.</p>'; return; }
+  const f = d.forecasts || {};
+  if (!Object.keys(f).length) { $("zooBox").innerHTML = `<p class="muted small">${esc(symbol)} was not scored in the run of ${esc(d.info_cutoff)} (not an S&amp;P 500 member or in your watchlist).</p>`; return; }
+  const ic = k => { const r = (d.tested || {})[k]; return r && r.development_ic != null ? `${r.development_ic.toFixed(3)}${r.recent_ic != null ? " · " + r.recent_ic.toFixed(3) : ""}` : "untested"; };
+  $("zooBox").innerHTML = `<div class="table-wrap"><table class="compact"><tr><th class="l">Model</th><th>Rank</th><th>Forecast</th><th title="Rank correlation with the net trade result on data the model had not seen: 2012-24 · 2025 on">Tested IC</th></tr>` +
+    Object.keys(d.models).map(k => { const x = f[k];
+      return `<tr><td class="l small" title="${esc(d.models[k].label)}">${esc(ZOO_SHORT[k] || k)}</td><td>${x ? `top ${Math.max(1, Math.round((1 - x.pct) * 100))}%` : "–"}</td>` +
+        `<td>${x && x.forecast != null ? spct(x.forecast, 1) : '<span class="muted">rank only</span>'}</td><td class="muted small">${ic(k)}</td></tr>`; }).join("") +
+    `</table></div><p class="muted small">Rank: where ${esc(symbol)} stands among the ${d.members} S&amp;P 500 members by each model (top 1% = its top pick). Forecast: the 20-session log return over cash from the next close, for models that predict one. Data to ${esc(d.info_cutoff)}. A tested IC near 0 means the model has shown no skill; none of these decides anything.</p>`;
+}
+loadZooTicker();
+
 // --- a report in a floating window over the blurred page: closed by the button, Esc or a click outside ---
 function openModal(title, html) {
   if (!openModal.bound) {                       // bound on first use: the window's markup closes the page

@@ -479,4 +479,13 @@ CREATE TABLE track_record_hidden (
     hidden_at TEXT NOT NULL
 );
 """,
+    # Every model's forecast for every stock (stocks.model_zoo), one row per run, never edited.
+    10: """
+CREATE TABLE model_zoo_runs (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    info_cutoff TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+""" + _guards("model_zoo_runs"),
 }

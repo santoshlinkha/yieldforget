@@ -145,7 +145,7 @@ def _finite(value):
 GEMINI_FALLBACKS = ("gemini-3.8-flash", "gemini-3.5-flash-lite")
 
 
-JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "screen", "analysis", "sector")
+JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "screen", "analysis", "sector", "zoo")
 
 
 def _short_error(exc: Exception) -> str:
@@ -187,6 +187,7 @@ class App:
         self.screen = Job()     # the quality and Wall Street screen
         self.analysis = Job()   # one ticker's agent run for a chosen day, on request
         self.sector = Job()     # the sector model: study and next-20-session forecast
+        self.zoo = Job()        # every stock forecasting model, fitted and scored side by side
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -1193,6 +1194,33 @@ class App:
 
         return self.decisions.start(work)
 
+    def start_zoo(self) -> bool:
+        from tradingagents.stocks import model_zoo
+
+        def work(job):
+            def say(stage, frac=None):
+                if frac is not None:
+                    job.fraction = max(job.fraction or 0.0, min(float(frac), 1.0))
+                job.progress = stage
+            return model_zoo.run(self.store, self.cache_dir, say)
+
+        return self.zoo.start(work)
+
+    def zoo_view(self, ticker: str | None = None) -> dict:
+        """The latest run of every model: all stocks, or one stock's forecasts with each model's tested record."""
+        from tradingagents.stocks import model_zoo
+
+        run = model_zoo.latest(self.store.con)
+        state = self.zoo.state()
+        if not run:
+            return {"available": False, "job": state}
+        base = {"available": True, "job": state, **{k: run[k] for k in ("id", "created_at", "info_cutoff", "models",
+                                                                          "tested", "members", "notes", "version")}}
+        if ticker:
+            t = ticker.strip().upper()
+            return {**base, "ticker": t, "forecasts": run["stocks"].get(t)}
+        return {**base, "stocks": run["stocks"], "watchlist": run.get("watchlist", [])}
+
     def capital_state(self) -> dict:
         from tradingagents.optimizer.data import latest_prices
 
@@ -1654,6 +1682,8 @@ def make_handler(app: App):
                     self._json(_finite(app.sector_forecast()))
                 elif url.path == "/api/portfolio-view":
                     self._json(_finite(app.portfolio_view()))
+                elif url.path == "/api/model-zoo":
+                    self._json(_finite(app.zoo_view(query.get("ticker"))))
                 elif url.path == "/api/track-record":
                     from tradingagents.stocks import track_record
                     self._json(_finite(track_record.build(app.store.con, app.cache_dir, config=app.config)))
@@ -1794,6 +1824,8 @@ def make_handler(app: App):
                         raise ValueError("that job is not stuck: it is not running, or it reported progress in the "
                                          f"last {Job.STUCK_AFTER // 60} minutes")
                     self._json(job.state())
+                elif self.path == "/api/model-zoo/run":
+                    self._started(app.start_zoo(), "A run of every model")
                 elif self.path == "/api/track-record/hide":
                     from tradingagents.stocks import track_record
                     track_record.hide(app.store.con, str(body.get("key") or ""))

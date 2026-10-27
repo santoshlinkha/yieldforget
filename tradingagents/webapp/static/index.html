@@ -316,6 +316,7 @@ select option { background: var(--surface); color: var(--text); }
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
         <button role="tab" data-tab="decisions">Decisions</button>
+        <button role="tab" data-tab="models">Models</button>
         <button role="tab" data-tab="record">Track record</button>
         <button role="tab" data-tab="settings">Settings</button>
       </nav>
@@ -494,6 +495,15 @@ select option { background: var(--surface); color: var(--text); }
       <div class="card"><h3>Trades</h3><div class="table-wrap"><table id="pfTrades" class="compact"></table></div></div>
     </section>
 
+    <section class="tab" id="models">
+      <div class="page-head"><div><h2>Every model's forecast</h2><p>Each stock forecasting model, fitted on all history to the last close, ranks today's S&amp;P 500 (100 = its top pick). Models that predict a return also show their 20-session forecast over cash. Under each name: its tested rank correlation with the net trade result (2012–24 · 2025 on); about 0 means no skill. None of them decides anything: the internal model does, and none is validated.</p></div>
+        <button id="zooRun">Run all models</button></div>
+      <p class="status" id="zooStatus"></p>
+      <p class="muted small" id="zooMeta"></p>
+      <div class="row" style="margin:6px 0"><input id="zooFilter" placeholder="Find a ticker" style="max-width:220px"><span class="muted small" id="zooCount"></span></div>
+      <div class="card"><div class="table-wrap"><table id="zooTable" class="compact"></table></div></div>
+    </section>
+
     <section class="tab" id="record">
       <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made and every rating the AI agents gave, followed for 20 trading days after the day they could first be bought. Judged only once the 20 days are over; until then the return so far is shown.</p></div>
         <button class="ghost" id="recRefresh">Refresh</button></div>
@@ -640,6 +650,7 @@ async function api(path, body) {
 
 // --- tabs ---
 function showTab(id) {
+  if (id === "models" && !zoo) loadZoo();
   document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === id));
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === id));
   store.set("tab", id);
@@ -807,6 +818,53 @@ $("pfSave").onclick = async () => {
     $("pfUnits").value = ""; loadPortfolio(); loadTrade();
   } catch (e) { $("pfMsg").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
 };
+
+const ZOO_SHORT = {xgb_rank: "XGB (54)", xgb_rank_all: "XGB (all)", lgbm_lambdarank: "LambdaRank", lgbm_regression: "LGBM reg.",
+  ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", momentum_12_1: "Momentum",
+  low_volatility: "Low vol.", analysts_target_upside: "Target upside", eps_surprise: "EPS surprise"};
+const ZOO_FITTED = ["xgb_rank", "xgb_rank_all", "lgbm_lambdarank", "lgbm_regression", "ridge_pooled", "ridge_per_stock", "chronos2"];
+// --- every model, every stock: each model's rank of the stock among today's S&P 500 (100 = its top pick) and, for
+// models that predict a return, the 20-session forecast over cash; each column carries the model's tested record ---
+var zoo = null, zooSort = {key: "avg", dir: -1};   // var: showTab may run before this line
+async function loadZoo() {
+  let d;
+  try { d = await api("/api/model-zoo"); } catch (e) { $("zooTable").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
+  const j = d.job || {};
+  $("zooRun").disabled = !!j.running;
+  $("zooStatus").innerHTML = j.running ? jobLine(j, "zoo") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` : "";
+  if (j.running) setTimeout(loadZoo, 3000);
+  if (!d.available) { $("zooMeta").textContent = "No run yet: press Run all models (about 10 minutes)."; $("zooTable").innerHTML = ""; return; }
+  zoo = d;
+  $("zooMeta").textContent = `Data to ${d.info_cutoff} · ${d.members} S&P 500 members${(d.watchlist || []).length ? ` + ${d.watchlist.length} of yours` : ""} · run ${d.created_at.replace("T", " ").slice(0, 16)}` +
+    (Object.keys(d.notes || {}).length ? ` · ${Object.entries(d.notes).map(([k, v]) => `${ZOO_SHORT[k] || k} ${v}`).join("; ")}` : "");
+  renderZoo();
+}
+function renderZoo() {
+  if (!zoo) return;
+  const models = Object.keys(zoo.models), q = ($("zooFilter").value || "").trim().toUpperCase();
+  const rows = Object.entries(zoo.stocks).map(([t, m]) => {
+    const fitted = ZOO_FITTED.map(k => m[k] && m[k].pct).filter(v => v != null);
+    return {t, m, avg: fitted.length ? fitted.reduce((a, b) => a + b, 0) / fitted.length : null};
+  }).filter(r => !q || r.t.includes(q));
+  const val = (r, k) => k === "avg" ? r.avg : k === "t" ? r.t : (r.m[k] ? r.m[k].pct : null);
+  rows.sort((a, b) => {
+    const x = val(a, zooSort.key), y = val(b, zooSort.key);
+    if (x == null) return 1; if (y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * zooSort.dir;
+  });
+  const ic = k => { const r = (zoo.tested || {})[k]; return r && r.development_ic != null ? `IC ${r.development_ic.toFixed(3)}${r.recent_ic != null ? ` · ${r.recent_ic.toFixed(3)}` : ""}` : "untested"; };
+  const cell = x => x ? `<td title="${x.forecast != null ? "forecast " + spct(x.forecast, 1) + " over 20 sessions vs cash" : ""}"><b>${Math.round(x.pct * 100)}</b>${x.forecast != null ? `<div class="muted small">${spct(x.forecast, 1)}</div>` : ""}</td>` : "<td class='muted'>–</td>";
+  const arrow = k => zooSort.key === k ? (zooSort.dir < 0 ? " ▾" : " ▴") : "";
+  $("zooTable").innerHTML = `<tr><th class="l" data-sort="t">Ticker${arrow("t")}</th><th data-sort="avg" title="Average rank across the fitted models">Average${arrow("avg")}</th>` +
+    models.map(k => `<th data-sort="${k}" title="${esc(zoo.models[k].label)}. Tested rank correlation with net trade P&L: 2012-24 · 2025 on">${esc(ZOO_SHORT[k] || k)}${arrow(k)}<div class="muted small" style="font-weight:400;text-transform:none">${ic(k)}</div></th>`).join("") + "</tr>" +
+    rows.slice(0, q ? 600 : 150).map(r => `<tr><td class="l"><b>${tk(r.t)}</b>${(zoo.watchlist || []).includes(r.t) ? ' <span class="muted small">yours</span>' : ""}</td><td><b>${r.avg == null ? "–" : Math.round(r.avg * 100)}</b></td>${models.map(k => cell(r.m[k])).join("")}</tr>`).join("");
+  $("zooTable").querySelectorAll("th[data-sort]").forEach(th => th.onclick = () => {
+    const k = th.dataset.sort; zooSort = {key: k, dir: zooSort.key === k ? -zooSort.dir : (k === "t" ? 1 : -1)}; renderZoo();
+  });
+  $("zooCount").textContent = q ? `${rows.length} match` : `Showing the top 150 of ${rows.length} by ${zooSort.key === "avg" ? "the average" : ZOO_SHORT[zooSort.key] || "ticker"}; type a ticker to find any stock.`;
+}
+$("zooRun").onclick = async () => { try { await api("/api/model-zoo/run", {}); loadZoo(); } catch (e) { showError(e.message); } };
+$("zooFilter").oninput = renderZoo;
 
 // --- track record: were the picks and the agents' calls right? ---
 let undoTimer = null;

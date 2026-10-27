@@ -85,7 +85,7 @@ def peer_features(close: pd.DataFrame, sectors: dict, dates: pd.DatetimeIndex, t
             np.fill_diagonal(corr, -np.inf)
             a20, a60 = r20.loc[d, names].to_numpy(), r60.loc[d, names].to_numpy()
             for i, t in enumerate(names):
-                top = np.argsort(-np.nan_to_num(corr[i], nan=-np.inf))[:PEERS]
+                top = [j for j in np.argsort(-np.nan_to_num(corr[i], nan=-np.inf)) if j != i][:PEERS]   # never itself
                 p20, p60 = np.nanmean(a20[top]), np.nanmean(a60[top])
                 rows.append((d, t, p20, p60, a20[i] - p20))
     f = pd.DataFrame(rows, columns=["date", "ticker", "peer_ret_20", "peer_ret_60", "own_minus_peer_20"])

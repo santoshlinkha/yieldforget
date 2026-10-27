@@ -49,6 +49,7 @@ research = [
     "duckdb>=1.0",
     "arch>=7.0",
     "scikit-learn>=1.6",
+    "mambapy>=1.2",          # Mamba state-space model in plain PyTorch (mamba-ssm's CUDA kernels do not build on Windows)
 ]
 
 [project.scripts]
