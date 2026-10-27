@@ -37,8 +37,8 @@ GLOBAL_DEFAULTS = {
     "ai_shortlist": 10,
     "ai_fallbacks": [],       # other providers a failed paid call may move to; none by default
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).
-    "ai_openrouter_models": ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-31b-it:free",
-                             "thinkingmachines/inkling:free"],
+    # (Inkling's free tier refuses this app: "only available on agentic harnesses".)
+    "ai_openrouter_models": ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-31b-it:free"],
     "ai_estimates": {"rating": 0.30, "market_brief": 0.02},   # dollars reserved per job before it runs
     # Agent roles on their own provider and model (llm_clients.roles); empty: all on the run's provider.
     "ai_agent_models": {},

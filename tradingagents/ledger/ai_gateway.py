@@ -148,8 +148,9 @@ class Gateway:
             raise AIBlocked("paid AI is switched off (TRADINGAGENTS_NO_PAID_AI=1)")
         if not allow_paid:
             raise AIBlocked(f"{task} is not cached and paid AI was not requested")
-        for p, m in [(provider, model), *also_priced]:
-            self.price(p, m)
+        prices = [self.price(p, m) for p, m in [(provider, model), *also_priced]]
+        if all(p.input == 0 and p.output == 0 for p in prices):
+            est_usd = 0.0          # free models hold no dollars; their requests still count
         self._claim(key, task, est_usd, est_requests)
         callback = UsageCallback(self, key, task, provider, model, models=[(provider, model), *also_priced])
         try:

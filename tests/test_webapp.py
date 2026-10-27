@@ -172,7 +172,8 @@ def test_failed_gemini_flash_moves_on_to_free_openrouter_models_then_other_gemin
     g = app.store.settings("global")
     chain = [(c["llm_provider"], c["deep_think_llm"]) for c in app.agent_attempts(g)]
     assert chain[0] == ("google", "gemini-3.8-flash")
-    assert [p for p, _ in chain[1:]] == ["openrouter"] * 3 + ["google"] * (len(chain) - 1 - 3)
+    n_or = len(g["ai_openrouter_models"])
+    assert [p for p, _ in chain[1:]] == ["openrouter"] * n_or + ["google"] * (len(chain) - 1 - n_or)
     assert all(m.endswith(":free") for p, m in chain if p == "openrouter")
     prices = app.gateway().policy.prices
     assert prices["openrouter/" + chain[1][1]].input == 0.0           # free models are priced at $0

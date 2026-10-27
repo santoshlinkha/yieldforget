@@ -134,7 +134,7 @@ LLM agents, not trained here: four analysts (market, sentiment, news, fundamenta
 a trader, a risk debate (aggressive/conservative/neutral) and a portfolio manager write a rating.
 Models, tried in order until one answers (each only when its key is set and the provider is in the
 spending policy's fallbacks): **Gemini 3.8 Flash** → the free **OpenRouter** models (Nemotron 3 Ultra,
-Gemma 4 31B, Inkling) → **Gemini 3.5 Flash-Lite**. OpenRouter comes before the other Gemini model because
+Gemma 4 31B) → **Gemini 3.5 Flash-Lite**. OpenRouter comes before the other Gemini model because
 that one shares the Google key's quota and outages. The same order applies to the market brief, the stock
 ratings and the moat notes (`optimizer.market._models`); roles you move to another provider in Settings >
 Agent models keep their seats on the first attempt.

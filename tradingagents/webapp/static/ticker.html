@@ -146,7 +146,22 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .chip input:focus-visible + span { box-shadow: 0 0 0 3px var(--focus); }
 .chip:hover span { border-color: var(--accent); }
 .runbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.status { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; margin: 0; }
+.status { font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; min-width: 0; }
+.status > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+#agState:empty { display: none; }
+#reports, #runAgents { overflow-wrap: anywhere; min-width: 0; }
+/* A failed run: one tidy box inside the panel, one row per provider tried, the raw error folded away. */
+.failbox { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-left: 3px solid var(--sell);
+  background: var(--surface); border-radius: 8px; padding: 10px 12px; color: var(--text); font-size: 13px; }
+.failbox .head { font-weight: 600; color: var(--sell); margin-bottom: 6px; }
+.failbox ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.failbox li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 6px; align-items: start; line-height: 1.4; }
+.failbox li .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--sell); }
+.failbox li.ok .dot { background: var(--buy); } .failbox li.skipped .dot { background: var(--faint); }
+.failbox li b { font-weight: 600; } .failbox li .why { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.failbox details { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.failbox details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; margin: 6px 0 0;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 11.5px; }
 .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } button { transition: none; } }
@@ -191,7 +206,8 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .md th, .md td { text-align: left; border: 1px solid var(--border); padding: 5px 8px; white-space: normal; }
 .md a { color: var(--accent); }
 .tries { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; }
-.try { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.try { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .try.ok { color: var(--buy, #3ecf8e); border-color: currentColor; }
 .try.failed { color: var(--sell, #f0616d); border-color: currentColor; text-decoration: line-through; text-decoration-thickness: 1px; }
 .try.trying { color: var(--accent, #6aa9ff); border-color: currentColor; }
@@ -941,6 +957,28 @@ $("agAnalysts").onchange = costHint;
 costHint();
 markPreset();
 // Each AI provider tried for a run: trying (spinning), failed (struck, with the reason) or ok.
+// A failed run as a short box: what failed in plain words, then each provider tried and why, the raw error folded.
+function failBox(error, list) {
+  const plain = why => {
+    const w = String(why || "");
+    if (/free daily limit|free-models-per-day/i.test(w)) return "OpenRouter free daily limit reached (resets at midnight UTC)";
+    if (/prepayment credits are depleted|402|out of credit/i.test(w)) return "out of credit (prepaid credits used up)";
+    if (/agentic harnesses|not offered/i.test(w)) return "this free model is not offered to this app";
+    if (/held by the AI budget/i.test(w)) return "held back by your daily AI budget";
+    if (/RESOURCE_EXHAUSTED|429|rate.?limit|quota/i.test(w)) return "rate limited or out of quota";
+    if (/needs about .* budget/i.test(w)) return "held back by your daily AI budget";
+    if (/no price/i.test(w)) return "no price set for this model";
+    if (/401|403|api key|unauthor/i.test(w)) return "key rejected";
+    if (/timed? ?out|unreachable|connection/i.test(w)) return "did not answer";
+    return w.length > 90 ? w.slice(0, 90) + "…" : w;
+  };
+  const rows = (list || []).map(a => `<li class="${a.state === "ok" ? "ok" : a.state === "failed" ? "" : "skipped"}"><span class="dot"></span>` +
+    `<span><b>${esc(a.provider)}</b> ${esc(String(a.model).split("/").pop().replace(":free", ""))}` +
+    `${a.state === "failed" ? `<br><span class="why">${esc(plain(a.why))}</span>` : a.state === "ok" ? ' <span class="why">ran it</span>' : ""}</span></li>`).join("");
+  return `<div class="failbox"><div class="head">The agents could not run</div>` +
+    (rows ? `<ul>${rows}</ul>` : `<div class="why">${esc(plain(error))}</div>`) +
+    `<details><summary>Full error</summary><pre>${esc(error)}</pre></details></div>`;
+}
 function tries(list) {
   if (!list || !list.length) return "";
   return `<span class="tries">` + list.map(a => `<span class="try ${a.state}" title="${esc(a.provider + " / " + a.model + (a.why ? ": " + a.why : ""))}">` +
@@ -967,7 +1005,7 @@ async function pollAnalysis(first) {
   $("agRun").disabled = j.running;
   if (j.running) { $("agState").innerHTML = jobLine(j, "analysis"); setTimeout(() => pollAnalysis(false), 2000); return; }
   costHint();
-  if (j.error) $("agState").innerHTML = `<span class="neg">${esc(j.error)}</span><br>${tries(j.attempts)}`;
+  if (j.error) $("agState").innerHTML = failBox(j.error, j.attempts);
   else if (j.result && j.result.ticker === symbol) {
     $("agState").innerHTML = (j.result.final ? `Final decision: <span class="verdict ${j.result.final.action}">${j.result.final.action}</span> · ` : "") +
       `agents' rating <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +

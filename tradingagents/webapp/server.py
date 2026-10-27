@@ -151,7 +151,10 @@ JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "scree
 def _short_error(exc: Exception) -> str:
     """A provider failure in a few words for the status line."""
     text = str(exc)
-    for needle, short in (("429", "rate limited"), ("rate", "rate limited"), ("quota", "out of quota"),
+    for needle, short in (("free-models-per-day", "OpenRouter free daily limit reached"),
+                          ("prepayment credits are depleted", "out of credit"), ("402", "out of credit"),
+                          ("agentic harnesses", "not offered to this app"), ("needs about", "held by the AI budget"),
+                          ("429", "rate limited"), ("rate", "rate limited"), ("quota", "out of quota"),
                           ("401", "bad key"), ("403", "not allowed"), ("404", "model not available"),
                           ("insufficient", "out of credit"), ("timed out", "timed out"), ("tool", "no tool support")):
         if needle in text.lower():
@@ -787,9 +790,9 @@ class App:
             except AIInProgress:
                 raise
             except AIBlocked as exc:
-                # Over budget or switched off stops here; a model with no price is a setup gap another
-                # provider can cover.
-                if not str(exc).startswith("no price"):
+                # Switched off stops here. Over the dollar budget or a model with no price, the next provider
+                # may still run (a free model holds no dollars).
+                if str(exc).startswith("paid AI is switched off"):
                     job.attempts[-1].update(state="failed", why=str(exc)[:120])
                     raise
                 errors.append(f"{who}: {exc}")
