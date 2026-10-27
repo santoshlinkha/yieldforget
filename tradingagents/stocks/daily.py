@@ -436,8 +436,30 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
     return out
 
 
+def apply_ensemble(today: pd.DataFrame, zoo: dict | None, bundle: dict, rows: pd.DataFrame, cutoff) -> tuple:
+    """Rank by the ensemble's percentile, with its own expected net and excess over SPY; P(profit) is re-read for the
+    new percentile. Unchanged (and said so) when the run for this close has no ensemble."""
+    if not zoo or zoo.get("info_cutoff") != str(pd.Timestamp(cutoff).date()) or not zoo.get("ensemble"):
+        return today, {"name": "xgb_rank", "note": "the internal XGBoost ranker (no ensemble run for this close)"}
+    ens = {t: m["ensemble"] for t, m in zoo["stocks"].items() if "ensemble" in m}
+    have = today.index.isin(list(ens))
+    if not have.any():
+        return today, {"name": "xgb_rank", "note": "the internal XGBoost ranker (the ensemble scored no stock)"}
+    out = today.copy()
+    out.loc[have, "score_pct"] = [ens[t]["pct"] for t in out.index[have]]
+    out.loc[have, "expected_net"] = [ens[t]["forecast"] for t in out.index[have]]
+    out.loc[have, "expected_excess"] = [ens[t].get("excess_vs_spy", np.nan) for t in out.index[have]]
+    out.loc[have, "net_sd"] = [ens[t].get("net_sd", np.nan) for t in out.index[have]]
+    out.loc[have, "net_q10"] = [np.nan if ens[t].get("net_q10") is None else ens[t]["net_q10"] for t in out.index[have]]
+    r = rows.droplevel("date") if "date" in rows.index.names else rows
+    r = r.reindex(out.index)
+    out["p_win"] = bundle["quality"].predict(r.assign(score_pct=out["score_pct"].to_numpy()))
+    return out, {"name": "ensemble", "weights": zoo["ensemble"]["weights"], "version": zoo["ensemble"].get("version"),
+                 "note": "learned-weight ensemble of the stock models (Models tab)"}
+
+
 def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "barrier_20", train: bool = False,
-        progress=None) -> dict:
+        progress=None, use_ensemble: bool = True) -> dict:
     """Make, save and return today's decision. ``train`` allows fitting this week's models when missing."""
     from tradingagents.ledger import capital
     from tradingagents.ledger.db import now_utc, transaction
@@ -503,6 +525,18 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     say("Scoring every stock on today's close", 0.78)
     at = P.build(data, policy.horizon, dates=pd.DatetimeIndex([cutoff]), macro=macro)
     today = score_today(bundle, at.xs(cutoff, level="date", drop_level=False))
+    # The ranking: the learned-weight ensemble of every stock model when its run for this close exists (Models tab,
+    # ``stocks.model_zoo``); else the internal ranker alone. Run it here when it is missing or older than the cutoff.
+    ranker_used = {"name": "xgb_rank", "note": "the internal XGBoost ranker"}
+    if use_ensemble:
+        from . import model_zoo
+
+        zoo = model_zoo.latest(store.con)
+        if model_zoo.ensemble_bundle(cache_dir) and (not zoo or zoo.get("info_cutoff") != str(cutoff.date())):
+            say("Running every stock model for the ensemble (several minutes)", 0.80)
+            model_zoo.run(store, cache_dir, lambda text, frac=None: say(f"Models: {text}", 0.80))
+            zoo = model_zoo.latest(store.con)
+        today, ranker_used = apply_ensemble(today, zoo, bundle, at.xs(cutoff, level="date", drop_level=False), cutoff)
     # The live record, once enough has matured, recalibrates P(profit) and expected net (stocks.feedback).
     from . import feedback
 
@@ -617,7 +651,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     decision_id = uuid.uuid4().hex
     record = {"id": decision_id, "info_cutoff": str(cutoff.date()), "execution_date": str(execute), "mode": mode,
               "sleeve": r["sleeve"], "settings": {"capital": snap, "rules": r},
-              "model": {"policy": policy.__dict__, "policy_version": policy.version(), "bundle": art,
+              "model": {"policy": policy.__dict__, "policy_version": policy.version(), "bundle": art, "ranker": ranker_used,
                         "bundle_meta": bundle["meta"], "thresholds": bundle["thresholds"], "evidence": ev,
                         "live_calibration": {k: v for k, v in live.items() if k != "p_win_map"},
                         "code": code_version()},

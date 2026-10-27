@@ -1215,7 +1215,8 @@ class App:
         if not run:
             return {"available": False, "job": state}
         base = {"available": True, "job": state, **{k: run[k] for k in ("id", "created_at", "info_cutoff", "models",
-                                                                          "tested", "members", "notes", "version")}}
+                                                                          "tested", "members", "notes", "version")},
+                "ensemble": run.get("ensemble")}
         if ticker:
             t = ticker.strip().upper()
             return {**base, "ticker": t, "forecasts": run["stocks"].get(t)}

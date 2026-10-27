@@ -42,6 +42,10 @@ MODELS = {
     "chronos2": ("Chronos-2, pretrained, prices only (zero-shot)", "return", "chronos2 (zero-shot, from 2023)", "models"),
     "mamba": ("Mamba state-space model: 64 days of prices, volume and sector, plus the 54 features", "rank",
               "mamba (64-day sequences + 54 features)", "models"),
+    "chronos2_covariates": ("Chronos-2 with market covariates (SPY, sector, volume, VIX, 10-year yield), zero-shot",
+                            "return", "chronos2 with covariates", "chronos"),
+    "ensemble": ("Learned-weight ensemble of the distinct models (decides the ranking)", "return",
+                 "ensemble (learned weights)", "models"),
     "momentum_12_1": ("Momentum, 12 months less the last", "rank", "momentum_12_1", "baselines"),
     "low_volatility": ("Low volatility", "rank", "low_volatility", "baselines"),
     "analysts_target_upside": ("Analysts' target upside", "rank", "analysts_target_upside", "baselines"),
@@ -223,7 +227,7 @@ def run(store, cache_dir: Path, progress=None) -> dict:
     sets = feature_sets(P.features_for(), list(extra.columns))
     member = today["in_index"].to_numpy(dtype=bool)
     scores, notes = {}, {}
-    steps = list(FITTED) + ["chronos2", "mamba"]
+    steps = list(FITTED) + ["chronos2", "chronos2_covariates", "mamba"]
     for i, name in enumerate(steps):
         say(f"Fitting {MODELS[name][0]}", 0.40 + 0.55 * i / len(steps))
         try:
@@ -231,6 +235,11 @@ def run(store, cache_dir: Path, progress=None) -> dict:
                 from .seq_model import MambaRanker, SequenceBank
 
                 s = MambaRanker(SequenceBank(data), device).fit(train, sets["base"]).predict(today)
+            elif name == "chronos2_covariates":
+                from tradingagents.research.foundation import Chronos2Covariates
+
+                etf = {t: (data.info.get(t) or {}).get("sector_etf") for t in tickers}
+                s = Chronos2Covariates(data.close, data.volume, etf, device).fit(None, None, 20).predict(today)
             elif name == "chronos2":
                 from tradingagents.research.foundation import Chronos2
 
@@ -245,6 +254,7 @@ def run(store, cache_dir: Path, progress=None) -> dict:
         scores[name] = sign * today[col].to_numpy(dtype=float)
     tick = list(today.index.get_level_values("ticker"))
     stocks_out = {t: {} for t in tick}
+    ens = ensemble_scores(scores, member, cache_dir)
     for name, s in scores.items():
         pct = member_pct(s, member)
         is_return = MODELS[name][1] == "return"
@@ -252,7 +262,16 @@ def run(store, cache_dir: Path, progress=None) -> dict:
             if np.isfinite(pct[j]):
                 stocks_out[t][name] = {"pct": round(float(pct[j]), 4),
                                        "forecast": round(float(s[j]), 5) if is_return and np.isfinite(s[j]) else None}
+    if ens is not None:
+        for j, t in enumerate(tick):
+            if np.isfinite(ens["pct"][j]):
+                stocks_out[t]["ensemble"] = {"pct": round(float(ens["pct"][j]), 4),
+                                             "forecast": round(float(ens["expected_net"][j]), 5),
+                                             "excess_vs_spy": round(float(ens["expected_excess"][j]), 5),
+                                             "net_sd": round(float(ens["net_sd"][j]), 5),
+                                             "net_q10": round(float(ens["net_q10"][j]), 5) if np.isfinite(ens["net_q10"][j]) else None}
     payload = {"version": VERSION, "info_cutoff": str(cutoff.date()), "device": device, "train_rows": int(len(train)),
+               "ensemble": ens and {"weights": ens["weights"], "evaluation": ens["evaluation"], "version": ens["version"]},
                "members": int(member.sum()), "watchlist": [t for t in watch if t in stocks_out],
                "models": {k: {"label": v[0], "kind": v[1]} for k, v in MODELS.items()}, "notes": notes,
                "tested": tested_record(), "stocks": stocks_out, "seconds": round(time.time() - t0)}
@@ -262,6 +281,30 @@ def run(store, cache_dir: Path, progress=None) -> dict:
                           (run_id, now_utc(), payload["info_cutoff"], json.dumps(payload)))
     say("Done", 1.0)
     return {"id": run_id, **{k: payload[k] for k in ("info_cutoff", "members", "train_rows", "seconds", "notes")}}
+
+
+ENSEMBLE = "ensemble.json"
+
+
+def ensemble_bundle(cache_dir) -> dict | None:
+    """The learned weights and maps written by ``experiments/stacking_study.py``, when it has been run."""
+    p = Path(cache_dir) / "decision_models" / ENSEMBLE
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
+
+
+def ensemble_scores(scores: dict[str, np.ndarray], member: np.ndarray, cache_dir) -> dict | None:
+    """The weighted ensemble: each member model's within-members rank (-0.5 to 0.5) times its learned weight, then
+    ranked among members; its expected net P&L and excess over SPY from the bundle's out-of-sample maps."""
+    from .adapters import apply_map, member_pct
+
+    b = ensemble_bundle(cache_dir)
+    if not b or any(m not in scores for m in b["members"]):
+        return None
+    z = sum(w * (member_pct(scores[m], member) - 0.5) for m, w in b["weights"].items())
+    pct = member_pct(np.asarray(z, dtype=float), member)
+    return {"pct": pct, "expected_net": apply_map(b["map_net"], pct), "expected_excess": apply_map(b["map_excess"], pct),
+            "net_sd": apply_map(b["map_net"], pct, "sd"), "net_q10": apply_map(b["map_net"], pct, "q10"),
+            "weights": b["weights"], "evaluation": b.get("evaluation"), "version": b.get("version")}
 
 
 def latest(con) -> dict | None:

@@ -86,6 +86,55 @@ class Chronos2(Forecaster):
                 "released": RELEASE}
 
 
+class Chronos2Covariates(Chronos2):
+    """Chronos-2 with past covariates: beside the stock's log closes it reads SPY's and its sector fund's log closes,
+    its log volume, the VIX and the 10-year yield over the same window, so the forecast can lean on the market. Still
+    zero-shot (nothing fitted); the same contamination caveat."""
+
+    name = "chronos2_covariates"
+    COVARIATES = ("spy", "sector", "volume", "vix", "tnx")
+
+    def __init__(self, close: pd.DataFrame, volume: pd.DataFrame, sector_etf: dict[str, str | None],
+                 device: str = "cpu", batch: int = 128):
+        super().__init__(close, device, batch)
+        self.logv = np.log(volume.reindex(index=close.index).where(volume > 0))
+        self.sector_etf = sector_etf
+
+    def _series(self, frame: pd.DataFrame, col: str | None, lo: int, hi: int) -> np.ndarray:
+        if col is None or col not in frame:
+            return np.zeros(hi - lo, dtype=np.float32)
+        v = frame[col].iloc[lo:hi].ffill().bfill()
+        return v.fillna(0.0).to_numpy(np.float32)
+
+    def _forecast(self, rows: pd.DataFrame) -> np.ndarray:
+        todo = [k for k in rows.index if (k, self.horizon) not in self._cache]
+        for start in range(0, len(todo), self.batch):
+            keys = todo[start:start + self.batch]
+            inputs, last = [], []
+            for d, t in keys:
+                hi = self.pos[d] + 1
+                target = self.logp[t].iloc[max(0, hi - CONTEXT):hi]
+                first = target.first_valid_index()
+                lo = self.pos[first] if first is not None else hi - 1
+                y = self.logp[t].iloc[lo:hi].ffill().to_numpy(np.float32)
+                etf = self.sector_etf.get(t)
+                cov = {"spy": self._series(self.logp, "SPY", lo, hi),
+                       "sector": self._series(self.logp, etf if etf in self.logp else "SPY", lo, hi),
+                       "volume": self._series(self.logv, t, lo, hi),
+                       "vix": self._series(self.logp, "^VIX", lo, hi), "tnx": self._series(self.logp, "^TNX", lo, hi)}
+                inputs.append({"target": y, "past_covariates": cov})
+                last.append(y[-1])
+            quantiles, _ = pipeline(self.device).predict_quantiles(
+                inputs, prediction_length=self.horizon, quantile_levels=[0.05, 0.5, 0.95])
+            for k, q, base in zip(keys, quantiles, last, strict=True):
+                q = q.detach().cpu().numpy() if hasattr(q, "detach") else np.asarray(q)
+                self._cache[(k, self.horizon)] = q.reshape(-1, self.horizon, 3)[0, -1, :] - base
+        return np.array([self._cache[(k, self.horizon)] for k in rows.index])
+
+    def describe(self):
+        return {**super().describe(), "name": self.name, "covariates": list(self.COVARIATES)}
+
+
 FEATURES = ["chronos_mean", "chronos_range"]
 
 
