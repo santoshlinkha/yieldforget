@@ -356,7 +356,7 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
         if not slots:
             account_blocks.append(f"name limit: {r['max_names']} names including holdings")
         if dollars < r["min_order"]:
-            account_blocks.append(f"settled cash: ${budget:,.2f} available after reservations")
+            account_blocks.append(f"trading budget: ${budget:,.2f} available after reservations")
         ira_total = ira["total"] or 1.0
         if (ira["by_ticker"].get(t, 0.0) + dollars) / ira_total > r["combined_name_cap"]:
             account_blocks.append(f"IRA concentration: would exceed {r['combined_name_cap']:.0%} of the whole IRA in {t}")
