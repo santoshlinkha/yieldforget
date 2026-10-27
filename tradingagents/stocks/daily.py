@@ -44,10 +44,15 @@ from .adapters import Ranker, TradeQuality, apply_map, score_to_net, within_date
 from .positions import POLICIES, Book, Lot, executable_prices
 from .targets import Thresholds
 
-BUNDLE_VERSION = "decision-v1"
+BUNDLE_VERSION = "decision-v2"      # v2: the risk model predicts a fixed 8% fall (``pos_dd8``)
 CASH_FUNDS = ("SGOV", "BIL")      # cash equivalents: valued as cash, never reviewed as stock lots
 DEFAULT_RULES = {"min_expected_net": 0.005, "min_p_win": 0.5, "combined_name_cap": 0.10, "prospective_min_trades": 20,
-                 "max_drawdown_limit": -0.35}
+                 "max_drawdown_limit": -0.35,
+                 # P(a close 8%+ below the entry within the horizon). The old own-volatility label gave every stock
+                 # about 7%, so its cap never bound; this one ranks stocks (docs/QUANT_UPGRADES.md) and blocks only
+                 # the riskiest few, since the riskiest fifth did not earn less after costs in the study.
+                 "max_fall8_prob": 0.30}
+RISK_LABEL = "pos_dd8"
 
 
 def rules(store) -> dict:
@@ -212,7 +217,7 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
     from . import training_store as TS
 
     member = panel[panel["in_index"]]
-    table = member[[*feats, "label", "label_end", "pos_large_loss"]].join(tr[["net", "complete", "exit_date"]])
+    table = member[[*feats, "label", "label_end", RISK_LABEL]].join(tr[["net", "complete", "exit_date"]])
     table = table[(pd.to_datetime(table["label_end"]) <= cutoff) | (pd.to_datetime(table["exit_date"]) <= cutoff)]
     fp = TS.fingerprint(table, {"policy": policy.version(), "features": feats, "thresholds": th.version(),
                                 "version": BUNDLE_VERSION, "model_code": model_code_hash()})
@@ -228,7 +233,7 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
     edges = S.fold_edges(panel.index.get_level_values("date"))
     say("cross-fitting the ranker")
     oof = S.crossfit_primary(panel, feats, edges, [lambda: Ranker(device)])
-    rows = oof.join(tr[["net", "complete", "exit_date"]]).join(member[[*feats, "label_end", "pos_large_loss"]])
+    rows = oof.join(tr[["net", "complete", "exit_date"]]).join(member[[*feats, "label_end", RISK_LABEL]])
     # Only trades closed by the cutoff, and only outcomes known by then: nothing after it is learned from.
     rows = rows[rows["complete"] & (pd.to_datetime(rows["exit_date"]) <= cutoff)]
     rows["win"] = (rows["net"] > 0).astype(float)
@@ -245,8 +250,8 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
         "map_net": score_to_net(rows["score_pct"].to_numpy(), rows["net"].to_numpy()),
         "map_excess": score_to_net(rows["score_pct"].to_numpy(), excess),
         "quality": TradeQuality("logit", "sigmoid", device).fit(rows, [*feats, "score_pct"]),
-        "risk": XGBEvent(device).fit(member[member["pos_large_loss"].notna()
-                                            & (pd.to_datetime(member["label_end"]) <= cutoff)], feats, "pos_large_loss"),
+        "risk": XGBEvent(device).fit(member[member[RISK_LABEL].notna()
+                                            & (pd.to_datetime(member["label_end"]) <= cutoff)], feats, RISK_LABEL),
         "features": feats, "policy": policy, "thresholds": th.version(),
         "meta": {"cutoff": str(cutoff.date()), "train_rows": len(train_rows), "oof_rows": len(rows),
                  "seconds": round(time.time() - t0, 1), "device": device, "survivorship": data.survivorship,
@@ -370,8 +375,8 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
         risk = row["p_risk"]
         if not (isinstance(risk, float) and np.isfinite(risk)):
             model_blocks.append("risk estimate missing or invalid")
-        elif risk > r["max_large_loss_prob"]:
-            model_blocks.append(f"P(large loss at the exit close) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
+        elif risk > r["max_fall8_prob"]:
+            model_blocks.append(f"P(an 8% fall while held) {risk:.0%} above {r['max_fall8_prob']:.0%}")
         if not np.isfinite(row["expected_net"]) or row["expected_net"] < r["min_expected_net"]:
             model_blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
         if not np.isfinite(row["p_win"]) or row["p_win"] < r["min_p_win"]:

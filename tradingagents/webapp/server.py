@@ -941,7 +941,7 @@ class App:
             lines += [f"- **Model rank**: #{model['rank']} of {model['of']} {'funds' if fund else 'S&P 500 stocks'} today",
                       f"- **Expected return**: {model['expected_net']:+.2%} {'above cash' if fund else 'after costs'}, "
                       f"P(profit) {model['p_win']:.0%}"
-                      + (f", P(large loss) {model['p_risk']:.0%}" if model.get("p_risk") is not None else "")]
+                      + (f", P(8% fall while held) {model['p_risk']:.0%}" if model.get("p_risk") is not None else "")]
         lines += [f"- **The agents' view** (shown, not used): rating {result['rating']}, i.e. {ai['action']}"
                   + (f"; {'agrees' if ai['action'] == final else 'differs'}" if model else ""),
                   f"- **Agent models**: {', '.join(used)}" + (" (after a fallback)" if result.get("fell_back") else ""),

@@ -26,8 +26,8 @@ def test_buy_comes_from_the_model_not_from_ai_or_screens():
 
 def test_middle_ranks_wait_and_failed_gates_block_a_buy():
     assert verdict(False, None, None, {}, None, TODAY, score=MID)["verdict"] == "WATCH"
-    risky = verdict(False, None, None, {}, None, TODAY, score={**TOP, "p_risk": 0.3})
-    assert risky["verdict"] == "WATCH" and "chance of a large loss" in risky["summary"]
+    risky = verdict(False, None, None, {}, None, TODAY, score={**TOP, "p_risk": 0.45})
+    assert risky["verdict"] == "WATCH" and "chance of an 8% fall" in risky["summary"]
     assert verdict(False, None, None, {}, None, TODAY, score={**TOP, "expected_net": -0.001})["verdict"] == "AVOID"
     assert verdict(False, None, None, {}, None, TODAY)["verdict"] == "WATCH"       # not scored
 
@@ -73,7 +73,7 @@ def test_an_unvalidated_buy_is_labelled_and_its_action_waits():
 def test_a_stock_without_a_risk_estimate_never_passes_the_gate():
     for missing in (None, float("nan")):
         v = verdict(False, None, None, {}, None, TODAY, score={**TOP, "p_risk": missing}, validated=True)
-        assert v["verdict"] == "WATCH" and "risk estimate" in v["summary"].replace("chance of a large loss at the exit",
+        assert v["verdict"] == "WATCH" and "risk estimate" in v["summary"].replace("chance of an 8% fall while held",
                                                                                    "risk estimate")
 
 

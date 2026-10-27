@@ -4,7 +4,7 @@ Everything comes from the latest saved daily decision (``daily.run``), the inter
 order, never from an AI rating:
 
 - **Best buy**: the highest-ranked stock that passes the model's gates (P(profit after costs),
-  expected net P&L, P(large loss)) and is not already held. Its **buy price** is a limit at the
+  expected net P&L, P(an 8% fall while held)) and is not already held. Its **buy price** is a limit at the
   last close: the model's entry is the next session's close, and a limit there keeps a gap up from
   filling it. When the stock has a saved signal forecast, a patient limit at its median expected
   dip (about an even chance the price trades there within 20 sessions; a touch is not a fill) is offered beside it. The **exits** are

@@ -55,7 +55,7 @@ class _Design:
 
 class OutcomeModel:
     def __init__(self, kind: str, policy: str):
-        if kind not in ("lgbm", "linear"):
+        if kind not in ("lgbm", "lgbm_seq", "linear"):
             raise ValueError(kind)
         self.kind, self.policy, self.classes = kind, policy, classes_for(policy)
 
@@ -73,7 +73,21 @@ class OutcomeModel:
         self.clip = (float(np.nanquantile(ex, 0.01)), float(np.nanquantile(ex, 0.99)))
         exc = np.clip(ex, *self.clip)
         self.base = np.bincount(y, minlength=len(self.classes)) / len(y)
-        if self.kind == "lgbm":
+        if self.kind == "lgbm_seq" and "nofill" in self.classes:
+            # Two steps: does the limit fill (short-term moves decide), then how the filled trade ends.
+            import lightgbm as lgb
+
+            X = train[features]
+            nofill = self.classes.index("nofill")
+            filled = (y != nofill).to_numpy()
+            self.fill = lgb.train({**LGB_PARAMS, "objective": "binary"}, lgb.Dataset(X, filled.astype(int)), ROUNDS)
+            rest = [c for c in self.classes if c != "nofill"]
+            yc = y[filled].map({self.classes.index(c): i for i, c in enumerate(rest)}).to_numpy()
+            self.clf = lgb.train({**LGB_PARAMS, "objective": "multiclass", "num_class": len(rest)},
+                                 lgb.Dataset(X[filled], yc), ROUNDS)
+            self.reg = lgb.train({**LGB_PARAMS, "objective": "regression"}, lgb.Dataset(X, exc), ROUNDS)
+            self.q10 = lgb.train({**LGB_PARAMS, "objective": "quantile", "alpha": 0.1}, lgb.Dataset(X, exc), ROUNDS)
+        elif self.kind in ("lgbm", "lgbm_seq"):
             import lightgbm as lgb
 
             X = train[features]
@@ -92,7 +106,16 @@ class OutcomeModel:
         return self
 
     def _raw(self, rows: pd.DataFrame):
-        if self.kind == "lgbm":
+        if getattr(self, "fill", None) is not None:
+            X = rows[self.features]
+            pf, pc = self.fill.predict(X), self.clf.predict(X)
+            nofill = self.classes.index("nofill")
+            p = np.zeros((len(rows), len(self.classes)))
+            p[:, nofill] = 1 - pf
+            others = [i for i in range(len(self.classes)) if i != nofill]
+            p[:, others] = pc * pf[:, None]
+            return p, self.reg.predict(X), self.q10.predict(X)
+        if self.kind in ("lgbm", "lgbm_seq"):
             X = rows[self.features]
             p = self.clf.predict(X)
             return p, self.reg.predict(X), self.q10.predict(X)

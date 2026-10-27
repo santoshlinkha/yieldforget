@@ -12,9 +12,13 @@ behind the market has turned up (Improving), *rotating out* when a leader has st
 being confirmed. The stage says nothing certain about what comes next: sectors also turn back.
 
 **The cause.** For each sector, the daily return over SPY is regressed (ridge, standardized, over
-the last 252 sessions) on the daily moves of six market drivers: the 10-year yield, the yield
-curve (10-year less 13-week), oil, the dollar, credit (high-yield bonds against Treasuries) and the
-VIX. The sector's move over the last 21 sessions is split into each driver's part (its sensitivity
+the last 252 sessions) on the daily moves of eight market drivers: the 10-year yield, the yield
+curve (10-year less 13-week), oil, the dollar, credit (high-yield bonds against Treasuries), the
+VIX, geopolitical threats (the Caldara-Iacoviello daily threats index, a day late since it is
+published from the next morning's papers) and a geopolitical hedge basket (gold, defense and oil
+funds against SPY). With the last two the drivers explain more of the sectors' daily moves (average
+R squared over yearly windows 0.27 against 0.22 with the six, where two extra drivers of pure noise
+would add about 0.01; ``sector_model.causes_r2``). The sector's move over the last 21 sessions is split into each driver's part (its sensitivity
 times the driver's move); the largest parts, in the direction of the move, are given as the cause,
 with how much of the sector's daily moves the drivers explain at all (R squared). What is left is
 the sector's own news, which this cannot name.
@@ -42,8 +46,11 @@ DRIVERS = {
     "Junk bonds vs Treasuries": ("spread:HYG:IEF", "%", "credit was calm (junk bonds beat Treasuries)",
                                  "credit stress rose (junk bonds trailed Treasuries)"),
     "VIX": ("diff:^VIX", "pts", "fear rose (VIX up)", "fear eased (VIX down)"),
+    "Geopolitical threats": ("gpr", "%", "geopolitical threats rose in the news", "geopolitical threats eased"),
+    "Gold/defense/oil vs SPY": ("basket:GLD:ITA:USO", "%", "gold, defense and oil beat the market",
+                                "gold, defense and oil trailed the market"),
 }
-TICKERS = ["SPY", *SECTORS, "^TNX", "^IRX", "USO", "UUP", "HYG", "IEF", "^VIX"]
+TICKERS = ["SPY", *SECTORS, "^TNX", "^IRX", "USO", "UUP", "HYG", "IEF", "^VIX", "GLD", "ITA"]
 TREND, MOMENTUM, WINDOW, FIT = 63, 10, 21, 252
 
 
@@ -61,8 +68,9 @@ def stage_of(ratio: float, mom: float) -> str:
     return "Improving" if mom >= 100 else "Lagging"
 
 
-def driver_moves(close: pd.DataFrame) -> pd.DataFrame:
-    """Each driver's daily move: yields and VIX in points, the rest in log returns."""
+def driver_moves(close: pd.DataFrame, cache_dir=None) -> pd.DataFrame:
+    """Each driver's daily move: yields and VIX in points, the rest in log changes. The threats index needs
+    ``cache_dir`` (it is downloaded); without it, or without the data, that driver is left out."""
     out = {}
     for name, (how, *_) in DRIVERS.items():
         kind, *args = how.split(":")
@@ -74,7 +82,18 @@ def driver_moves(close: pd.DataFrame) -> pd.DataFrame:
             out[name] = np.log(close[args[0]]).diff()
         elif kind == "spread":
             out[name] = np.log(close[args[0]]).diff() - np.log(close[args[1]]).diff()
-    return pd.DataFrame(out)
+        elif kind == "basket" and all(t in close for t in args):
+            out[name] = np.log(close[args]).diff().mean(axis=1) - np.log(close["SPY"]).diff()
+        elif kind == "gpr" and cache_dir is not None:
+            try:
+                from tradingagents.stocks.extra_features import gpr_daily
+
+                thr = np.log1p(gpr_daily(cache_dir)["GPRD_THREAT"])
+            except Exception:
+                continue
+            # Known the next morning: each session sees the previous day's reading.
+            out[name] = thr.reindex(thr.index.union(close.index)).ffill().shift(1).reindex(close.index).diff()
+    return pd.DataFrame(out, index=close.index)
 
 
 def causes(excess: pd.Series, drivers: pd.DataFrame, window: int = WINDOW, alpha: float = 1.0) -> dict:
@@ -163,7 +182,7 @@ def rotation(cache_dir: str | Path, con=None, close: pd.DataFrame | None = None)
     if missing:
         raise ValueError(f"no prices for {', '.join(missing)}")
     st = stages(close).dropna(how="all")
-    drivers = driver_moves(close)
+    drivers = driver_moves(close, cache_dir)
     spy = np.log(close["SPY"]).diff()
     fc = _forecasts(con)
     rows, alerts = [], []
@@ -207,7 +226,7 @@ def rotation(cache_dir: str | Path, con=None, close: pd.DataFrame | None = None)
     recent = drivers.iloc[-WINDOW:].sum()
     return {"as_of": str(last.date()), "window": WINDOW, "sectors": sorted(rows, key=lambda r: -r["vs_spy_1m"]),
             "alerts": alerts,
-            "drivers": {k: {"move": round(float(recent[k]), 4), "units": DRIVERS[k][1]} for k in DRIVERS},
+            "drivers": {k: {"move": round(float(recent[k]), 4), "units": DRIVERS[k][1]} for k in drivers},
             "method": "Stage: relative strength vs SPY over 63 sessions and its 10-session momentum. Cause: the "
-                      "sector's daily return over SPY regressed on six market drivers over a year; the parts of the "
+                      "sector's daily return over SPY regressed on up to eight market drivers over a year; the parts of the "
                       "last 21 sessions' move. A stage is not a forecast; sectors also turn back."}

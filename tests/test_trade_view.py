@@ -104,10 +104,11 @@ def test_predictions_are_saved_scored_once_and_calibrate_only_with_enough_data(t
     assert feedback.resolve(con, tmp_path) == 0                                                 # never twice
     card = feedback.scorecard(con)
     assert card["matured"] == 360 and card["ic_mean"] > 0.9 and card["top_fifth_edge"] > 0
-    assert feedback.calibration(con)["active"]
+    assert not feedback.calibration(con)["active"]                                  # weeks, not years
+    assert feedback.calibration(con, min_rows=300, min_dates=10)["active"]
     assert not feedback.calibration(con, min_rows=1000)["active"]
     today = pd.DataFrame({"p_win": [0.7, 0.4], "expected_net": [0.02, -0.01]}, index=["X", "Y"])
-    out = feedback.apply(today, feedback.calibration(con))
+    out = feedback.apply(today, feedback.calibration(con, min_rows=300, min_dates=10))
     assert list(out["p_win_model"]) == [0.7, 0.4] and out["p_win"].between(0, 1).all()
     path = feedback.export(con, tmp_path / "hist")
     assert path.exists() and len(pd.read_csv(path)) == 360

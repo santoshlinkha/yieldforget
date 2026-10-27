@@ -256,3 +256,126 @@ def winners(decision: dict | None, members: dict[str, str]) -> dict[str, dict]:
         if etf not in best or s["rank"] < best[etf]["rank"]:
             best[etf] = {"ticker": t, "name": label[:label.rfind("(")].strip(), "rank": s["rank"], "of": s["of"]}
     return best
+
+
+# --- the pooled structural model: macro-implied push, relative strength, residual reversal ---
+
+def driver_frame(close: pd.DataFrame, cache_dir) -> pd.DataFrame:
+    """Daily moves of the 8 drivers of ``rotation`` (the threats index as 0 when it cannot be had)."""
+    from .rotation import DRIVERS, driver_moves
+
+    d = driver_moves(close, cache_dir)
+    for name in DRIVERS:
+        if name not in d:
+            d[name] = 0.0
+    return d
+
+
+def structural(close: pd.DataFrame, dates: pd.DatetimeIndex, cache_dir, n: int = 252, lam: float = 1.0) -> pd.DataFrame:
+    """Per (date, sector): macro_implied (rolling ridge betas x 20-session EWMA of each driver's move),
+    resid_10 (sum of the last 10 unexplained moves) and the stage features."""
+    drivers = driver_frame(close, cache_dir).fillna(0.0)
+    spy = np.log(close["SPY"]).diff()
+    trend = drivers.ewm(span=20, min_periods=10).mean()
+    st = stages(close)
+    rows = []
+    for t in SECTORS:
+        if t not in close:
+            continue
+        y = (np.log(close[t]).diff() - spy)
+        for d in dates:
+            i = close.index.get_indexer([d])[0]
+            if i < n:
+                continue
+            Y = y.iloc[i - n + 1:i + 1].to_numpy()
+            Xm = drivers.iloc[i - n + 1:i + 1].to_numpy()
+            ok = np.isfinite(Y) & np.isfinite(Xm).all(axis=1)
+            if ok.sum() < n // 2:
+                continue
+            Xs, Ys = Xm[ok], Y[ok]
+            mu, sd = Xs.mean(0), Xs.std(0) + 1e-12
+            Z = (Xs - mu) / sd
+            beta = np.linalg.solve(Z.T @ Z + lam * len(Z) * 0.01 * np.eye(Z.shape[1]), Z.T @ (Ys - Ys.mean())) / sd
+            resid = Ys - Ys.mean() - (Xs - mu) @ beta
+            rows.append({"date": d, "ticker": t, "macro_implied": float(trend.iloc[i].to_numpy() @ beta) * 20,
+                         "resid_10": float(resid[-10:].sum()),
+                         "ratio": float(st[("ratio", t)].iloc[i] - 100), "momentum": float(st[("momentum", t)].iloc[i] - 100)})
+    return pd.DataFrame(rows).set_index(["date", "ticker"]).sort_index()
+
+
+STRUCT_FEATURES = ["macro_implied", "resid_10", "ratio", "momentum", "rel_63"]
+
+
+def fit_pooled(train: pd.DataFrame) -> dict:
+    from sklearn.linear_model import RidgeCV
+
+    X = train[STRUCT_FEATURES]
+    mu, sd = X.mean(), X.std().replace(0, 1)
+    m = RidgeCV(alphas=np.logspace(-1, 4, 16)).fit(((X - mu) / sd).fillna(0), train["label"])
+    return {"model": m, "mu": mu, "sd": sd, "trained_through": str(train.index.get_level_values("date").max().date())}
+
+
+def predict_pooled(model: dict, rows: pd.DataFrame) -> pd.Series:
+    from tradingagents.stocks.training_store import guard
+
+    guard(model["trained_through"], rows.index.get_level_values("date"))
+    X = ((rows[STRUCT_FEATURES] - model["mu"]) / model["sd"]).fillna(0)
+    return pd.Series(model["model"].predict(X), index=rows.index)
+
+
+def compare(close: pd.DataFrame, cache_dir, progress=None) -> dict:
+    """LambdaRank vs the pooled structural ridge, on the same dates and folds."""
+    say = progress or (lambda *_: None)
+    panel = features(close)
+    dates = panel.index.get_level_values("date").unique()
+    decision = dates[(dates >= "2008-01-01")][::EVERY]
+    panel = panel[panel.index.get_level_values("date").isin(decision)]
+    say("structural features")
+    sf = structural(close, pd.DatetimeIndex(decision), cache_dir)
+    panel = panel.join(sf.drop(columns=["ratio", "momentum"]), how="left")
+    lab = panel[panel["label"].notna() & panel["macro_implied"].notna()]
+    ld = lab.index.get_level_values("date")
+    feats = feature_names(panel.drop(columns=["macro_implied", "resid_10"]))
+    folds = [(str(y), pd.Timestamp(f"{y}-01-01"), pd.Timestamp(f"{y + 1}-01-01")) for y in range(FIRST_TEST, HOLDOUT.year)]
+    folds.append(("holdout", HOLDOUT, ld.max() + pd.Timedelta(days=1)))
+    lr_, pr_ = [], []
+    for name, start, end in folds:
+        test = lab[(ld >= start) & (ld < end)]
+        train = lab[pd.to_datetime(lab["label_end"]) < start]
+        if test.empty or train.index.get_level_values("date").nunique() < 100:
+            continue
+        lr_.append(predict(fit(train, feats), test)["score"].rename("s").to_frame().assign(fold=name))
+        pr_.append(predict_pooled(fit_pooled(train), test).rename("s").to_frame().assign(fold=name))
+        say(f"compare {name}")
+    out = {}
+    for model, frames in (("lambdarank", lr_), ("pooled_ridge", pr_), ("momentum_63", None)):
+        p = pd.concat(frames) if frames else pd.concat(lr_)[["fold"]].assign(s=lab["rel_63"])
+        for part, sel in (("development", p["fold"] != "holdout"), ("holdout", p["fold"] == "holdout")):
+            idx = p.index[sel]
+            out.setdefault(part, {})[model] = _summary(_per_date(p.loc[idx, "s"], lab["label"].reindex(idx)))
+    return out
+
+
+def causes_r2(close: pd.DataFrame, cache_dir, window: int = 252) -> dict:
+    """Average in-window R squared of each sector's daily excess return on 6 vs 8 drivers (every 21 sessions)."""
+    d8 = driver_frame(close, cache_dir)
+    d6 = d8.iloc[:, :6]
+    spy = np.log(close["SPY"]).diff()
+    out = {}
+    for label, D in (("6 drivers", d6), ("8 drivers", d8)):
+        r2s = []
+        for t in SECTORS:
+            if t not in close:
+                continue
+            y = np.log(close[t]).diff() - spy
+            for i in range(window, len(close), 21):
+                Y, X = y.iloc[i - window:i].to_numpy(), D.iloc[i - window:i].to_numpy()
+                ok = np.isfinite(Y) & np.isfinite(X).all(axis=1)
+                if ok.sum() < window // 2:
+                    continue
+                Xs = np.column_stack([np.ones(ok.sum()), X[ok]])
+                b, *_ = np.linalg.lstsq(Xs, Y[ok], rcond=None)
+                res = Y[ok] - Xs @ b
+                r2s.append(1 - res.var() / Y[ok].var())
+        out[label] = float(np.mean(r2s))
+    return out

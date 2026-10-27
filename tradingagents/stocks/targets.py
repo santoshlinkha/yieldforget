@@ -52,6 +52,7 @@ TREND_STATES = ("up", "down", "sideways", "unclear")
 EVENTS = ("up_break", "down_break", "large_loss", "deep_drawdown")
 # Risks during the actual position (entry at the next close): what risk gates use.
 POSITION_EVENTS = ("pos_large_loss", "pos_deep_drawdown")
+DD_FIXED = 0.08   # the fixed fall that defines ``pos_dd8``
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,10 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
     later_lows = _forward(lo, entry, horizon)              # lows of entry+1 .. entry+h
     mae = np.minimum(np.nanmin(later_lows, axis=1) / entry_px - 1, 0.0) * np.where(tradable_ok, 1.0, np.nan)
     pos_ret = np.expm1(stock_ret)
+    # A fixed-size fall, the same for every stock (unlike ``pos_large_loss``, which is in each stock's own volatility
+    # and so happens about as often to every stock): any close within the horizon after entry 8% or more below it.
+    later_closes = _forward(c, entry, horizon)
+    pos_dd8 = (np.nanmin(later_closes, axis=1) / entry_px - 1 <= -DD_FIXED) * np.where(tradable_ok, 1.0, np.nan)
 
     def frame(values, mask_to=None):
         v = np.asarray(values, dtype=float)
@@ -179,13 +184,14 @@ def labels(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, cash: pd.
         "deep_drawdown": frame(drawdown <= dd_line, r),
         "mae_position": frame(mae),
         "pos_large_loss": frame(pos_ret <= np.expm1(-th.loss_k * sigma_h), stock_ret),
+        "pos_dd8": frame(pos_dd8, stock_ret),
         "pos_deep_drawdown": frame(mae <= dd_line, mae),
         "dd_breach_day": frame(dd_day, r),
         "trend_state": frame(state, r),
     })
     # Where sigma_h is unknown (too little history), no threshold applies: no event label.
     unknown = out["sigma_h"].isna()
-    out.loc[unknown, ["large_loss", "deep_drawdown", "trend_state", "pos_large_loss", "pos_deep_drawdown"]] = np.nan
+    out.loc[unknown, ["large_loss", "deep_drawdown", "trend_state", "pos_large_loss", "pos_deep_drawdown", "pos_dd8"]] = np.nan
     label_end = pd.Series(sessions[np.minimum(rows + 1 + horizon, n - 1)], index=dates)
     label_end[~tradable_ok[:, 0]] = pd.NaT
     out["label_end"] = label_end.reindex(out.index.get_level_values(0)).to_numpy()

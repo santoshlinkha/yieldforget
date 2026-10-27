@@ -30,7 +30,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-MIN_ROWS, MIN_DATES = 300, 10
+# About two years of matured decision days: a calibration fitted on a few weeks follows one market spell
+# (it is what made P(loss) and the edge swing day to day); over two years it averages across regimes.
+MIN_ROWS, MIN_DATES = 20000, 500
 FIELDS = ("rank", "of_n", "score_pct", "expected_net", "p_win", "p_risk", "cost_rt")
 
 

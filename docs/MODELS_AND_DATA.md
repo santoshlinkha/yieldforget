@@ -37,14 +37,14 @@ strength against SPY and the sector, market series, SEC fundamentals as filed, e
 | Ranker | XGBoost learning-to-rank (pairwise), groups = dates | each stock's 20-session return over cash from the next close, graded into fifths per date | a score, turned into the **rank** among today's stocks |
 | Expected-net map | 10 bins, shrunk toward the average (k = 200) | out-of-fold ranker percentiles → the barrier policy's net trade P&L | expected net after costs (and its spread) |
 | Trade quality | logistic regression + sigmoid calibration | out-of-fold rows: did the policy's trade make money after costs? | P(profit after costs) |
-| Position risk | XGBoost classifier | did the position end down ≥ 1.5 × its own 20-session volatility? | P(large loss) |
+| Position risk | XGBoost classifier | did any close in the 20 sessions after the entry fall 8% or more below it? | P(8% fall while held) |
 
 "Out-of-fold" = yearly cross-fitting with purging: a row is scored by a ranker that never saw its year,
 and the second-stage parts learn only from earlier folds.
 
 **How they combine into a decision** (`daily.entries`):
 1. Order today's members and your extra companies by ranker score, then P(profit).
-2. A candidate passes the **model gates** when P(large loss) ≤ 15%, expected net ≥ +0.5%, P(profit) ≥ 50%.
+2. A candidate passes the **model gates** when P(8% fall while held) ≤ 30%, expected net ≥ +0.5%, P(profit) ≥ 50%.
 3. Then the **account gates**: not already held, at most 5 names, at most 25% each, within the trading budget,
    at most 10% of the whole IRA in one stock.
 4. The first that passes is the **best buy**; the next four are the runners-up. Buy limit = last close;
@@ -57,15 +57,17 @@ and the second-stage parts learn only from earlier folds.
 Verdict labels (`stocks/verdict.py`): BUY = top fifth by rank + the three model gates; AVOID = bottom fifth or a
 negative expected net; SELL (held) = an exit rule, or bottom fifth with a negative expected net.
 
-Known weakness (measured): P(large loss) is 7.1% for every stock and P(profit) 53–54%: those parts have no
-stock-specific view; the rank does the work. Decision study (2024–26): +5.0% vs SPY +43% and cash +9.9%.
+Known weakness (measured): P(profit) is 53–54% for every stock (no stock-specific view; the rank does the
+work). The risk model used to predict a loss in each stock's own volatility, which happens about as often to
+every stock (7.1% for all); it now predicts a fixed 8% fall, which ranks stocks (2025 holdout: the riskiest
+tenth 26%, the safest 8%) but reads low in a volatile year. See `docs/QUANT_UPGRADES.md`. Decision study (2024–26): +5.0% vs SPY +43% and cash +9.9%.
 
 **Saving and retraining** (`stocks/training_store.py`): each training table is fingerprinted; the same data
 is never fitted twice (the earlier fit is reused), each set is saved in DuckDB with its bundle, and a model
 refuses to score any date on or before the last date it trained on.
 
 **Learning from results** (`stocks/feedback.py`): every daily prediction (≈500 stocks) is saved, scored 20
-sessions later, exported to CSV, and once 300 have matured over 10 days, used to recalibrate P(profit) and
+sessions later, exported to CSV, and once about two years have matured (20,000 over 500 decision days), used to recalibrate P(profit) and
 expected net (isotonic / a shrunk line).
 
 ### B. Stock signal models (ticker page signals, screener, entry-plan dip levels)
@@ -105,13 +107,14 @@ every stock and gives the AI agents nothing.
 
 ### D. Sector rotation (Trade page)
 
-Code: `research/rotation.py`, `research/sector_model.py`. Data: the 11 SPDR sector funds, SPY and six market
-drivers (10-year yield, yield curve, oil, dollar, junk bonds vs Treasuries, VIX), daily since 2007.
+Code: `research/rotation.py`, `research/sector_model.py`. Data: the 11 SPDR sector funds, SPY and eight market
+drivers (10-year yield, yield curve, oil, dollar, junk bonds vs Treasuries, VIX, geopolitical threats (GPR
+index, a day late), gold/defense/oil vs SPY), daily since 2007.
 
 | Part | Algorithm | What it gives |
 |---|---|---|
 | Stages and alerts | relative-rotation arithmetic (63-session relative strength, 10-session momentum) | Improving / Leading / Weakening / Lagging; early "rotating in/out" alerts |
-| Causes | ridge regression of each sector's daily return over SPY on the six drivers (252 sessions) | which driver moved each sector, with how much the drivers explain (R²) |
+| Causes | ridge regression of each sector's daily return over SPY on the eight drivers (252 sessions) | which driver moved each sector, with how much the drivers explain (R²) |
 | Next leader | **LightGBM LambdaRank** (+ LightGBM regression for size), sector as a category, decision dates every 5 sessions from 2008 | the 11 sectors ranked for the next 20 sessions |
 | Probable winner | the internal stock model's (A) top-ranked stock in each GICS sector | one stock per sector |
 

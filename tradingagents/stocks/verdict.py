@@ -2,15 +2,15 @@
 
 The verdict comes only from the internal quant model of the daily decision (``stocks.daily``), fitted on
 this machine: it ranks every S&P 500 stock on how a 20-session trade should do after trading costs, and
-for each it gives the expected net return, the chance the trade ends in profit, and the chance of a large
-loss while held. No AI rating decides anything; the agents' rating, the quality and Wall Street screen and
+for each it gives the expected net return, the chance the trade ends in profit, and the chance the stock
+closes 8% or more below the entry while held. No AI rating decides anything; the agents' rating, the quality and Wall Street screen and
 the breakout / breakdown signals are shown beside the verdict as context.
 
 Rules (``score`` = the stock's percentile among today's ranked stocks, 1 = the best):
 
 - **Not held**
   - **BUY**: the daily decision says ENTER, or score in the top fifth (0.80+), expected net return after
-    costs above zero, P(profit) at least 50% and P(large loss) at most 15%.
+    costs above zero, P(profit) at least 50% and P(an 8% fall while held) at most 30%.
   - **AVOID**: score in the bottom fifth (0.20 or lower), or an expected net loss after costs.
   - **WATCH**: everything in between; the failed tests say what is missing.
 - **Held**
@@ -30,7 +30,7 @@ from datetime import date
 TOP = 0.80                  # score percentile a BUY needs
 BOTTOM = 0.20               # at or below: AVOID (not held) / SELL with an expected loss (held)
 MIN_P_WIN = 0.50
-MAX_P_RISK = 0.15
+MAX_P_RISK = 0.30            # P(a close 8%+ below the entry within the horizon); see daily.DEFAULT_RULES
 RATING_DAYS = 30            # an agent rating older than this is not shown as current
 MIN_QUALITY_BUY, MAX_CONSENSUS_BUY, MIN_UPSIDE_BUY = 75, 2.2, 0.10   # context marks only
 BAD_SIGNALS = ("breakdown", "crash", "drawdown")
@@ -83,9 +83,9 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
         if not fund:
             # A stock needs its risk estimate: missing or unknown fails the gate, it is never skipped.
             known = p_risk is not None and p_risk == p_risk
-            checks.append(_check("Chance of a large loss at the exit", known and p_risk <= MAX_P_RISK,
-                                 f"{p_risk:.0%} at the exit of a {horizon}-session trade (terminal, not the "
-                                 f"worst point while held; BUY needs {MAX_P_RISK:.0%} or less)" if known else
+            checks.append(_check("Chance of an 8% fall while held", known and p_risk <= MAX_P_RISK,
+                                 f"{p_risk:.0%} that a close in the {horizon} sessions after the entry is 8% or more "
+                                 f"below it (BUY needs {MAX_P_RISK:.0%} or less)" if known else
                                  "unknown: BUY needs a risk estimate"))
     if action:
         checks.append(_check("Daily decision", action not in ("EXIT", "REDUCE"),
