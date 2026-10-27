@@ -149,6 +149,32 @@ Agent models keep their seats on the first attempt.
 Combined: **context only** (the internal model decides). They receive model evidence only if it is validated
 (none is today). The "Copy the prompt" box reproduces the same agents' API calls for ChatGPT.
 
+### G. Every model side by side (Models tab, ticker page)
+
+Code: `stocks/model_zoo.py`, `stocks/seq_model.py` (Mamba); study: `experiments/model_zoo_study.py`,
+`experiments/mamba_study.py`. Each model is fitted on all history to the last close and ranks today's members
+(the Models tab: rank 100 = its top pick, plus a 20-session forecast for models that predict a return). None of
+them decides anything. Every run is saved (`model_zoo_runs`).
+
+Tested on identical purged yearly folds (rank IC with the barrier trade's net P&L; 2025 on was looked at before,
+so it is development evidence; the forward record is the test):
+
+| Model | 2012-24 IC | 2025 on IC | 2025 on top fifth - all |
+|---|---|---|---|
+| XGBoost ranker, 54 features (current) | +0.022 | +0.001 | -0.06% |
+| XGBoost ranker, all data (+news, analysts, competitors) | +0.032 | -0.006 | -0.46% |
+| LightGBM LambdaRank, all data | +0.020 | +0.021 | +0.69% |
+| LightGBM regression | +0.030 | -0.003 | +0.06% |
+| Ridge, all stocks | +0.015 | -0.018 | +0.08% |
+| Ridge, one per stock (market, sector, competitors, economy, analysts, news) | +0.015 | +0.018 | +0.46% |
+| Mamba (64-day sequences + 54 features) | +0.018 | +0.006 | +0.18% |
+| Chronos-2, zero-shot (2023-24 / 2025 on) | -0.006 | +0.019 | +0.11% |
+
+Data added to the current model: SEC news +0.027 / +0.031; analysts +0.021 / +0.001; competitors +0.026 / +0.015.
+No 2025-on interval excludes zero: nothing is shown better than the current model yet. Forecasts in return units
+(regressions, Chronos-2) are not calibrated: the per-stock ridge in particular gives large numbers (+12% for NVDA
+on 2026-10-26) and should be read as an order, not a size.
+
 ## 3. How it all fits together
 
 ```
