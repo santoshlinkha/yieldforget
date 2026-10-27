@@ -42,7 +42,7 @@ def test_the_best_buy_passes_the_gates_is_not_held_and_carries_its_exits():
 def test_no_decision_and_an_empty_budget_say_so():
     assert not trade.plan(None, 10.0)["ready"]
     p = trade.plan(_decision(), 0.0)
-    assert p["best"]["shares"] == 0.0 and any("budget is empty" in n for n in p["notes"])
+    assert p["best"]["shares"] == 0.0 and any("Nothing left in the trading budget" in n for n in p["notes"])
 
 
 def _sector_prices(rotating_in="XLU", rotating_out="XLK", n=400):
