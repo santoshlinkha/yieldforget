@@ -60,8 +60,8 @@ table.eplan td, table.eplan th { white-space: normal; vertical-align: top; }
 table.eplan .nw { white-space: nowrap; }
 table.eplan td:last-child div + div { margin-top: 4px; }
 table.eplan td .small { font-size: 11.5px; margin-top: 2px; }
-.card { overflow-x: auto; }
-th { text-align: right; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.card { min-width: 0; }
+th { text-align: right; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: normal; }
 td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 th:first-child, td:first-child, th.l, td.l { text-align: left; }
 .news { list-style: none; margin: 0; padding: 0; }
@@ -537,8 +537,9 @@ async function load() {
       `${spct(r.growth_above_cash)} above cash (${pct(r.cash)}). Volatility ${pct(r.volatility, 0)}, worst drop ${pct(r.worst_drop, 0)}` +
       `${r.assumed_drop ? " (assumed: under 10 years of history)" : ""}.</p>`;
     if (fc.models.length) {
-      h += `<table><tr><th class="l">Model forecast</th><th>Mean</th><th>5–95%</th><th>P(gain)</th></tr>` +
-        fc.models.map(x => `<tr><td class="l">${x.horizon} sessions <span class="muted small">${esc(x.model)}, trained on ${x.universe === "stock" ? "stocks" : "ETFs"}${x.on_demand ? ", computed now" : ""}</span></td><td>${spct(x.mean, 2)}</td><td>${spct(x.q05)} to ${spct(x.q95)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + "</table>";
+      h += `<table><tr><th class="l">Horizon</th><th>Mean</th><th title="5th to 95th percentile">Range</th><th title="Chance of beating cash">Up</th></tr>` +
+        fc.models.map(x => `<tr><td class="l">${x.horizon} days<div class="muted small">${esc(x.model)}, ${x.universe === "stock" ? "stocks" : "ETFs"}${x.on_demand ? ", now" : ""}</div></td><td>${spct(x.mean, 1)}</td><td><div>${spct(x.q05, 0)}</div><div>${spct(x.q95, 0)}</div></td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + "</table>" +
+        `<p class="muted small">Range: the 5th to 95th percentile. Up: the chance of beating cash.</p>`;
       const flags = [...new Set(fc.models.flatMap(x => x.flags || []))];
       if (flags.length) h += `<p class="note small">${esc(flags.join("; "))}.</p>`;
       h += `<p class="muted small">Log return above cash over the horizon, from data to ${esc(fc.models[0].info_cutoff)}. In backtests these models ranked funds better than chance but did not beat the standard rule in the portfolio after costs.</p>`;
@@ -777,21 +778,28 @@ async function getJSON(url, body) {
   if (!res.ok) throw new Error(d.error || res.statusText);
   return d;
 }
+const EV_SHORT = {untested: "no", passed: "passed", failed: "failed"};
+const EV_TIP = {untested: "No walk-forward study has tested this signal's model version, so its accuracy is unknown",
+                passed: "A walk-forward study found skill on data the model had not seen",
+                failed: "A walk-forward study found no skill on data the model had not seen"};
 function signalTable(sg) {
   const f = sg.forecast, b = sg.base_rates, ev = sg.evidence || {};
   const line = (name, key, p, base, kind) => {
     const lift = sg.lifts[key];
     const flat = (sg.flat || []).includes(key), rank = (sg.ranks || {})[key];
     const cls = flat ? "muted" : lift >= 1.2 ? (kind === "good" ? "pos" : "neg") : lift != null && lift <= 0.8 ? "muted" : "";
-    return `<tr><td class="l">${name}</td><td>${pct(p, 0)}</td><td class="muted">${pct(base, 0)}</td>` +
-      `<td class="${cls}">${lift == null ? "–" : lift.toFixed(2) + "×"}</td>` +
-      `<td class="muted">${flat ? "same for all" : rank == null ? "–" : rank >= 0.5 ? `top ${Math.max(1, Math.round((1 - rank) * 100))}%` : `bottom ${Math.max(1, Math.round(rank * 100))}%`}</td><td class="muted small">${esc(ev[key] || "")}</td></tr>`;
+    const tested = EV_SHORT[ev[key]] || ev[key];
+    return `<tr><td class="l">${name}${tested ? `<div class="small muted" title="${esc(EV_TIP[ev[key]] || "")}">tested: ${esc(tested)}</div>` : ""}</td>` +
+      `<td class="${cls}" title="${lift == null ? "" : lift.toFixed(2) + "× usual"}">${pct(p, 0)}</td><td class="muted">${pct(base, 0)}</td>` +
+      `<td class="muted">${flat ? "same" : rank == null ? "–" : rank >= 0.5 ? `top ${Math.max(1, Math.round((1 - rank) * 100))}%` : `bot ${Math.max(1, Math.round(rank * 100))}%`}</td></tr>`;
   };
-  return `<table><tr><th class="l">Within ${sg.horizon} sessions</th><th>Model</th><th>Usual</th><th>Lift</th><th>Among today's stocks</th><th>Evidence</th></tr>` +
-    line("Trades above the 20-day high (intraday)", "up_break", f.p_up_break, b.up_break, "good") +
-    line("Trades below the 20-day low (intraday)", "down_break", f.p_down_break, b.down_break, "bad") +
-    line("Large loss at the 20-session end", "large_loss", f.p_large_loss, b.large_loss, "bad") +
-    line("Deep drawdown", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>`;
+  return `<table><tr><th class="l">Next ${sg.horizon} days</th><th>Chance</th><th>Usual</th><th title="Where this stock's chance ranks among today's stocks">Rank</th></tr>` +
+    line("Above 20-day high", "up_break", f.p_up_break, b.up_break, "good") +
+    line("Below 20-day low", "down_break", f.p_down_break, b.down_break, "bad") +
+    line("Big loss at day 20", "large_loss", f.p_large_loss, b.large_loss, "bad") +
+    line("Deep drop", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>` +
+    `<p class="small muted">Above / below: the price trades past the level at any time in the next ${sg.horizon} trading days, intraday. ` +
+    `Big loss: down at least 1.5 volatilities at day ${sg.horizon}. Deep drop: falls that far at any point. A chance in colour is at least 1.2× usual. Tested: whether a walk-forward study checked this signal on data it was not trained on; "no" means it has not been checked, so treat the chance as unverified.</p>`;
 }
 async function loadSignals() {
   let s;
@@ -855,7 +863,7 @@ async function loadSignals() {
     const flatNames = {large_loss: "large-loss (crash)", deep_drawdown: "deep-drawdown", up_break: "breakout", down_break: "breakdown"};
     const flat = (sg.flat || []).filter(k => flatNames[k]);
     if (flat.length) h += `<p class="small note">The ${flat.map(k => flatNames[k]).join(" and ")} model${flat.length > 1 ? "s give" : " gives"} nearly every stock the same probability today, so ${flat.length > 1 ? "they have" : "it has"} no view on this stock in particular: no stock-specific warning can come from ${flat.length > 1 ? "them" : "it"}. A crash can still happen; this only says the model cannot tell which stocks are more exposed.</p>`;
-    h += `<p class="small muted">From the stock models, data to ${esc(sg.data_to)}. "Usual" is how often it happened to any stock in training; a warning needs a lift of ${s.rules.lift_break}× (breakouts) or ${s.rules.lift_crash}× (crashes) and the top fifth of today's stocks, so a market-wide shift does not flag every stock. Evidence says whether the walk-forward study backed that signal ("untested": not checked yet). Not validated for trading.</p>`;
+    h += `<p class="small muted">From the stock models, data to ${esc(sg.data_to)}. "Usual" is how often it happened to any stock in training; a warning needs a lift of ${s.rules.lift_break}× (breakouts) or ${s.rules.lift_crash}× (crashes) and the top fifth of today's stocks, so a market-wide shift does not flag every stock. "Tested" says whether a walk-forward study backed that signal ("no": not checked yet). Not validated for trading.</p>`;
   } else {
     h += `<p class="small muted">${sg ? esc((sg.reasons || []).join("; ") || sg.status) : "No trend, breakout or crash forecast saved for this stock yet."}</p>`;
   }
