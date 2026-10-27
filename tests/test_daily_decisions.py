@@ -175,8 +175,8 @@ def test_paper_entries_depend_on_model_gates_not_on_the_real_accounts_cash():
     r = {**daily.DEFAULT_RULES, "max_names": 5, "max_position_share": 0.25, "min_order": 1.0, "max_large_loss_prob": 0.15}
     line = daily.entries(today, set(), set(), r, 1000.0, 0.0, {"total": 6000.0, "by_ticker": {}},
                          pd.Series({"AAA": 10.0}), True, None, "2026-10-26")[0]
-    assert line["action"] == "WAIT" and line["paper_action"] == "PAPER ENTER"     # no settled cash, good signal
-    assert any("settled cash" in b for b in line["blocked"])
+    assert line["action"] == "WAIT" and line["paper_action"] == "PAPER ENTER"     # no trading budget, good signal
+    assert any("trading budget" in b for b in line["blocked"])
 
 
 def test_rerunning_a_cutoff_adds_no_shadow_orders(env):
