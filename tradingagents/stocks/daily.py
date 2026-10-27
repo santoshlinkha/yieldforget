@@ -40,14 +40,27 @@ import numpy as np
 import pandas as pd
 
 from . import panel as P
-from .adapters import Ranker, TradeQuality, apply_map, score_to_net, within_date_pct
+from .adapters import Ranker, TradeQuality, apply_map, member_pct, score_to_net
 from .positions import POLICIES, Book, Lot, executable_prices
 from .targets import Thresholds
 
 BUNDLE_VERSION = "decision-v1"
-CASH_FUNDS = ("SGOV", "BIL")      # cash equivalents: valued as cash, never reviewed as stock lots
+CASH_FUNDS = ("SGOV", "BIL")
+TIE_ORDER = "alphabetical"        # the listing order inside a tie of model scores: not a preference      # cash equivalents: valued as cash, never reviewed as stock lots
 DEFAULT_RULES = {"min_expected_net": 0.005, "min_p_win": 0.5, "combined_name_cap": 0.10, "prospective_min_trades": 20,
-                 "max_drawdown_limit": -0.35}
+                 "max_drawdown_limit": -0.35,
+                 # When the risk model gives every member the same probability it cannot rank risk: "block" (the
+                 # gate is not assessed, so nothing passes it) or "skip" (pass it, said on every line).
+                 "risk_gate_when_uninformative": "block"}
+RISK_MIN_SPREAD = 0.005    # P(large loss) spread (max - min over today's members) below which it is uninformative
+
+
+def risk_informative(p_risk: np.ndarray) -> bool:
+    """Whether the risk model tells today's members apart at all. Its early stopping can keep only the forced
+    minimum of trees with no split, which returns the training base rate for every stock."""
+    p = np.asarray(p_risk, dtype=float)
+    p = p[np.isfinite(p)]
+    return len(p) > 1 and float(p.max() - p.min()) >= RISK_MIN_SPREAD
 
 
 def rules(store) -> dict:
@@ -272,7 +285,9 @@ def score_today(bundle: dict, rows: pd.DataFrame) -> pd.DataFrame:
 
     guard(bundle.get("meta", {}).get("trained_through"), rows.index.get_level_values("date"))
     s = bundle["ranker"].predict(rows)
-    pct = within_date_pct(rows, s)
+    # Percentiles among the date's index members only, like the out-of-fold rows the maps were learned on; former
+    # members and your extra companies are placed among them without moving them.
+    pct = member_pct(s, rows["in_index"].to_numpy(dtype=bool))
     out = pd.DataFrame(index=rows.index.get_level_values("ticker"))
     out["score_pct"] = pct
     out["expected_net"] = apply_map(bundle["map_net"], pct)
@@ -284,6 +299,7 @@ def score_today(bundle: dict, rows: pd.DataFrame) -> pd.DataFrame:
     out["sigma"] = rows["ewma_vol_daily"].to_numpy()
     out["cost_rt"] = rows["cost_rt"].to_numpy()
     out["in_index"] = rows["in_index"].to_numpy()
+    out["risk_informative"] = risk_informative(out.loc[out["in_index"], "p_risk"].to_numpy())
     return out
 
 
@@ -351,25 +367,35 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
             ira: dict, prices: pd.Series, validated: bool, cutoff, execute, extra: set | None = None) -> list[dict]:
     """ENTER (validated) or PAPER ENTER (experimental) and WAIT, with sizes and blocked constraints."""
     out = []
-    # The model's own order: its score, then P(profit), then the ticker (the same order as the saved ranks),
-    # so the input order never decides which tied stock comes first. Not the expected net: that comes from
-    # a binned map that need not rise with the score, and would put lower-ranked stocks first. Ties of the
-    # expected net are still marked, since tied stocks share one estimate.
+    # The model's own order: its score, then the ticker (TIE_ORDER), the same order as the saved ranks. Stocks with
+    # the same score are tied: the ranker's few small trees put many stocks in identical leaves, and P(profit) was
+    # measured as no better than its base rate (docs/QUANT_UPGRADES.md), so it no longer breaks ties; the order
+    # inside a tie is alphabetical and says nothing about preference. Not the expected net either: that comes from
+    # a binned map that need not rise with the score. Both kinds of tie are marked on each line.
     # Candidates: today's S&P 500 members and the extra companies chosen in Settings (the watchlist).
     cand = today[today["in_index"] | today.index.isin(list(extra or ()))].reset_index().rename(columns={"index": "ticker"})
-    cand = cand.sort_values(["score_pct", "p_win", "ticker"], ascending=[False, False, True])
+    cand = cand.sort_values(["score_pct", "ticker"], ascending=[False, True])
     ties = cand.groupby("expected_net")["ticker"].transform("count")
-    cand = cand.assign(tied_with=ties - 1).set_index("ticker")
+    score_ties = cand.groupby("score_pct")["ticker"].transform("count")
+    cand = cand.assign(tied_with=ties - 1, score_tied_with=score_ties - 1).set_index("ticker")
     active = (held - exiting)
     slots = max(0, r["max_names"] - len(active))
     budget = spendable
     for t, row in cand.head(25).iterrows():
         # Model gates decide whether the signal is good enough at all (they also decide PAPER ENTER, which
         # the shadow account sizes on its own cash); account gates decide whether this account can act.
-        model_blocks, account_blocks = [], []
+        model_blocks, account_blocks, model_notes = [], [], []
         risk = row["p_risk"]
         if not (isinstance(risk, float) and np.isfinite(risk)):
             model_blocks.append("risk estimate missing or invalid")
+        elif not row.get("risk_informative", True):
+            # The same value for every stock is the training base rate, not an assessment of this stock.
+            why = (f"risk gate not assessed: the risk model gives every stock the same {risk:.1%} "
+                   "(its training base rate), so it cannot tell risky stocks apart")
+            if r.get("risk_gate_when_uninformative", "block") == "skip":
+                model_notes.append(f"{why}; passed anyway (setting risk_gate_when_uninformative = skip)")
+            else:
+                model_blocks.append(why)
         elif risk > r["max_large_loss_prob"]:
             model_blocks.append(f"P(large loss at the exit close) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
         if not np.isfinite(row["expected_net"]) or row["expected_net"] < r["min_expected_net"]:
@@ -392,7 +418,8 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
         line = {"ticker": t, "expected_net": row["expected_net"], "net_sd": row["net_sd"], "net_q10": row["net_q10"],
                 "expected_excess_vs_spy": row["expected_excess"], "p_win": row["p_win"], "p_risk": risk,
                 "cost_rt": row["cost_rt"], "score_pct": row["score_pct"], "sigma": row["sigma"], "price": price,
-                "tied_with": int(row["tied_with"]), "blocked": model_blocks + account_blocks, "execute": str(execute)}
+                "tied_with": int(row["tied_with"]), "score_tied_with": int(row["score_tied_with"]),
+                "blocked": model_blocks + account_blocks, "notes": model_notes, "execute": str(execute)}
         if not model_blocks:
             line["paper_action"] = "PAPER ENTER"           # the shadow account sizes it on its own cash
         if model_blocks or account_blocks:
@@ -530,27 +557,32 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     mode = "validated" if ev["validated"] else "experimental"
     snap = capital.snapshot(store)
     # Every ranked stock's score, not only the shortlist, so any stock's page can show the model's view.
-    # The ranker gives many stocks the same score, so the order breaks ties by P(profit), then ticker, and
-    # rank_pct (1 = first, 0 = last) splits today's stocks into even fifths where score_pct, tied, cannot.
+    # Tied scores share a rank (competition ranking: three stocks tied first are all #1, the next is #4) and a
+    # percentile (score_pct, ties averaged), so the fifths never split identical scores; ``tied`` counts the
+    # other members with the same score. The listing order inside a tie is alphabetical (TIE_ORDER).
     ranked = today[today["in_index"]].reset_index().rename(columns={"index": "ticker"})
-    ranked = ranked.sort_values(["score_pct", "p_win", "ticker"], ascending=[False, False, True]).set_index("ticker")
+    ranked = ranked.sort_values(["score_pct", "ticker"], ascending=[False, True]).set_index("ticker")
     n = len(ranked)
+    member_pct = ranked["score_pct"].to_numpy()
 
     def score_of(row, rank, rank_pct, member):
+        same = int((member_pct == row["score_pct"]).sum()) - (1 if member else 0)
         return {"rank": rank, "of": n, "rank_pct": round(rank_pct, 4), "member": member, "kind": "stock",
+                "tied": same, "tie_order": TIE_ORDER,
                 "score_pct": round(float(row["score_pct"]), 4),
                 "expected_net": round(float(row["expected_net"]), 5), "net_sd": round(float(row["net_sd"]), 5),
                 "p_win": round(float(row["p_win"]), 4), "p_risk": round(float(row["p_risk"]), 4),
+                "p_risk_informative": bool(row["risk_informative"]),
                 "cost_rt": round(float(row["cost_rt"]), 5)}
 
-    scores = {t: score_of(row, i + 1, 1 - i / max(n - 1, 1), True) for i, (t, row) in enumerate(ranked.iterrows())}
+    scores = {t: score_of(row, int((member_pct > row["score_pct"]).sum()) + 1, float(row["score_pct"]), True)
+              for t, row in ranked.iterrows()}
     # A requested stock outside the index: where it would stand among the members (they keep their ranks).
-    member_pct = ranked["score_pct"].to_numpy()
     for t, row in today[~today["in_index"]].iterrows():
         if t in scores or not np.isfinite(row["score_pct"]):
             continue
         ahead = int((member_pct > row["score_pct"]).sum())
-        scores[t] = score_of(row, ahead + 1, 1 - ahead / max(n - 1, 1), False)
+        scores[t] = score_of(row, ahead + 1, float(row["score_pct"]), False)
     # The policy models (buy now / buy on a limit / cash; hold / sell), from the bundle the policy study wrote;
     # kept apart from the rules above, with their own validation status.
     from .decision_layer import latest_bundle, live_view

@@ -444,4 +444,31 @@ CREATE TABLE model_outcomes (
     FOREIGN KEY (decision_id, ticker) REFERENCES model_predictions(decision_id, ticker)
 );
 """ + _guards("model_predictions") + _guards("model_outcomes"),
+    # Every routed agent run, failed and degraded ones included: what was asked for, what ran, why it moved on.
+    8: """
+CREATE TABLE agent_runs (
+    run_id TEXT PRIMARY KEY,
+    ticker TEXT NOT NULL,
+    as_of TEXT NOT NULL,                   -- the information cutoff the agents were given
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    status TEXT NOT NULL,                  -- ok / failed / blocked
+    route_version TEXT NOT NULL,           -- hash of the ordered provider/model chain
+    requested_provider TEXT NOT NULL,
+    requested_model TEXT NOT NULL,
+    actual_provider TEXT,                  -- null when nothing ran
+    actual_model TEXT,
+    fell_back INTEGER NOT NULL,
+    attempts_json TEXT NOT NULL,           -- [{provider, model, state, why}] in the order tried
+    roles_json TEXT,                       -- per stage: [provider, model] of the configuration that ran
+    analysts_json TEXT NOT NULL,
+    evidence_hash TEXT NOT NULL,           -- hash of the model evidence handed to the agents ({} when none)
+    how TEXT,                              -- cache / paid
+    rating TEXT,
+    final_action TEXT,
+    error TEXT,
+    code_version TEXT
+);
+CREATE INDEX agent_runs_ticker ON agent_runs (ticker, as_of);
+""" + _guards("agent_runs"),
 }

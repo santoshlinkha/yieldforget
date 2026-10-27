@@ -176,6 +176,25 @@ def apply_map(mapping: dict, scores_pct: np.ndarray, field: str = "shrunk") -> n
     return out
 
 
+def member_pct(scores: np.ndarray, member: np.ndarray) -> np.ndarray:
+    """Each score's percentile among one date's index members, as ``within_date_pct`` gives it to members (ties
+    share the average). A non-member gets where it would stand among the members, without moving them: the
+    maps from percentile to P&L were learned on members only, so others must not shift the members' bands."""
+    s, member = np.asarray(scores, dtype=float), np.asarray(member, dtype=bool)
+    ref = np.sort(s[member & np.isfinite(s)])
+    n = len(ref)
+    if n == 0:
+        return np.full(len(s), np.nan)
+    if len(np.unique(ref)) < 2:
+        return np.where(np.isfinite(s), 0.5, np.nan)
+    below = np.searchsorted(ref, s, side="left")
+    equal = np.searchsorted(ref, s, side="right") - below
+    # A member's average rank among members is below + (equal + 1) / 2, over n; a non-member's is its average
+    # rank had it been inserted, over n + 1.
+    pct = np.where(member, (below + (equal + 1) / 2) / n, (below + equal / 2 + 1) / (n + 1))
+    return np.where(np.isfinite(s), pct, np.nan)
+
+
 def within_date_pct(rows: pd.DataFrame, scores: np.ndarray) -> np.ndarray:
     """Each score's percentile among its date's rows (ties share the average; constant scores are 0.5)."""
     s = pd.Series(scores, index=rows.index)

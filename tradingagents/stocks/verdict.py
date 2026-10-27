@@ -82,11 +82,19 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
         ]
         if not fund:
             # A stock needs its risk estimate: missing or unknown fails the gate, it is never skipped.
+            # One the model gives every stock alike (its training base rate) is not an assessment: it fails too.
             known = p_risk is not None and p_risk == p_risk
-            checks.append(_check("Chance of a large loss at the exit", known and p_risk <= MAX_P_RISK,
-                                 f"{p_risk:.0%} at the exit of a {horizon}-session trade (terminal, not the "
-                                 f"worst point while held; BUY needs {MAX_P_RISK:.0%} or less)" if known else
-                                 "unknown: BUY needs a risk estimate"))
+            if known and s.get("p_risk_informative") is False:
+                detail = (f"not assessed: the risk model gives every stock the same {p_risk:.0%} (its training base "
+                          f"rate), so it cannot say whether this one is riskier; BUY needs a risk estimate that "
+                          f"tells stocks apart")
+            elif known:
+                detail = (f"{p_risk:.0%} at the exit of a {horizon}-session trade (terminal, not the worst point "
+                          f"while held; BUY needs {MAX_P_RISK:.0%} or less)")
+            else:
+                detail = "unknown: BUY needs a risk estimate"
+            checks.append(_check("Chance of a large loss at the exit",
+                                 known and s.get("p_risk_informative") is not False and p_risk <= MAX_P_RISK, detail))
     if action:
         checks.append(_check("Daily decision", action not in ("EXIT", "REDUCE"),
                              f"{action}{' (' + decision['paper_action'] + ')' if decision.get('paper_action') else ''}"))

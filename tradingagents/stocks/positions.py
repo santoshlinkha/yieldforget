@@ -58,6 +58,31 @@ class Policy:
         return np.expm1(self.profit_k * s), np.expm1(-self.risk_k * s)
 
 
+def execution_spec(policy: Policy) -> dict:
+    """The policy as an order, in the terms the simulator (``trades``) and the labels (``targets.labels``) use, so
+    the page, the docs and the backtests describe one thing. Daily bars only: nothing intraday is modelled."""
+    barrier = policy.kind == "barrier"
+    return {
+        "version": policy.version(),
+        "signal": "the decision is made from data through the exchange close (16:00 America/New_York) of the data date",
+        "order": "a buy of the whole size at the next session's official close (e.g. a market order placed shortly "
+                 "before the close); no limit price is part of the policy",
+        "fill": "always filled at that close when the stock has a price; partial fills, halts and queue position are "
+                "not modelled, and a missing price leaves the trade without an outcome (excluded, not a loss)",
+        "price_basis": "as-traded closes (prices rebuilt from adjusted closes and dividends); dividends are added "
+                       "when held through the ex-date",
+        "costs": "estimated round trip: half the bid-ask spread from daily bars (Abdi-Ranaldo) each side plus 2 bp "
+                 "slippage a side; no commission",
+        "exit": (f"close-confirmed: after a close at or beyond {policy.profit_k:g} horizon-volatility above (target) "
+                 f"or {policy.risk_k:g} below (stop) the entry close, sell at the next close; otherwise sell at the "
+                 f"close {policy.horizon} sessions after entry. A gap through a level is sold at that next close, "
+                 "not at the level" if barrier else f"sell at the close {policy.horizon} sessions after entry"),
+        "levels_from": "the entry close (the fill), so levels quoted from the last close are illustrations only",
+        "holding_clock": f"{policy.horizon} exchange sessions from the entry close",
+        "account": "long only, no day trades (entry and exit are never the same session)",
+    }
+
+
 POLICIES = {
     "fixed_5": Policy("fixed_5", "fixed", 5), "fixed_20": Policy("fixed_20", "fixed", 20),
     "fixed_60": Policy("fixed_60", "fixed", 60),

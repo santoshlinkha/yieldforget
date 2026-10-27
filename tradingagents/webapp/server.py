@@ -763,7 +763,7 @@ class App:
         """The agents on one ticker as of ``day``, trying each configured provider in turn (paid: only from a click)."""
         from tradingagents.dataflows.symbols import safe_ticker_component
         from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
-        from tradingagents.optimizer.ai_views import analyze
+        from tradingagents.ledger.db import now_utc
 
         folder = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "reports"
         # Reserved before the run (the actual spend is recorded per request): the first analyst costs the
@@ -776,6 +776,57 @@ class App:
         evidence = agent_evidence(daily.load(self.store.con), ticker)   # empty unless the model is validated
         attempts = self.agent_attempts(g)
         job.attempts = []                  # what the page shows: each provider tried, and how it went
+        record = {"ticker": ticker, "as_of": day, "analysts": analysts, "evidence": evidence or {},
+                  "attempts": attempts, "started_at": now_utc()}
+        try:
+            out = self._try_agents(job, ticker, day, analysts, folder, est, evidence, attempts, errors)
+        except AIInProgress:
+            raise                          # another run of the same request owns it and records itself
+        except AIBlocked as exc:
+            self._record_agent_run(record, job, None, "blocked", str(exc))
+            raise
+        except Exception as exc:
+            self._record_agent_run(record, job, None, "failed", str(exc))
+            raise
+        self._record_agent_run(record, job, out, "ok", None)
+        return out
+
+    def _record_agent_run(self, record: dict, job, out: dict | None, status: str, error: str | None) -> None:
+        """One row in ``agent_runs`` per routed run (append-only): requested and actual provider, every attempt and
+        why it moved on, the stages' models, the evidence hash and the result or the error."""
+        from tradingagents.ledger.ai_gateway import stable_hash
+        from tradingagents.ledger.db import now_utc, transaction
+        from tradingagents.ledger.recommendations import code_version
+        from tradingagents.llm_clients import roles
+
+        chain = [(c["llm_provider"], c["deep_think_llm"], sorted((c.get("agent_models") or {}).items()))
+                 for c in record["attempts"]]
+        first = record["attempts"][0] if record["attempts"] else {"llm_provider": "", "deep_think_llm": ""}
+        ran = next((c for c in record["attempts"] if out and c["llm_provider"] == out.get("provider")
+                    and c["deep_think_llm"] == out.get("model")), None)
+        try:
+            stages = json.dumps({r: list(v) for r, v in roles.resolve(ran).items()}) if ran else None
+        except Exception:  # the record must never fail the run
+            stages = None
+        row = (uuid.uuid4().hex, record["ticker"], record["as_of"], record["started_at"], now_utc(), status,
+               stable_hash(chain), first["llm_provider"], first["deep_think_llm"],
+               out.get("provider") if out else None, out.get("model") if out else None,
+               int(bool(out and out.get("fell_back"))), json.dumps(list(getattr(job, "attempts", []) or [])),
+               stages, json.dumps(list(record["analysts"])), stable_hash(record["evidence"]),
+               out.get("how") if out else None, out.get("rating") if out else None,
+               ((out.get("final") or {}).get("action") if out else None), (error or None) and error[:2000],
+               code_version())
+        try:
+            with transaction(self.store.con):
+                self.store.con.execute("INSERT INTO agent_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+                                       " ?, ?, ?, ?)", row)
+        except Exception as exc:  # noqa: BLE001  (provenance is best effort; the run's own result stands)
+            logger.warning("could not record the agent run: %s", exc)
+
+    def _try_agents(self, job, ticker, day, analysts, folder, est, evidence, attempts, errors) -> dict:
+        from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
+        from tradingagents.optimizer.ai_views import analyze
+
         for n, cfg in enumerate(attempts, 1):
             if evidence:
                 cfg = {**cfg, "quant_evidence": {ticker.upper(): evidence}}

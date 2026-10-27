@@ -29,10 +29,14 @@ def _decision(**kw):
 def test_the_best_buy_passes_the_gates_is_not_held_and_carries_its_exits():
     p = trade.plan(_decision(), 30.0, {"AAA": {"price": 97.0, "chance": 0.5, "stop": 89.0, "target": 106.0}})
     best = p["best"]
-    assert best["ticker"] == "AAA" and best["buy_limit"] == 100.0 and best["shares"] == pytest.approx(0.3)
+    assert best["ticker"] == "AAA" and best["last_close"] == 100.0 and best["shares_at_reference"] == pytest.approx(0.3)
+    assert best["entry"]["basis"] == "next_close" and best["reference_date"] == "2026-10-26"
+    assert "buy_limit" not in best                     # the tested policy has no limit price
     s = 0.02 * math.sqrt(20)
     assert best["stop"] == round(100 * math.exp(-s), 2) and best["target"] == round(100 * math.exp(s), 2)
-    assert best["patient"]["price"] == 97.0
+    assert best["patient"]["price"] == 97.0 and best["patient"]["status"] == "untested policy"
+    assert p["execution"]["order"].startswith("a buy of the whole size at the next session's official close")
+    assert p["blocked_top"] == []
     assert [r["ticker"] for r in p["runners_up"]] == ["BBB"]            # BAD failed the model's gates
     sell = p["sells"][0]
     assert sell["action"] == "EXIT" and sell["sell_target"] == 48.0 and sell["sell_stop"] == 34.0
@@ -42,7 +46,14 @@ def test_the_best_buy_passes_the_gates_is_not_held_and_carries_its_exits():
 def test_no_decision_and_an_empty_budget_say_so():
     assert not trade.plan(None, 10.0)["ready"]
     p = trade.plan(_decision(), 0.0)
-    assert p["best"]["shares"] == 0.0
+    assert p["best"]["shares_at_reference"] == 0.0
+
+
+def test_when_nothing_passes_the_top_of_the_ranking_is_shown_with_what_blocks_it():
+    entries = [{"ticker": "AAA", "action": "WAIT", "price": 10.0, "sigma": 0.02, "score_pct": 0.99,
+                "blocked": ["risk gate cannot be assessed"]}]
+    p = trade.plan(_decision(entries=entries), 30.0)
+    assert p["best"] is None and p["blocked_top"][0]["blocked"] == ["risk gate cannot be assessed"]
 
 
 def _sector_prices(rotating_in="XLU", rotating_out="XLK", n=400):

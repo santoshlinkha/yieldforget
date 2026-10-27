@@ -43,11 +43,15 @@ strength against SPY and the sector, market series, SEC fundamentals as filed, e
 and the second-stage parts learn only from earlier folds.
 
 **How they combine into a decision** (`daily.entries`):
-1. Order today's members and your extra companies by ranker score, then P(profit).
-2. A candidate passes the **model gates** when P(large loss) ≤ 15%, expected net ≥ +0.5%, P(profit) ≥ 50%.
+1. Order today's members and your extra companies by ranker score (percentile among members; ties share a rank
+   and are listed alphabetically).
+2. A candidate passes the **model gates** when P(large loss) ≤ 15% *and the risk model tells stocks apart*
+   (otherwise "risk gate not assessed"), expected net ≥ +0.5%, P(profit) ≥ 50%. The +0.5% and 50% thresholds
+   were not selected on development data in any recorded study.
 3. Then the **account gates**: not already held, at most 5 names, at most 25% each, within the trading budget,
    at most 10% of the whole IRA in one stock.
-4. The first that passes is the **best buy**; the next four are the runners-up. Buy limit = last close;
+4. The first that passes is the **best buy**; the next four are the runners-up. Entry = the next session's close
+   (no limit; `positions.execution_spec`);
    target and stop = ±1 twenty-session volatility (`stop = price·e^(−σ√20)`, `target = price·e^(+σ√20)`),
    sold at the next close after a close beyond either, or after 20 sessions.
 5. Held stocks: EXIT at the stop, target or deadline; REDUCE above the 25% cap; else HOLD.
@@ -164,24 +168,25 @@ Order of authority: the **validation gate** decides whether anything is a real b
 internal model (A) decides the order and the levels; everything else (B, C, D, E, F) is evidence shown
 beside it with its own status.
 
-## 4. Reading the outputs you see (Trade page, decision of 2026-10-26)
+## 4. Reading the outputs you see (Trade page)
 
-What each number on the best buy and runners-up means, and how much it can be trusted today:
+What each number means and how far to trust it. The worked example is the decision of 2026-10-26. The audit
+behind the corrections is in `docs/MODEL_AUDIT_2026-10.md`.
 
 | Shown | Where it comes from | What to make of it |
 |---|---|---|
-| **Rank / #1** | the ranker's score among today's 499 members (ties share a percentile), then P(profit), then the ticker | The ranker's scores move in steps, so stocks tie. On 2026-10-26 GEN and DVA had the same score (0.0131); GEN is first only because its P(profit) was 54.03% vs 53.85%. Treat the top several as equals. |
-| **Why a stock ranks high** | per-feature contributions of the XGBoost ranker | On 2026-10-26 one feature dominated: high liabilities ÷ assets (+0.014 of GEN's 0.013 score), plus small pushes from low liquidity, high 3-month volatility, a deep fall from its 1-year high, a high earnings yield and 3 months behind its sector. The model learned from 2012–2024 that cheap, beaten-down, leveraged, less liquid stocks did slightly better over 20 sessions. It is a factor tilt, not a view on the company. |
-| **Expected net** (e.g. +0.54%) | the out-of-fold map from score to the barrier trade's net P&L, in 10 bands | Every stock in a band gets the same number: 66 stocks shared +0.54% on 2026-10-26. It ranks bands, not stocks. |
-| **vs SPY** (e.g. −0.44%) | the same map, against SPY over the same days | Negative even for the top band: on past data the top-ranked trades did not beat SPY on average. |
-| **P(profit)** (≈ 54%) | trade-quality model (logistic + sigmoid) | Close to the base rate for every stock. Measured as worse than always saying the base rate (`docs/QUANT_UPGRADES.md`), so it is weak as a tie-break. |
-| **P(large loss)** (7.1%) | position-risk model, label: down ≥ 1.5× the stock's own volatility | The same 7.1% for every stock, so it carries no information and never blocks. The `quant-upgrades` branch replaces it with P(an 8% fall while held), which does vary between stocks. |
-| **Buy limit** | the last close | The model's entry is the next session's close; the limit stops a gap up from filling. |
-| **Stop / target** | ± one 20-session volatility (EWMA): GEN 21.40 / 27.84 from 24.41, i.e. −12% / +14% | Sold at the next close after a close beyond either, or after 20 sessions. Volatile stocks get wider exits. |
-| **Patient dip** (e.g. 23.19, "50%") | the signal model's median expected dip within 20 sessions | About an even chance the price *trades* there (a touch, not a fill). Its downside estimates are too optimistic (12–15% of outcomes fall below the 10% line). |
-| **WAIT · model BUY, not validated** | the validation gate | A real ENTER needs a decision study that beats SPY after costs and 20+ paper trades ahead of SPY. Neither has happened, so every candidate shows WAIT. |
-| **Shares / $** = 0 | the trading budget | Nothing is set aside for trading yet (budget $0). |
-| **Agents' rating** | AI agents (section F) | Context only; it never changes the verdict. |
+| **Rank** | the ranker's score among today's index members; tied scores share a rank | The ranker kept only its 10-tree minimum, so its scores move in steps and stocks tie. On 2026-10-26, 413 of 499 members were in a tie; GEN and DVA had bitwise-identical scores. Tied stocks are listed alphabetically: that order is not a preference. |
+| **Why a stock ranks high** | TreeSHAP contributions of the ranker (baseline plus contributions equals the score) | GEN on 2026-10-26: liabilities/assets +0.0080 of a 0.0131 score. Its other positive pushes total +0.0074 and its negatives −0.0023. Across members, that one feature carried 35% of the attribution. It is a learned factor tilt, not a view on the company, and not causal. |
+| **Expected net** | the out-of-fold map from the members-only percentile to the barrier trade's net P&L, in 10 bins | Every stock in a bin shares the number. The top bin (+0.54%) is *below* the 0.7–0.8 bin (+0.65%): the map does not rise with the score. It is a historical score-band average, not a forecast for the stock. |
+| **vs SPY** | the same map, net minus SPY's total return over the identical entry/exit dates | Negative in every bin (−0.32% to −0.77%). A positive absolute and a negative active figure can coexist. |
+| **P(profit)** | trade-quality model (logistic + sigmoid) | 53–54% for everyone, and worse than the base rate out of sample. Shown, but it no longer breaks ties. |
+| **P(large loss)** | position-risk model (loss ≥ 1.5 × the stock's own volatility) | One value (7.1%, the training base rate) for every stock. The gate now says **"risk gate not assessed"** and blocks, rather than letting everyone pass. The `quant-upgrades` branch's 8%-fall model varies by stock but is not validated. |
+| **Buy** | the tested policy (`positions.execution_spec`) | Buy at the next session's close, whatever it is, with no limit price. The last close is a dated reference, not an order price. |
+| **Stop / target** | ± one 20-session EWMA volatility *from your fill* | Shown as percentages from the fill. Dollar levels assume a fill at the last close and are illustrations only. A close beyond either level triggers a sale at the next close (so a gap is sold below the stop); otherwise the stock is sold after 20 sessions. |
+| **Untested: patient dip** | the signal model's median drawdown (a path minimum) | A different, never-tested policy. "About an even chance" is of the price *trading* there, not of a fill, and returns after such fills are unknown. |
+| **No stock passes** | the gates | Each top-ranked stock is listed with what blocks it. Today that is the uninformative risk gate. |
+| **WAIT · not validated** | the validation gate | ENTER needs a study that beats SPY after costs *and* 20+ forward paper trades ahead of SPY. |
+| **Agents' rating** | AI agents (section F) | Context only; it never changes the verdict. Every run, failed ones included, is recorded in `agent_runs`. |
 
 ## 5. Where each status comes from
 
