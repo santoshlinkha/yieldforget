@@ -203,6 +203,17 @@ class App:
                         patient[e["ticker"]] = {"price": round(dip["price"], 2), "chance": dip["chance"],
                                                 "stop": round(dip["stop"], 2), "target": round(dip["profit"], 2)}
         out = trade.plan(decision, inc["budget"]["available"], patient)
+        pv = (decision or {}).get("policy") or {}
+        if pv.get("available"):
+            st = pv.get("stocks") or {}
+            ranked = sorted(((t, d) for t, d in st.items() if d["model_choice"] in ("next_close", "limit_dip")),
+                            key=lambda x: -max(o["expected_excess"] for o in x[1]["options"]
+                                               if o["action"] == x[1]["model_choice"]))
+            out["policy"] = {k: pv.get(k) for k in ("model_version", "trained_to", "status", "margin")}
+            out["policy"]["top"] = [{"ticker": t, **d} for t, d in ranked[:5]]
+            out["policy"]["held"] = [{"ticker": t, **d} for t, d in st.items() if d["model_choice"] in ("hold", "sell")]
+        else:
+            out["policy"] = {"available": False, "note": pv.get("note") or "no decision with the policy model yet"}
         books = self.books()
         market_store = local_store.store(self.cache_dir)
         out.update({"income": inc, "account": books["sleeves"]["combined"], "job": self.decisions.state(),
@@ -538,7 +549,21 @@ class App:
                                    horizon=horizon, validated=(decision or {}).get("mode") == "validated")                 if known else None
             if ticker and r["signal"] and r["signal"].get("status") == "ok":
                 r["entry"] = self._entry_plan(t, r["signal"])
+            if ticker:
+                r["policy"] = self._policy_row(decision, t)
         return out
+
+    @staticmethod
+    def _policy_row(decision: dict | None, ticker: str) -> dict:
+        """The policy model's view of one stock from the saved decision: options, action, status; or why none."""
+        pv = (decision or {}).get("policy") or {}
+        if not pv.get("available"):
+            return {"available": False, "note": pv.get("note") or "no daily decision with the policy model yet"}
+        row = (pv.get("stocks") or {}).get(ticker)
+        head = {k: pv.get(k) for k in ("model_version", "trained_to", "status", "margin", "policies")}
+        head.update({"decided_at": decision.get("created_at"), "data_to": decision.get("info_cutoff"),
+                     "executes": decision.get("execution_date"), "horizon": decision.get("horizon")})
+        return {"available": row is not None, **head, **(row or {"note": "not scored: not an index member or no data"})}
 
     def _fund_scores(self, horizon: int) -> dict:
         """Every fund the fund models forecast, ranked among the funds by the combined forecast at
@@ -625,7 +650,13 @@ class App:
         # most, each further one adds its report and a longer debate.
         est = g["ai_estimates"]["rating"] * (1 + 0.5 * (len(analysts) - 1))
         errors = []
+        from tradingagents.stocks import daily
+        from tradingagents.stocks.decision_layer import agent_evidence
+
+        evidence = agent_evidence(daily.load(self.store.con), ticker)   # empty unless the model is validated
         for cfg in self.agent_attempts(g):
+            if evidence:
+                cfg = {**cfg, "quant_evidence": {ticker.upper(): evidence}}
             who = f"{cfg['llm_provider']} ({cfg['deep_think_llm']})"
             job.progress = f"agents analyzing {ticker} as of {day} on {who} ({', '.join(analysts)}); a few minutes"
             try:

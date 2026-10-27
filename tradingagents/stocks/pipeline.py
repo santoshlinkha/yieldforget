@@ -209,9 +209,7 @@ def run_batch(con, cache_dir: Path, requested: list[str], sources: dict[str, str
     from tradingagents.ledger.sessions import next_session
     from tradingagents.research.compute import choose_device
 
-    from . import data as D
-    from . import macro as M
-    from . import news as N
+    from . import data as D, macro as M, news as N
 
     config = config or BatchConfig()
     progress = progress or Progress()

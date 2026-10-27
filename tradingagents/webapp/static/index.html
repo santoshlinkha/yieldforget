@@ -298,6 +298,11 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
             <p class="muted small" id="runnersNote">The next stocks that pass the model's gates, in its order, in case the first is not wanted.</p>
             <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
           </div>
+          <div class="card">
+            <div class="card-head"><h3>Trade outcome model</h3><span class="muted small" id="polMeta"></span></div>
+            <p class="muted small">A second, separate model: for each stock it compares buying at the next close, buying on a limit, and cash, by expected return over cash after costs and a bad case. It abstains ("insufficient evidence") until its holdout validation passes.</p>
+            <div id="polBox"></div>
+          </div>
         </div>
         <div>
           <div class="card">
@@ -377,7 +382,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
             <li><b>Target upside</b>: the mean analyst price target ÷ the last close − 1.</li>
             <li><b>Combined score (0–100)</b>: each stock gets three percentiles among the stocks screened (quality score, consensus with stronger buys higher, target upside); the combined score is their average × 100. 100 would be the best on all three. Hover over a score to see its three parts. A stock missing one measure is averaged on the other two (noted next to its name).</li>
             <li><b>Combined rank</b>: stocks ordered by combined score, 1 = highest; ties go to the higher quality score, then the ticker.</li>
-            <li><b>Signals</b>: the stock models' probabilities over 20 sessions, each compared with how often it happened to any stock in training (the lift: 1.0× is ordinary) and with today's other stocks (a warning also needs the top fifth, so a market-wide shift does not flag everyone). Breakout likely: P(close above the recent range) ≥ 1.2× usual. Breakdown risk: P(close below it) ≥ 1.2× usual. Crash warning: P(a large loss while held) ≥ 1.5× usual and ≥ 10%. Deep drawdown warning: ≥ 1.5× usual and ≥ 20%. A model that gives nearly every stock the same probability raises no warning and says so. Trend: up, down or sideways when its probability is ≥ 1.15× its usual share and in today's top fifth; otherwise "no clear trend". Action: the latest daily decision (Decisions tab); only its top candidates and Trading holdings get one. None of it is validated for trading.</li>
+            <li><b>Signals</b>: the stock models' probabilities over 20 sessions, each compared with how often it happened to any stock in training (the lift: 1.0× is ordinary) and with today's other stocks (a warning also needs the top fifth, so a market-wide shift does not flag everyone). Breakout likely: P(the price trades above its 20-day high at any time in the next 20 sessions, intraday) ≥ 1.2× usual. Breakdown risk: P(it trades below its 20-day low, intraday) ≥ 1.2× usual: a barrier touch, not a loss, a crash or a limit fill. Crash warning: P(a large loss at the 20-session end) ≥ 1.5× usual and ≥ 10%. Deep drawdown warning: ≥ 1.5× usual and ≥ 20%. A model that gives nearly every stock the same probability raises no warning and says so. Trend: up, down or sideways when its probability is ≥ 1.15× its usual share and in today's top fifth; otherwise "no clear trend". Action: the latest daily decision (Decisions tab); only its top candidates and Trading holdings get one. None of it is validated for trading.</li>
             <li><b>Valuation</b> is shown but not in the score, so a good company and a cheap one stay distinguishable. None of these was tested for predicting returns; it is a screen of facts and opinions as of today.</li>
           </ul>
         </details>
@@ -581,7 +586,7 @@ async function loadTrade() {
     $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side buy">BUY</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
         <span class="amt">${x.shares ? x.shares.toFixed(4) + " sh" : ""} · ${usd(x.dollars)}</span></div>
       <table class="compact" style="margin-top:10px"><tr><th class="l">Buy price</th><td><b>limit ${usd(x.buy_limit)}</b> <span class="muted">(the last close; the model enters at the next close)</span></td></tr>` +
-      (x.patient ? `<tr><th class="l">Or, patient</th><td>limit ${usd(x.patient.price)} <span class="muted">(its median expected dip: about an even chance to fill within ${x.horizon} sessions; stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)})</span></td></tr>` : "") +
+      (x.patient ? `<tr><th class="l">Or, patient</th><td>limit ${usd(x.patient.price)} <span class="muted">(its median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not a fill; stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)})</span></td></tr>` : "") +
       `<tr><th class="l">Sell at target</th><td class="pos">${usd(x.target)} (${spct(x.target_pct, 1)})</td></tr>
        <tr><th class="l">Sell at stop</th><td class="neg">${usd(x.stop)} (${spct(x.stop_pct, 1)})</td></tr>
        <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (on a close)</td></tr>
@@ -598,6 +603,18 @@ async function loadTrade() {
     const tied = [t.best, ...t.runners_up].filter(x => x && x.tied_with);
     $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted." +
       (tied.length ? " Stocks the model scores alike share one estimate of the expected gain and its chances, so those numbers repeat; the order comes from the ranking itself." : "");
+  }
+
+  const pol = t.policy || {};
+  const PN = {next_close: "buy at next close", limit_dip: "buy on a limit", hold: "keep", sell: "sell"};
+  if (pol.available === false || !pol.status) { $("polMeta").textContent = ""; $("polBox").innerHTML = `<p class="muted small">${esc(pol.note || "not available")}</p>`; }
+  else {
+    $("polMeta").textContent = `${pol.model_version} · trained to ${pol.trained_to} · ${pol.status.state}`;
+    const rowP = x => { const o = x.options.find(o => o.action === x.model_choice) || {};
+      return `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td>${esc(PN[x.model_choice] || x.model_choice)}</td><td>${spct(o.expected_excess)}</td><td>${o.q10_excess == null ? "–" : spct(o.q10_excess, 1)}</td><td>${o.p_stop == null ? "–" : pct(o.p_stop, 0)}</td><td class="l small">${x.action === "insufficient evidence" ? "abstains" : esc(x.action)}</td></tr>`; };
+    $("polBox").innerHTML = (pol.status.validated ? "" : `<div class="note">Insufficient evidence: ${esc(pol.status.why || pol.status.state)}. Shown for reference; nothing here is a recommendation.</div>`) +
+      ((pol.top || []).length + (pol.held || []).length ? `<table class="compact" style="margin-top:8px"><tr><th class="l">Ticker</th><th>Model's choice</th><th>Expected vs cash</th><th>Bad case</th><th>P(stop first)</th><th class="l">Action</th></tr>` +
+        [...(pol.held || []), ...(pol.top || [])].map(rowP).join("") + "</table>" : "<p class='muted small'>No stock clears the buy margin and the risk budget: cash.</p>");
   }
 
   const [cls, label] = STATUS[h.status] || STATUS.unknown;
@@ -843,7 +860,7 @@ const SG_COLS = [["rank", "Rank", "Combined rank"], ["ticker", "Ticker"], ["verd
   ["model_rank", "Model rank", "The 20-session model's rank among today's S&P 500 stocks (1 = best); it decides the verdict"],
   ["action", "Action", "The latest daily decision"],
   ["trend", "Trend", "Over 20 sessions"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
-  ["lift_down", "Breakdown", "Breakdown lift: P(close below the range) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss while held)"],
+  ["lift_down", "Breakdown", "Breakdown lift: P(trading below the 20-day low within 20 sessions, intraday) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss at the 20-session end)"],
   ["warnings", "Warnings"], ["quality_score", "Quality", "Quality score"],
   ["analyst_mean", "Cons.", "Analyst consensus, 1 strong buy to 5 strong sell"]];
 const ACT_ORDER = {ENTER: 0, EXIT: 1, REDUCE: 2, HOLD: 3, WAIT: 4};

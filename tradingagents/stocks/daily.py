@@ -389,8 +389,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     from tradingagents.ledger.sessions import next_session
     from tradingagents.research.compute import choose_device
 
-    from . import data as D
-    from . import macro as M
+    from . import data as D, macro as M
     from .targets import ewma_vol
 
     say = progress or (lambda *_: None)
@@ -502,7 +501,20 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
             continue
         ahead = int((member_pct > row["score_pct"]).sum())
         scores[t] = score_of(row, ahead + 1, 1 - ahead / max(n - 1, 1), False)
+    # The policy models (buy now / buy on a limit / cash; hold / sell), from the bundle the policy study wrote;
+    # kept apart from the rules above, with their own validation status.
+    from .decision_layer import latest_bundle, live_view
+
+    try:
+        rows_today = at.xs(cutoff, level="date", drop_level=False)
+        rows_today = rows_today[rows_today["in_index"] | rows_today.index.get_level_values("ticker").isin(
+            [lot["ticker"] for lot in lots])]
+        policy_view = live_view(latest_bundle(cache_dir, cutoff.date()), rows_today, {lot["ticker"] for lot in lots},
+                                dict(zip(today.index, today["cost_rt"], strict=False)), freshness)
+    except Exception as exc:   # the rules' decision stands without it; the page says why
+        policy_view = {"available": False, "note": f"the policy model could not score today: {exc}"}
     payload = {"lots": reviews, "entries": entry_lines, "freshness_days": freshness, "scores": scores,
+               "policy": policy_view,
                "horizon": policy.horizon,
                "summary": {a: sum(1 for x in reviews + entry_lines if x["action"] == a)
                            for a in ("ENTER", "WAIT", "HOLD", "REDUCE", "EXIT", "REVIEW")},

@@ -38,6 +38,7 @@ URL = "https://api.stlouisfed.org/fred/series/observations"
 REVISED = {"CPIAUCSL": "monthly", "UNRATE": "monthly", "PAYEMS": "monthly", "NFCI": "weekly"}
 UNREVISED = ("T10Y2Y", "BAA10Y", "DFF")
 from tradingagents.research.features import MACRO_FEATURES as FEATURES  # noqa: E402  (one list, used by the models too)
+
 MAX_AGE = 7 * 24 * 3600
 # Publication timing, audited per series (release times from the publishers' schedules):
 # - CPIAUCSL, UNRATE, PAYEMS: BLS releases at 8:30 ET; ALFRED's realtime_start is the release

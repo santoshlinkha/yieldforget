@@ -13,8 +13,10 @@ Every number comes from the fitted models; the warnings are fixed arithmetic on 
 - **Trend**: the class (up / down / sideways) whose probability is highest relative to its usual
   share, if at least 1.15x usual and in today's top fifth for that class; otherwise "no clear trend"
   ("unclear" is the most common outcome). Classes the model does not tell stocks apart on are skipped.
-- **Breakout likely**: P(close above the recent range) at least 1.2x usual and in today's top fifth.
-- **Breakdown risk**: P(close below the recent range) at least 1.2x usual and in today's top fifth.
+- **Breakout likely**: P(the price trades above the 20-day high, intraday, at any time in the next 20 sessions)
+  at least 1.2x usual and in today's top fifth.
+- **Breakdown risk**: P(the price trades below the 20-day low, intraday, at any time in the next 20 sessions)
+  at least 1.2x usual and in today's top fifth. A barrier touch: not a loss, a crash, or a limit fill.
 - **Crash warning**: P(a large loss at the end of the horizon; terminal, not the worst point while held) at least 1.5x usual, at least 10%, and in
   today's top fifth.
 - **Deep drawdown warning**: the same with at least 20%.
@@ -93,7 +95,7 @@ def describe(forecast: dict, base_rates: dict, peer: dict | None = None) -> dict
                          "text": f"breakout likely: {f['p_up_break']:.0%} vs {b['up_break']:.0%} usual"})
     if (lifts["down_break"] or 0) >= LIFT_BREAK and top("down_break") and "down_break" not in flat:
         warnings.append({"kind": "breakdown", "level": "warn",
-                         "text": f"breakdown risk: {f['p_down_break']:.0%} vs {b['down_break']:.0%} usual"})
+                         "text": f"breakdown risk: {f['p_down_break']:.0%} vs {b['down_break']:.0%} usual (trading below the 20-day low within 20 sessions)"})
     if (lifts["large_loss"] or 0) >= LIFT_CRASH and f.get("p_large_loss", 0) >= MIN_CRASH and top("large_loss") \
             and "large_loss" not in flat:
         warnings.append({"kind": "crash", "level": "high",
@@ -169,7 +171,8 @@ def entry_plan(forecast: dict, close: float, horizon: int = 20) -> dict | None:
 
     Limit prices, each with the model's chance it is reached within ``horizon`` sessions:
     - the 20-day low (reached when the stock breaks down: P(breakdown)),
-    - the median dip (the model's median drawdown from today's close: about an even chance),
+    - the median dip (the model's median intraday drawdown from today's close: about an even chance the price
+      trades there; a touch is not a fill),
     - a deep dip (its 5% drawdown quantile: about a 1-in-20 chance).
     Exits for an entry E follow the barrier policy the decision study uses: stop-loss at
     E * expm1(-sigma_h) below, take-profit at E * expm1(+sigma_h) above (sigma_h = the stock's

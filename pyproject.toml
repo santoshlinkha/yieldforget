@@ -45,6 +45,7 @@ bedrock = [
 # pip install "tradingagents[research]". Everything else runs without them.
 research = [
     "xgboost>=3.0",
+    "lightgbm>=4.0",
     "arch>=7.0",
     "scikit-learn>=1.6",
 ]

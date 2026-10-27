@@ -318,7 +318,10 @@ class TradingAgentsGraph:
             trade_date,
             asset_type=asset_type,
             instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
-            portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
+            portfolio_context="\n\n".join(x for x in (
+                portfolio.render(company_name) if portfolio is not None else "",
+                # A validated quantitative view the caller supplies (decision_layer.agent_evidence); empty otherwise.
+                (self.config.get("quant_evidence") or {}).get(str(company_name).upper(), "")) if x),
             entry_reference=self.entry_reference(company_name, trade_date),
         )
 

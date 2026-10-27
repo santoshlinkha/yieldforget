@@ -416,6 +416,34 @@ function planRun(run) {
   if (t) h += `<details${f ? "" : " open"}><summary class="small"><b>Trader's proposal</b> (before the risk debate)</summary>` + planTable(t) + planCheck(t.validation) + `</details>`;
   return h;
 }
+// --- the policy model: buy now / buy on a limit / cash, hold / sell; only supported values, with its status ---
+const POL_NAME = {next_close: "Buy at the next close", limit_dip: "Buy on a limit (5 sessions)", cash: "Stay in cash",
+                  hold: "Keep holding", sell: "Sell at the next close"};
+function policyHtml(p) {
+  let h = `<h3 class="sec">Trade outcome model <span class="muted small" style="font-weight:400">buy now, buy on a limit, or cash</span></h3>`;
+  if (!p.available) return h + `<p class="small muted">${esc(p.note || "not available")}</p>`;
+  const st = p.status || {};
+  const act = p.action === "insufficient evidence" ? `<b>Insufficient evidence</b> <span class="muted">(the model alone would choose: ${esc(POL_NAME[p.model_choice] || p.model_choice)})</span>`
+    : `<b>${esc(POL_NAME[p.action] || p.action)}</b>`;
+  h += `<p>${act}. ${esc(p.why || "")}${(p.reasons || []).length ? `<br><span class="small muted">${esc(p.reasons.join("; "))}</span>` : ""}</p>`;
+  const lim = (p.policies || {}).limit_dip || {};
+  const ENDS = [["p_target", "target first"], ["p_stop", "stop first"], ["p_expiry", "neither by day 20"], ["p_nofill", "limit not filled"]];
+  h += `<table class="eplan"><tr><th class="l">Option</th><th>Expected vs cash</th><th>Bad case (10th pct)</th></tr>` +
+    (p.options || []).map(o => {
+      const ends = ENDS.filter(([k]) => o[k] != null).map(([k, n]) => `<span class="nw">${n} ${pct(o[k], 0)}</span>`).join(" · ");
+      return `<tr${o.action === p.model_choice ? ' class="chosen"' : ""}><td class="l"><b>${esc(POL_NAME[o.action] || o.action)}</b>` +
+        `${(o.blocked || []).length ? `<div class="small muted">${esc(o.blocked.join("; "))}</div>` : ""}</td>` +
+        `<td>${spct(o.expected_excess, 2)}</td><td>${spct(o.q10_excess, 1)}</td></tr>` +
+        (ends ? `<tr><td colspan="3" class="l small muted" style="border-top:0;padding-top:0" title="Calibrated chances of how the trade ends. None is the chance of losing money, of a crash, or of touching the 20-day low">How it ends: ${ends}</td></tr>` : "");
+    }).join("") + `</table>`;
+  h += `<p class="small muted">Decided ${esc((p.decided_at || "").slice(0, 16).replace("T", " "))} UTC on data to ${esc(p.data_to || "–")}; executes at the close of ${esc(p.executes || "–")}. ` +
+    `Exits: target and stop one 20-session volatility from the actual fill, close-confirmed and sold at the next close, or after 20 sessions. ` +
+    `The limit is ${lim.limit_k ?? "–"} × volatility over ${lim.limit_days ?? "–"} sessions below the close and counts as filled only when the low goes ${lim.fill_buffer != null ? (lim.fill_buffer * 100).toFixed(1) + "%" : "–"} through it. ` +
+    `Model ${esc(p.model_version || "–")}, trained on data to ${esc(p.trained_to || "–")}; status: <b>${esc(st.state || "unknown")}</b>${st.why ? ` (${esc(st.why)})` : ""}. ` +
+    `Buy margin ${pct(p.margin, 1)}, chosen on development data. These are model estimates, not promises; a sale at the next close can lose more than the stop.</p>`;
+  return h;
+}
+
 async function loadEntryPlans() {
   let r;
   try { r = await getJSON("/api/entry-plans?ticker=" + encodeURIComponent(symbol)); }
@@ -760,8 +788,8 @@ function signalTable(sg) {
       `<td class="muted">${flat ? "same for all" : rank == null ? "–" : rank >= 0.5 ? `top ${Math.max(1, Math.round((1 - rank) * 100))}%` : `bottom ${Math.max(1, Math.round(rank * 100))}%`}</td><td class="muted small">${esc(ev[key] || "")}</td></tr>`;
   };
   return `<table><tr><th class="l">Within ${sg.horizon} sessions</th><th>Model</th><th>Usual</th><th>Lift</th><th>Among today's stocks</th><th>Evidence</th></tr>` +
-    line("Breakout above the recent range", "up_break", f.p_up_break, b.up_break, "good") +
-    line("Breakdown below the recent range", "down_break", f.p_down_break, b.down_break, "bad") +
+    line("Trades above the 20-day high (intraday)", "up_break", f.p_up_break, b.up_break, "good") +
+    line("Trades below the 20-day low (intraday)", "down_break", f.p_down_break, b.down_break, "bad") +
     line("Large loss at the 20-session end", "large_loss", f.p_large_loss, b.large_loss, "bad") +
     line("Deep drawdown", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>`;
 }
@@ -805,7 +833,7 @@ async function loadSignals() {
     h += `<h3 class="sec">Entry plan <span class="muted small" style="font-weight:400">next ${ep.horizon} sessions · last close ${money2(ep.close)}</span></h3>` +
       `<table class="eplan"><tr><th class="l">Entry</th><th>Buy limit</th><th title="Close-confirmed: sold at the next close; a gap can lose more than the stop">Sell at</th></tr>` +
       ep.rows.map((r, i) => `<tr><td class="l"><div><b>${esc(SHORT[r.name] || r.name)}</b></div>` +
-        `<div class="small muted" title="Chance the price trades at or through this level within the window; a limit there may still not fill">${r.chance == null ? "" : i ? `fills: about ${pct(r.chance, 0)}` : "fills: yes"}</div></td>` +
+        `<div class="small muted" title="Chance the price trades at or below this level (intraday) within the window. A touch is not a fill: a limit there may not execute">${r.chance == null ? "" : i ? `trades there: about ${pct(r.chance, 0)}` : "at the next close"}</div></td>` +
         `<td><div class="nw"><b>${money2(r.price)}</b></div><div class="small muted">${i ? `<span class="nw">${spct(r.vs_close, 1)}</span> vs close` : "at the close"}</div></td>` +
         `<td>${leg("stop", r.stop, r.price, "neg")}${leg("target", r.profit, r.price, "pos")}</td></tr>`).join("") + `</table>` +
       `<p class="small muted">${vd && vd.action === "BUY" ? "The model says BUY: buy at the next close, or place a limit at a dip and accept that it may not fill."
@@ -815,6 +843,7 @@ async function loadSignals() {
       `Limit prices come from the stock models: the 20-day low (its chance is the breakdown probability), and the model's median and worst-5% expected dip from today's close. ` +
       `Each entry's stop-loss and take-profit sit one ${ep.horizon}-session volatility (${pct(ep.sigma_h, 1)}) below and above it, closed at the close, with a ${ep.horizon}-session deadline: the exit rule the decision study tested. Experimental; not validated.</p>`;
   }
+  if (row.policy) h += policyHtml(row.policy);
   if (sg && sg.status === "ok") {
     const f = sg.forecast;
     const tp = [["up", f.trend_up], ["down", f.trend_down], ["sideways", f.trend_sideways], ["unclear", f.trend_unclear]];

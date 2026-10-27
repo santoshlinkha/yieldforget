@@ -23,7 +23,14 @@ import math
 import numpy as np
 import pandas as pd
 
-from .adapters import Ranker, TradeQuality, WithinDateLinear, apply_map, score_to_net, within_date_pct
+from .adapters import (
+    Ranker,
+    TradeQuality,
+    WithinDateLinear,
+    apply_map,
+    score_to_net,
+    within_date_pct,
+)
 from .positions import Book, Policy, benchmark, trades
 
 DEV_END = pd.Timestamp("2024-06-30")

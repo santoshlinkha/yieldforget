@@ -33,8 +33,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from tradingagents.research.features import (MACRO_FEATURES, MARKET_FEATURES, PRICE_FEATURES, _rank,
-                                             decision_dates, market_features, price_features)
+from tradingagents.research.features import (
+    MACRO_FEATURES,
+    MARKET_FEATURES,
+    PRICE_FEATURES,
+    _rank,
+    decision_dates,
+    market_features,
+    price_features,
+)
 
 from . import fundamentals as FU
 from .data import CASH, StockData, raw_close

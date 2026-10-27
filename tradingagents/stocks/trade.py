@@ -7,7 +7,7 @@ order, never from an AI rating:
   expected net P&L, P(large loss)) and is not already held. Its **buy price** is a limit at the
   last close: the model's entry is the next session's close, and a limit there keeps a gap up from
   filling it. When the stock has a saved signal forecast, a patient limit at its median expected
-  dip (about an even chance to fill within 20 sessions) is offered beside it. The **exits** are
+  dip (about an even chance the price trades there within 20 sessions; a touch is not a fill) is offered beside it. The **exits** are
   the decision study's barrier policy: a stop one horizon-volatility below the buy price, a
   target one above, and a 20-session deadline, all close-confirmed. **Shares** are the budget
   over the buy price (fractional).
