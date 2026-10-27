@@ -17,6 +17,7 @@ the page polls for their progress.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -766,23 +767,20 @@ class App:
         raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
 
     def manual_prompt(self, ticker: str, day: str) -> dict:
-        """The prompt for running the analysis in a chat app; builds from cached data, calls no AI."""
+        """The TradingAgents team's own prompts for running the analysis in a chat app; calls no AI."""
         from tradingagents.agents.manual import PROMPT_VERSION, build_prompt
         from tradingagents.dataflows.config import set_config
+        from tradingagents.dataflows.symbols import safe_ticker_component
 
         ticker, day = ticker.strip().upper(), self._check_day(day)
         set_config(self.config)
-        # The evidence packet: local caches only; the app's verdict, model rank and signals stay out. It is saved
-        # under its content ID, so a pasted answer can be tied to the exact evidence it was given.
-        from tradingagents.agents.packet import packet_id, render
-        from tradingagents.dataflows.symbols import safe_ticker_component
-
-        prompt, packet = build_prompt(ticker, day, self.cache_dir, with_packet=True)
-        pid = packet_id(packet)
-        packets = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "packets"
-        packets.mkdir(parents=True, exist_ok=True)
-        if not (packets / f"{pid}.json").exists():
-            (packets / f"{pid}.json").write_text(render(packet), encoding="utf-8")
+        prompt = build_prompt(ticker, day, self.cache_dir)
+        # Kept under its content ID so a pasted answer can be tied to the exact prompt it replied to.
+        pid = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+        prompts = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        if not (prompts / f"{pid}.txt").exists():
+            (prompts / f"{pid}.txt").write_text(prompt, encoding="utf-8")
         try:
             import tiktoken
 
@@ -790,7 +788,7 @@ class App:
         except Exception:
             tokens, how = len(prompt) // 4, "estimate (characters / 4)"
         return {"ticker": ticker, "date": day, "prompt": prompt, "chars": len(prompt), "tokens_est": tokens,
-                "tokens_how": how, "version": PROMPT_VERSION, "packet_id": pid}
+                "tokens_how": how, "version": PROMPT_VERSION, "prompt_id": pid}
 
     def manual_answer(self, body: dict) -> dict:
         """A chat app's answer to the manual prompt: saved as a report, its rating recorded, the final decision written."""
@@ -806,29 +804,20 @@ class App:
             raise ValueError("paste the whole answer, ending with its JSON block")
         decision = parse_answer(text)
         from tradingagents.agents.manual import PROMPT_VERSION
-        from tradingagents.agents.packet import cited_ids, evidence_ids
         from tradingagents.optimizer.ai_views import fresh_report_folder
 
         day_dir = Path(self.config["results_dir"]) / safe_ticker_component(ticker) / day
-        # Which packet the answer replied to: the ID it echoes, else the latest one copied for this ticker and day.
-        packets = day_dir / "packets"
-        pid = re.sub(r"[^0-9a-f]", "", str(decision.get("packet_id") or "").lower())
-        if not (pid and (packets / f"{pid}.json").is_file()):
-            saved = sorted(packets.glob("*.json"), key=lambda f: f.stat().st_mtime) if packets.is_dir() else []
-            pid = saved[-1].stem if saved else None
-        packet = json.loads((packets / f"{pid}.json").read_text(encoding="utf-8")) if pid else None
-        cited = sorted(cited_ids(decision, text))
-        unknown = sorted(set(cited) - evidence_ids(packet)) if packet else cited
+        # The prompt the answer replied to: the latest one copied for this ticker and day.
+        prompts = day_dir / "prompts"
+        saved = sorted(prompts.glob("*.txt"), key=lambda f: f.stat().st_mtime) if prompts.is_dir() else []
+        pid = saved[-1].stem if saved else None
         folder = fresh_report_folder(day_dir / "reports")   # an earlier run is archived, never overwritten
         (folder / "5_portfolio").mkdir(parents=True, exist_ok=True)
-        # The prompt format and packet the answer replied to, and any cited ID the packet does not contain.
         (folder / "chat_answer.md").write_text(
-            f"# Answer from {source}\n\nPrompt format: {PROMPT_VERSION}; evidence packet {pid or 'unknown'}"
-            f"{'; the analysis abstained (insufficient evidence)' if decision.get('insufficient_evidence') else ''}"
-            f"{'; cited IDs not in the packet: ' + ', '.join(unknown) if unknown else ''}\n\n{text}\n",
+            f"# Answer from {source}\n\nPrompt format: {PROMPT_VERSION}; prompt {pid or 'unknown'}\n\n{text}\n",
             encoding="utf-8")
-        if packet:   # the evidence the answer was given, kept with it
-            (folder / "evidence_packet.json").write_text(json.dumps(packet), encoding="utf-8")
+        if pid:   # the prompt the answer was given, kept with it
+            (folder / "prompt.txt").write_text(saved[-1].read_text(encoding="utf-8"), encoding="utf-8")
         md = decision_markdown(decision)
         (folder / "5_portfolio" / "decision.md").write_text(md, encoding="utf-8")
         log = TradingMemoryLog(self.config)
@@ -838,31 +827,14 @@ class App:
         final = self._write_decision(ticker, day, folder, {"rating": decision["rating"], "fell_back": False,
                                                            "abstained": decision.get("insufficient_evidence")},
                                      None, models=source)
-        from tradingagents.agents.manual import entry_plan_of
-
-        plan = entry_plan_of(decision)
-        entry = None
-        if plan is not None:   # a chat answer is the manager's view: no separate trader proposal
-            ref = None
-            if packet and (packet.get("entry_reference") or {}).get("close_as_traded") is not None:
-                r = packet["entry_reference"]
-                ref = {"ticker": ticker, "cutoff": day, "session": r["session"], "price": r["close_as_traded"],
-                       "currency": r.get("currency"), "verified": True, "how": r["basis"], "basis": "as traded",
-                       "source": f"evidence packet {pid} (REF1)"}
-            entry = self._record_entry_plans(ticker, day, folder, None,
-                                             {"rating": decision["rating"], "plan": plan,
-                                              "price_target": decision.get("price_target")},
-                                             ref, source=source,
-                                             evidence={"packet_id": pid, "unknown_cited_ids": unknown,
-                                                       "model_decision": final.get("decision_id")})
-        provenance = {"source": source, "prompt_version": PROMPT_VERSION, "packet_id": pid, "cited_ids": cited,
-                      "unknown_cited_ids": unknown, "abstained": bool(decision.get("insufficient_evidence")),
-                      "rating": decision["rating"], "rating_recorded": recorded,
+        trader = decision.get("trader") if isinstance(decision.get("trader"), dict) else None
+        provenance = {"source": source, "prompt_version": PROMPT_VERSION, "prompt_id": pid,
+                      "rating": decision["rating"], "rating_recorded": recorded, "trader": trader,
                       "model_decision": final.get("decision_id"),
                       "saved_at": datetime.now().astimezone().isoformat(timespec="seconds")}
         (folder / "provenance.json").write_text(json.dumps(provenance, indent=1), encoding="utf-8")
         return {"ticker": ticker, "date": day, "rating": decision["rating"], "final": final, "recorded": recorded,
-                "packet_id": pid, "unknown_cited_ids": unknown, "entry_plans": entry,
+                "prompt_id": pid, "trader": trader,
                 "note": None if recorded else "a rating for this ticker and day was already on record (it stays; "
                                                  "the verdict uses that one)"}
 

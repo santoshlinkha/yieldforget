@@ -1,11 +1,11 @@
 """Run the analysis by hand in a chat app (ChatGPT, Gemini, Claude): one prompt out, one answer back.
 
-``build_prompt`` sends one compact evidence packet (``agents.packet``): stable, grounded instructions first,
-then the instrument's canonical data as of the analysis day, read from local caches only. It carries data
-only: not whether the stock is held, and none of the app's own verdicts, ranks or signals, so the chat's
-judgment is independent of the app's. ``parse_answer`` reads the JSON block back; the contract is the
-portfolio manager's (rating, executive summary, investment thesis, price target, time horizon), with two
-optional additions the packet's instructions ask for (``evidence_ids``, ``insufficient_evidence``).
+``build_prompt`` sends the TradingAgents team's own prompts (``agents.upstream_prompt``): every agent from
+the market analyst to the portfolio manager, in the graph's order, with the analysts' tool results pasted
+under their prompts. It carries no holdings and none of the app's own verdicts, ranks or signals, so the
+chat's judgment is independent of the app's. ``parse_answer`` reads the JSON block back; the contract is the
+portfolio manager's (rating, executive summary, investment thesis, price target, time horizon) plus the
+trader's proposal (action, entry price, stop-loss, sizing).
 No API is called: the model runs in the user's own chat subscription.
 """
 
@@ -15,19 +15,17 @@ import json
 import re
 from pathlib import Path
 
-from tradingagents.agents.packet import PACKET_VERSION
-from tradingagents.agents.packet import build_prompt as _packet_prompt
 from tradingagents.agents.schemas import PortfolioRating
+from tradingagents.agents.upstream_prompt import PROMPT_FORMAT, build, trader_line
 
 RATINGS = [r.value for r in PortfolioRating]
-PROMPT_VERSION = PACKET_VERSION
+PROMPT_VERSION = PROMPT_FORMAT
 
 
-def build_prompt(ticker: str, day: str, cache_dir: Path, limits: dict | None = None, with_packet: bool = False):
-    """The whole prompt for one instrument and cutoff (instructions, then the evidence packet); with
-    ``with_packet``, ``(text, packet)`` so the caller can save the packet the answer will cite."""
-    text, packet = _packet_prompt(ticker.upper(), day, cache_dir, limits)
-    return (text, packet) if with_packet else text
+def build_prompt(ticker: str, day: str, cache_dir: Path | None = None) -> str:
+    """The whole prompt for one instrument and cutoff: each agent's own prompt and its tool data, in order.
+    Data comes through the configured vendors, which read the local store first."""
+    return build(ticker.upper(), day)
 
 
 def parse_answer(text: str) -> dict:
@@ -52,12 +50,14 @@ def parse_answer(text: str) -> dict:
 
 
 def decision_markdown(d: dict) -> str:
-    """The same shape the agents' portfolio manager writes (5_portfolio/decision.md), plus the packet's
-    optional fields when the answer gives them."""
+    """The same shape the agents' portfolio manager writes (5_portfolio/decision.md), plus the trader's
+    proposal and any optional fields the answer gives."""
     out = (f"**Rating**: {d['rating']}\n\n**Executive Summary**: {d.get('executive_summary') or 'not provided'}\n\n"
            f"**Investment Thesis**: {d.get('investment_thesis') or 'not provided'}\n\n"
            f"**Price Target**: {d.get('price_target') if d.get('price_target') is not None else 'not provided'}\n\n"
            f"**Time Horizon**: {d.get('time_horizon') or 'not provided'}\n")
+    if trader_line(d):
+        out += "\n" + trader_line(d)
     if d.get("insufficient_evidence"):
         out += ("\n**Insufficient evidence**: the analysis abstained; the rating above is recorded only because "
                 "the answer format requires one.\n")

@@ -221,7 +221,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
           </div>
           <details class="runbox" style="display:block" id="manualBox"><summary><b>Or use ChatGPT Plus (no API cost)</b> <span class="muted small">copy one prompt, paste the answer back</span></summary>
             <ol class="small muted" style="margin:8px 0 8px 18px;padding:0">
-              <li>Click <b>Copy the prompt</b>: it holds one compact evidence packet as of the day above (price snapshot and comparisons, company or fund facts, dated news, economic data with their vintages, the data checks run and what is missing), each item with an ID the chat must cite. It carries data only: not whether you hold it, and none of the app's verdicts, model ranks or signals, so the chat's view is independent.</li>
+              <li>Click <b>Copy the prompt</b>: it holds the TradingAgents team's own prompts (TauricResearch), every agent from the market analyst to the portfolio manager in the framework's order, with the data each analyst's tools return as of the day above. The chat plays each agent in turn. It carries no holdings and none of the app's verdicts, model ranks or signals, so the chat's view is independent. Building it fetches the data and takes about a minute.</li>
               <li>Paste it into ChatGPT (or Gemini or Claude in your browser) and send it.</li>
               <li>Copy the whole answer, paste it below and click <b>Save the answer</b>. It must end with the JSON block the prompt asks for.</li>
             </ol>
@@ -910,6 +910,7 @@ $("mpSave").onclick = async () => {
   try {
     const r = await getJSON("/api/manual-answer", {ticker: symbol, date: $("agDate").value, text: $("mpAnswer").value, source: $("mpSource").value});
     $("mpState").innerHTML = `Final decision: <span class="verdict ${r.final.action}">${r.final.action}</span> · rating ${esc(r.rating)}` +
+      (r.trader && r.trader.entry_price != null ? ` · trader: ${esc(r.trader.action || "")} at ${esc(r.trader.entry_price)}${r.trader.stop_loss != null ? `, stop ${esc(r.trader.stop_loss)}` : ""}` : "") +
       (r.note ? ` <span class="muted">(${esc(r.note)})</span>` : "") + ". Saved under the reports below.";
     $("mpAnswer").value = "";
     load(); loadSignals();
