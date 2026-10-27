@@ -16,6 +16,8 @@ data; the only paid or external calls are the optional AI agents (free Gemini / 
 | S&P 500 membership history, with removed stocks | github.com/fja05680/sp500 | cache | members on each date; delisted stocks kept until their last price (survivorship **partial**) |
 | GICS sector of each S&P 500 member | Wikipedia S&P 500 list | cache | today's classification |
 | News headlines | Yahoo Finance | `portfolio.sqlite3` (`stock_news`) | first-seen time recorded |
+| Company news: every 8-K since 2006 (132,000+ for the S&P 500: results, executive changes, deals, announcements) and its press-release text | SEC EDGAR | `cache/optimizer/sec_news.sqlite3` (`stocks/news_archive.py`) | SEC's acceptance time; after 16:00 New York it counts from the next session |
+| Wall Street analysts: dated rating changes and price targets (from about 2012), each report's EPS estimate, actual and surprise (from about 2002) | Yahoo Finance | price store snapshots; rebuilt per date by `stocks/consensus.py` | an action from the session after its day; targets in today's shares; Yahoo's lists as of today (firms that stopped covering may be missing) |
 | Your extra companies | Settings > Companies the model scores | `portfolio.sqlite3` (`stock_watchlist`) | scored like members |
 | Your account: holdings, fills, budget | Settings, Portfolio tab | `portfolio.sqlite3` (append-only ledger) | |
 | **Training sets** of the decision models | built from the above | `~/.tradingagents/cache/optimizer/training.duckdb` (DuckDB) | one copy per distinct set, with a fingerprint |
