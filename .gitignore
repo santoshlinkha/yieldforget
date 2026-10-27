@@ -232,3 +232,7 @@ p.out
 
 # Official recommendation reports (personal)
 /recommendations/
+
+# Local run outputs and model predictions (personal data), and the uv lock upstream does not track
+/results/
+uv.lock

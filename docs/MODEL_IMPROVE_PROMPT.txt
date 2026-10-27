@@ -1,0 +1,158 @@
+You are a quantitative researcher reviewing a small, real trading system. Below is the exact buy/sell
+decision rule it uses today (taken from its code, not a summary), the account it trades, and the evidence
+it has so far. Suggest concrete improvements. Be skeptical: the system has NOT beaten SPY yet.
+
+=====================================================================================================
+1. THE ACCOUNT AND ITS CONSTRAINTS
+=====================================================================================================
+- Robinhood Roth IRA, cash account (no margin, no shorting, no options). Settlement T+1: a buy can only
+  use settled cash; sale proceeds are spendable the next session. No day trading.
+- $29 is deposited every market day and bought into SGOV (0-3 month T-bills, ~3.6%/yr). SGOV is the base
+  and is never traded.
+- The ONLY money traded in stocks is the "trading budget":
+      budget = SGOV dividends earned since the start + 3% broker match on deposits
+               - money put into stocks + money back from stock sales
+  That is roughly $35-40 per month, so positions are tiny (fractional shares; Robinhood has no commission).
+- Universe: S&P 500 members (point-in-time membership since 2005; survivorship only partially handled).
+- Data: free Yahoo Finance daily bars, SEC filings (fundamentals as filed), FRED macro series. No paid data.
+- Hardware: laptop, RTX 3050 Ti (4 GB), 16 GB RAM. Everything runs locally.
+
+=====================================================================================================
+2. THE MODELS (fitted once a week on data up to the decision close; nothing after it is used)
+=====================================================================================================
+Notation: t = the decision date's close; trades enter at the NEXT session's close (t+1); H = 20 sessions.
+sigma = daily EWMA volatility of log returns (lambda = 0.94) known at t;  sigma_H = sigma * sqrt(H).
+
+Features (54, all known at t): cross-sectional ones are ranked within each date into [-0.5, 0.5]; market
+and macro ones stay as levels.
+  price/volume: mom_1m, mom_3m, mom_6m, mom_12_1, rev_1w, vol_1m, vol_3m, downvol_3m, beta_1y,
+    dist_52w_high, gap_ma200, dd_1y, range_1m, log_dollar_vol, volume_trend, amihud, ma20_slope,
+    ma50_slope, range_pos_20, range_pos_52w, rel_spy_1m, rel_spy_3m, rel_sector_1m, rel_sector_3m,
+    volume_chg_1w, current_trend
+  market: vix, vix_slope, tnx_chg_3m, irx, spy_mom_3m, spy_vol_1m
+  fundamentals (as filed): rev_growth_y, rev_growth_q, gross_margin, op_margin, net_margin, fcf_margin,
+    roa, liabilities_to_assets, dilution_1y, earnings_yield, sales_yield, fcf_yield, book_yield,
+    filing_age_days
+  macro (as published): cpi_yoy, unrate_chg_3m, payrolls_yoy, nfci, curve_10y2y, credit_spread,
+    credit_chg_3m, fed_funds
+
+(a) RANKER - XGBoost learning-to-rank (objective rank:pairwise; groups = decision dates).
+    Training label: stock's 20-session return from the t+1 close, minus cash (T-bill) return.
+    Relevance grade = the fifth (0..4) that label falls in among that date's stocks.
+    Params: max_depth 3, eta 0.02, subsample 0.7, colsample 0.7, min_child_weight 200, lambda 10,
+    rounds by early stopping on the last fifth of training dates. Decision dates every 5 sessions from 2006.
+    Output today: raw score -> score_pct = its percentile among today's stocks (ties share the average).
+
+(b) EXPECTED NET P&L MAP - from out-of-fold (yearly cross-fitted, purged) ranker percentiles to the
+    realized net P&L of the exit policy's trade (section 3), in 10 equal percentile bins:
+        expected_net(bin) = (n_bin * mean_bin + k * overall_mean) / (n_bin + k),   k = 200
+    Also per bin: sd and 10th percentile of net P&L. Same map against SPY -> expected_excess_vs_spy.
+    (Many stocks fall in one bin, so many share one expected_net; ties are ordered by score, then P(profit).)
+
+(c) TRADE QUALITY - P(profit after costs) = P(policy trade's net P&L > 0): logistic regression
+    (C = 0.1) on the 54 features + score_pct, then sigmoid (Platt) recalibration on the last fifth of
+    training dates (purged, chronological).
+
+(d) RISK - P(large loss) = P(position return at the 20-session exit <= expm1(-1.5 * sigma_H)), from
+    XGBoost binary classification on the 54 features. (Terminal loss, not the worst point while held.)
+
+(e) LIVE RECALIBRATION (new; inactive until 300 predictions over 10 decision days have matured):
+    every day's predictions are saved and scored 20 sessions later (hold-to-deadline return from the
+    t+1 close). Then P(profit) is mapped through an isotonic fit of realized wins on predicted P(profit),
+    and expected_net through a line fitted on realized (return - cost) vs expected_net, shrunk toward
+    slope 1 / intercept 0 by its standard error.
+
+Cost: cost_rt = round-trip cost = bid-ask spread estimated from daily high/low/close (Abdi-Ranaldo 2017,
+21 sessions before t) + 2 bp slippage per side.
+
+=====================================================================================================
+3. THE EXIT POLICY ("barrier_20") - used for selling and also to define the training target of (b)/(c)
+=====================================================================================================
+    entry E = close of session t+1
+    profit level = E * exp(+1.0 * sigma_H)        (target)
+    risk level   = E * exp(-1.0 * sigma_H)        (stop)
+    deadline     = 20 sessions after entry
+Rules, close-confirmed, never intraday:
+- If a close is at/above the target or at/below the stop -> SELL at the NEXT session's close.
+- If the next close would be at/after the deadline -> SELL at the next close (no extension).
+- A lot is never sold on the session it was bought.
+- If a position grows above 25% of (budget + stocks held) * 1.05 -> REDUCE it back to 25%.
+- Net P&L of a trade = (exit price + dividends received) / E - 1 - cost_rt.
+A separate ML "continuation" exit exists but is information only (it almost never fired in testing).
+
+=====================================================================================================
+4. THE BUY RULE (daily, after the close; orders execute at the next close)
+=====================================================================================================
+Candidates: today's S&P 500 members, sorted by (score_pct desc, P(profit) desc, ticker); top 25 examined.
+A candidate passes the MODEL GATES only if ALL hold:
+    P(large loss)   <= 15%          (missing estimate = fail)
+    expected_net    >= +0.5%        (over the 20-session trade, after costs)
+    P(profit)       >= 50%
+    a current price exists
+Then ACCOUNT GATES:
+    not already held; at most 5 names including holdings;
+    dollars = min(25% * (budget + stocks held), remaining budget / open slots); dollars >= $1;
+    the new position must not make one stock > 10% of the whole IRA (SGOV included).
+If data is more than 4 days old -> WAIT.
+The app shows the first passing candidate as "Best buy":
+    buy limit = last close (the model enters at the next close);
+    "patient" limit = last close * (1 + median expected 20-session drawdown) from a separate signal model
+      (about a 50% chance to fill within 20 sessions);
+    target/stop/deadline as in section 3; shares = budget / buy limit.
+
+Verdict labels shown per stock (same numbers):
+    BUY   = score in the top fifth (percentile >= 0.80) AND expected_net > 0 AND P(profit) >= 50%
+            AND P(large loss) <= 15%
+    AVOID = bottom fifth (<= 0.20) OR expected_net < 0           (not held)
+    SELL  = the exit policy says EXIT/REDUCE, OR (held AND bottom fifth AND expected_net < 0)
+    HOLD / WATCH otherwise.
+Warnings shown as context only (they do not change the decision):
+    breakdown risk = P(trading below the 20-day low within 20 sessions) >= 1.2x its base rate and in the
+    top fifth of today's stocks; crash = P(large loss) >= 1.5x base, >= 10%, top fifth.
+
+VALIDATION GATE: real ENTER orders are allowed only after (1) a decision study on 2012-mid 2024 shows it
+beats cash-flow-matched SPY after costs with a bootstrap interval above zero, beats cash, max drawdown
+>= -35%, and P(profit) is no worse than the base rate in log loss; AND (2) a forward paper ("shadow")
+account has >= 20 round trips and beats SPY. Until then buys are "PAPER ENTER" (experimental).
+
+=====================================================================================================
+5. EVIDENCE SO FAR (decision study, 2026-10-24; development 2012/13 - Jun 2024, exploratory Jul 2024 -
+   Oct 2026; $1,000 paper capital, 5 names max, T+1, dividends, costs)
+=====================================================================================================
+Ranking IC (Spearman, vs the tradable label; 95% block bootstrap):
+    XGBoost rank  dev 0.020 (0.005, 0.036)   exploratory 0.037 (0.007, 0.076)
+    Momentum 12-1 dev 0.005 (-0.021, 0.033)  exploratory 0.032 (-0.011, 0.081)
+    Elastic Net   dev -0.017                 exploratory none
+Trade-quality log loss (lower better): logistic 0.89, logistic+sigmoid 0.73, boosted 0.70,
+    boosted+sigmoid 0.72, BASE RATE 0.69 (~53-54% of trades profitable) -> no model beats the base rate.
+Expected-net map: the top tenth by expected_net (+1.1% expected) realized -0.5% per trade in development,
+    vs +0.55% for all candidates -> the map is unreliable at the top.
+Capital simulation:
+    Barrier 1sig/1sig + 20d (net >= 0.5%, P >= 0.5): dev +210% (10.4%/yr, max DD -22%), exploratory +5.0%
+    Fixed 20 sessions (net >= 0, P >= 0.55):          dev +53%,  exploratory +8.7%
+    Barrier + volatility-aware sizing:                dev +155%, exploratory -1.3%
+    Momentum top-5, fixed 20:                         dev +51%,  exploratory +79%
+    SPY (same cash flows): dev +358%, exploratory +43%.   Cash: dev +14%, exploratory +9.9%.
+    The barrier rule was the best of 8 settings on development (selection bias). Exposure was only 42-62%
+    (candidates often failed the gates). Exits: 243 deadline / 123 target / 81 stop.
+Verdict: does NOT pass; runs in experimental mode. The model for the current week has no study yet.
+Today's run: 667 stocks scored; many candidates share the same expected_net (+0.58%) and P(profit) (54%)
+because of the binned map; P(large loss) ~7%.
+
+=====================================================================================================
+6. WHAT I WANT FROM YOU
+=====================================================================================================
+1. Diagnose the 3-5 biggest weaknesses of this rule, with reasons tied to the evidence above (e.g. weak
+   IC vs costs, gates that the probabilities cannot support, the binned map, the barrier choice,
+   20-session horizon, overlapping labels, survivorship, regime dependence).
+2. Propose specific, testable changes, ordered by expected value for THIS account (tiny positions,
+   ~$35-40 of new money a month, long-only, no margin, T+1, free daily data, laptop GPU). For each:
+   the exact formula or parameter change, why it should help, and how to test it without look-ahead
+   or overfitting (walk-forward, purging/embargo, multiple-testing correction, a final untouched period).
+3. Say plainly whether, with this little money, a simpler rule (e.g. momentum top-N, a single ETF such as
+   a sector or index fund chosen by a rule, or just adding to SGOV/SPY) would likely beat this system
+   after costs, and what result in the forward record should make me stop using the model.
+4. Suggest how to use the live prediction record (section 2e) to improve the model over time without
+   fooling myself (how many matured predictions before trusting a change, what to monitor).
+5. Keep it concrete. No generic trading advice. If something cannot be judged from what is given,
+   say what extra number you would need.
