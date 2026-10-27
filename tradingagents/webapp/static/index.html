@@ -1535,21 +1535,50 @@ function renderBrief(b, job) {
 }
 // Headings, bold, italics, bullets and rules from the model's free text; everything else is escaped.
 function mdInline(t) {
-  const codes = [];
+  const codes = [], kept = [];
   // The agents sometimes wrap numbers in LaTeX: $\$815.31$ is $815.31 and $+25.38$ is +25.38.
   t = String(t).replace(/\$\\\$([^$]+)\$/g, "$$$1").replace(/\$([-+]?\$?[\d.,]+%?)\$/g, "$1");
+  // A backslash escape (\$195, \*, \_, \|) is the character itself, kept out of the bold/italic rules.
+  t = t.replace(/\\([\\`*_{}\[\]()#+\-.!|$<>~])/g, (_, c) => `\u0001${kept.push(c) - 1}\u0001`);
   let h = esc(t).replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
   h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-       .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>")
+       // Bold may hold italics: **Label *quoted*** is bold with an italic end.
+       .replace(/\*\*(?=\S)(.+?)\*\*(?!\*)/g, "<b>$1</b>").replace(/__(?=\S)(.+?)__(?!_)/g, "<b>$1</b>")
        .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<i>$2</i>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<i>$2</i>");
-  return h.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+  return h.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`)
+          .replace(/\u0001(\d+)\u0001/g, (_, i) => esc(kept[+i]));
+}
+// A table written on one line: "lead text | A | B | |---|---| | x | y | | z | w |" becomes its own lines.
+function unflattenTables(lines) {
+  const sep = /\|(\s*:?-{3,}:?\s*\|)+/;
+  const out = [];
+  for (const line of lines) {
+    const m = line.match(sep);
+    const alone = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(line);
+    if (!m || alone) { out.push(line); continue; }
+    const n = (m[0].match(/-{3,}/g) || []).length;
+    const before = line.slice(0, m.index).replace(/\s+$/, "");
+    const cells = before.split("|");
+    if (cells.length && !cells[cells.length - 1].trim()) cells.pop();
+    if (cells.length < n + 1) { out.push(line); continue; }
+    const head = cells.slice(cells.length - n).map(c => c.trim());
+    const lead = cells.slice(0, cells.length - n).join("|").replace(/\|\s*$/, "").trim();
+    const rows = line.slice(m.index + m[0].length).trim().replace(/^\|/, "").replace(/\|$/, "")
+      .split(/\|\s+\|/).map(r => r.split("|").map(c => c.trim()));
+    if (lead) out.push(lead, "");
+    out.push(`| ${head.join(" | ")} |`, `|${" --- |".repeat(n)}`);
+    for (const r of rows) if (r.some(c => c)) out.push(`| ${r.slice(0, n).join(" | ")} |`);
+    out.push("");
+  }
+  return out;
 }
 function renderMarkdown(src) {
-  const lines = String(src || "").replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n");
+  const lines = unflattenTables(String(src || "").replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n"));
   const out = [];
   let para = [];
   const stack = [];                            // open lists: {tag, indent}
-  const flushPara = () => { if (para.length) { out.push(`<p>${mdInline(para.join(" "))}</p>`); para = []; } };
+  // Lines of one paragraph keep their breaks: the agents put label lines one under the other.
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.map(mdInline).join("<br>")}</p>`); para = []; } };
   const closeLists = (indent = -1) => {
     while (stack.length && stack[stack.length - 1].indent > indent) out.push(`</li></${stack.pop().tag}>`);
   };
