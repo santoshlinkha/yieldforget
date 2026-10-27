@@ -140,7 +140,7 @@ def test_a_pasted_answer_is_kept_with_its_prompt_and_a_second_one_archives_the_f
     base, tmp_path, _ = server
     offline(monkeypatch)
     status, prompt = _call(base, "/api/manual-prompt?ticker=AAA&date=2026-10-23")
-    assert status == 200 and "## Step 1: Market Analyst report" in prompt["prompt"]
+    assert status == 200 and "API request 1 of 12: Market Analyst report" in prompt["prompt"]
     day = tmp_path / "results" / "AAA" / "2026-10-23"
     assert (day / "prompts" / f"{prompt['prompt_id']}.txt").is_file()
 

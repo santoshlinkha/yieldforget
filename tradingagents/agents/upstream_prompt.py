@@ -199,23 +199,47 @@ ANSWER_FORMAT = {
 }
 
 
+DEEP_STEPS = ("research_manager", "portfolio_manager")   # the framework's deep-thinking tier; the rest are quick
+
+
+def offered_tools(step: str) -> list[tuple[str, str]]:
+    """(name, first line of its description) for each tool the analyst is offered in the graph."""
+    import importlib
+
+    module = {"market": "market_analyst", "news": "news_analyst", "fundamentals": "fundamentals_analyst"}.get(step)
+    if not module:
+        return []
+    tools = importlib.import_module(f"tradingagents.agents.analysts.{module}").TOOLS
+    return [(t.name, (t.description or "").strip().splitlines()[0] if t.description else "") for t in tools]
+
+
 def build(ticker: str, day: str, past_context: str = "", with_data: bool = True) -> str:
-    """The whole prompt: how to play the team, then each agent's own prompt and its tool data, then the answer format."""
+    """The whole prompt as the API calls the framework makes: one request per agent, in graph order, with the
+    messages it sends, the tools it offers, the tool calls an analyst makes and what they return, then the
+    answer format. The chat answers every request in turn."""
     steps = record_prompts(ticker, day, past_context, with_data)
-    head = (f"You are running the TradingAgents multi-agent analysis (TauricResearch) for {ticker} as of {day}, "
-            f"playing every agent yourself, one after another. Below is each agent's own prompt, exactly as the "
-            f"framework sends it. Where an analyst would call tools, the tool results are given under its prompt; "
-            f"use only that data and do not browse. Where a prompt quotes an earlier step as [the ... you wrote in "
-            f"step N], use what you wrote for that step.\n\n"
-            f"Write each step under its heading (## Step N: ...), in order, then end with one JSON block in a "
-            f"```json fence with exactly these keys:\n{json.dumps(ANSWER_FORMAT, indent=1)}")
+    n = len(steps)
+    head = (f"Simulate the TradingAgents framework (TauricResearch) for {ticker} as of {day}. Below are the {n} API "
+            f"requests it sends to its models, in order, exactly as sent: [SYSTEM] and [USER] messages, the tools "
+            f"offered, and for the analysts the tool calls they make ([ASSISTANT -> tool call]) with what each tool "
+            f"returned ([TOOL]). Answer each request as that agent would, in turn. Use only the tool results given; "
+            f"do not browse. Where a later request quotes [the ... you wrote in step N], use your answer to request N.\n\n"
+            f"Write each answer under '## Response N: <agent>', in order, then end with one JSON block in a ```json "
+            f"fence with exactly these keys:\n{json.dumps(ANSWER_FORMAT, indent=1)}")
     parts = [head]
     for i, s in enumerate(steps, 1):
-        block = f"\n\n{'=' * 70}\n## Step {i}: {s['heading']}\n{'=' * 70}\n\n{s['prompt']}"
+        tier = "deep" if s["step"] in DEEP_STEPS else "quick"
+        tools = offered_tools(s["step"])
+        block = (f"\n\n{'=' * 70}\nAPI request {i} of {n}: {s['heading']}  (model tier: {tier}"
+                 f"{'; tools offered: ' + ', '.join(name for name, _ in tools) if tools else '; no tools'})\n{'=' * 70}")
+        if tools:
+            block += "\n[TOOLS]\n" + "\n".join(f"- {name}: {desc}" for name, desc in tools)
+        block += f"\n\n{s['prompt']}"
         for call, result in s["data"]:
-            block += f"\n\n--- tool result: {call} ---\n{result}"
+            block += f"\n\n[ASSISTANT -> tool call] {call}\n[TOOL {call.split('(')[0]}]\n{result}"
+        block += f"\n\n[ASSISTANT] <- your Response {i}: the {s['heading']}"
         parts.append(block)
-    parts.append(f"\n\n{'=' * 70}\nNow write steps 1 to {len(steps)}, then the JSON block.")
+    parts.append(f"\n\n{'=' * 70}\nNow write Responses 1 to {n}, then the JSON block.")
     return "".join(parts)
 
 

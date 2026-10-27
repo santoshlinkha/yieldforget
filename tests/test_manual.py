@@ -38,7 +38,7 @@ def test_the_prompt_is_the_agents_own_in_graph_order(monkeypatch):
 
     offline(monkeypatch)
     p = manual.build_prompt("TPR", "2026-10-23")
-    order = [p.index(f"## Step {i}: {h}") for i, (_, h, _) in enumerate(upstream_prompt.STEPS, 1)]
+    order = [p.index(f"API request {i} of 12: {h}") for i, (_, h, _) in enumerate(upstream_prompt.STEPS, 1)]
     assert order == sorted(order)
     for text in ("You are a Bull Analyst advocating", "As the Research Manager", "As the Aggressive Risk Analyst",
                  "As the Portfolio Manager", "MARKET-DATA", "FUNDAMENTALS-DATA", "STOCKTWITS-POSTS"):
@@ -55,3 +55,14 @@ def test_the_prompt_is_the_agents_own_in_graph_order(monkeypatch):
 def test_the_trader_proposal_is_kept_with_the_decision():
     d = parse_answer('```json\n{"rating": "Buy", "trader": {"action": "Buy", "entry_price": 101.5, "stop_loss": 95}}\n```')
     assert "**Trader Proposal**: action Buy; entry price 101.5; stop loss 95" in decision_markdown(d)
+
+
+def test_the_prompt_reads_as_the_frameworks_api_calls(monkeypatch):
+    from tradingagents.agents import manual
+
+    offline(monkeypatch)
+    p = manual.build_prompt("TPR", "2026-10-23")
+    assert "API request 1 of 12: Market Analyst report  (model tier: quick; tools offered: get_stock_data" in p
+    assert "API request 7 of 12: Research Manager investment plan  (model tier: deep; no tools)" in p
+    assert "[ASSISTANT -> tool call] get_market_data()\n[TOOL get_market_data]\nMARKET-DATA" in p
+    assert "[TOOLS]\n- get_stock_data:" in p and "Now write Responses 1 to 12" in p
