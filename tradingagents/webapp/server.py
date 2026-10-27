@@ -145,7 +145,7 @@ def _finite(value):
 GEMINI_FALLBACKS = ("gemini-3.8-flash", "gemini-3.5-flash-lite")
 
 
-JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "screen", "analysis")
+JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "screen", "analysis", "sector")
 
 
 def _short_error(exc: Exception) -> str:
@@ -183,6 +183,7 @@ class App:
         self.decisions = Job()  # the daily stock decision (and, when asked, this week's model fit)
         self.screen = Job()     # the quality and Wall Street screen
         self.analysis = Job()   # one ticker's agent run for a chosen day, on request
+        self.sector = Job()     # the sector model: study and next-20-session forecast
         self.ratings: dict[str, str] = {}
         self.ratings_date: str | None = None
         self.last_targets: list[str] = []
@@ -308,6 +309,26 @@ class App:
                 "realized": sold - (bought - open_cost), "bought": bought, "sold": sold,
                 "trades": [{k: e[k] for k in ("id", "trade_date", "ticker", "quantity", "price", "cash", "note")}
                            for e in sorted(fills, key=lambda e: (e["trade_date"], e["id"]), reverse=True)]}
+
+    def sector_forecast(self) -> dict:
+        """The saved sector forecast, its validation, and each sector's top stock by the internal model."""
+        from tradingagents.research import sector_model
+        from tradingagents.stocks import daily
+
+        rep = sector_model.latest(self.cache_dir)
+        out = {"job": self.sector.state(), "report": rep}
+        if rep:
+            out["winners"] = sector_model.winners(daily.load(self.store.con), get_sp500_members(self.cache_dir))
+        return out
+
+    def start_sector(self) -> bool:
+        from tradingagents.research import sector_model
+
+        def work(job):
+            rep = sector_model.run(self.cache_dir, self.store, lambda text: job.say(text))
+            return {"status": rep["status"], "as_of": rep["forecast"]["as_of"]}
+
+        return self.sector.start(work)
 
     def model_record(self) -> dict:
         from tradingagents.stocks import feedback
@@ -1546,6 +1567,8 @@ def make_handler(app: App):
                     self._send(HTTPStatus.OK, (STATIC / "ticker.html").read_bytes(), "text/html; charset=utf-8")
                 elif url.path == "/api/ticker":
                     self._json(app.ticker(query.get("symbol", "")))
+                elif url.path == "/api/sector-forecast":
+                    self._json(_finite(app.sector_forecast()))
                 elif url.path == "/api/portfolio-view":
                     self._json(_finite(app.portfolio_view()))
                 elif url.path == "/api/track-record":
@@ -1677,6 +1700,8 @@ def make_handler(app: App):
                     with app.lock:
                         saved = keys.save(str(body.get("env") or ""), str(body.get("value") or ""))
                     self._json({"saved": saved, "keys": keys.listing()})
+                elif self.path == "/api/sector-forecast":
+                    self._started(app.start_sector(), "The sector model")
                 elif self.path == "/api/jobs/stop":
                     name = str(body.get("job") or "")
                     job = getattr(app, name, None) if name in JOB_NAMES else None

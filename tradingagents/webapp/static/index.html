@@ -346,6 +346,7 @@ select option { background: var(--surface); color: var(--text); }
       <div class="card">
         <p class="muted">Sectors move through four stages against the market: Improving → Leading → Weakening → Lagging. The alerts are the early stages, ahead of the turn, with what moved them.</p>
         <div id="rotAlerts"></div>
+        <div id="secBox" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)"></div>
         <details class="small" style="margin-top:10px"><summary><b>Every sector</b></summary>
           <div class="table-wrap"><table id="rotTable" class="compact"></table></div></details>
         <p class="muted small" id="rotMethod"></p>
@@ -806,6 +807,31 @@ const startDecision = async (train, after) => {
   after();
 };
 $("tdRun").onclick = () => startDecision($("tdTrain").checked, loadTrade);
+// --- the sector model: which sector leads next, and its probable winner ---
+async function loadSectorForecast() {
+  let d;
+  try { d = await api("/api/sector-forecast"); } catch (e) { $("secBox").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+  const j = d.job || {}, r = d.report, w = d.winners || {};
+  let h = `<div class="card-head"><b style="font-size:15px">Next 20 sessions: which sector leads (machine-learning forecast)</b>` +
+    `<button class="ghost small-btn" id="secRun" ${j.running ? "disabled" : ""}>${r ? "Run again" : "Run the sector model"}</button></div>`;
+  if (j.running) h += jobLine(j, "sector");
+  if (!r) h += `<p class="muted small">Not run yet. It studies 2008-2026 and forecasts in a few seconds, on this computer.</p>`;
+  else {
+    const st = r.status || {}, hold = (r.parts || {}).holdout || {}, lr = hold.lambdarank || {};
+    h += `<p class="muted small">LightGBM LambdaRank ranks the 11 sector funds by their expected return over SPY for the 20 sessions after the next close, from each sector's momentum and stage and the market drivers (rates, curve, oil, dollar, credit, VIX). Data to ${esc(r.forecast.as_of)}.</p>` +
+      (st.validated ? "" : `<div class="note">Not validated: ${esc(st.why || "")}. On 2025-26 data it never saw, its order matched the real order with a rank correlation of ${(lr.ic || 0).toFixed(2)}. Shown for reference, not as a signal.</div>`) +
+      `<table class="compact" style="margin-top:8px"><tr><th class="l">#</th><th class="l">Sector</th><th>Expected vs SPY</th><th class="l">Probable winner (internal stock model)</th></tr>` +
+      r.forecast.sectors.map(x => { const win = w[x.ticker];
+        return `<tr${x.rank <= 3 ? ' class="chosen"' : ""}><td class="l">${x.rank}</td><td class="l"><b>${tk(x.ticker)}</b> ${esc(x.name)}</td><td>${spct(x.expected_excess, 1)}</td>` +
+          `<td class="l">${win ? `<b>${tk(win.ticker)}</b> <span class="muted small">${esc(win.name)} · #${win.rank} of ${win.of}</span>` : '<span class="muted">–</span>'}</td></tr>`; }).join("") + "</table>" +
+      `<p class="muted small">Rotation into: ${r.forecast.sectors.slice(0, 3).map(x => esc(x.name)).join(", ")}; out of: ${r.forecast.sectors.slice(-3).map(x => esc(x.name)).join(", ")}. ` +
+      `Probable winner: the stock the internal model ranks highest in that sector today (also experimental).</p>`;
+  }
+  $("secBox").innerHTML = h;
+  $("secRun").onclick = async () => { try { await api("/api/sector-forecast", {}); } catch (e) { if (!/already running/.test(e.message)) showError(e.message); } loadSectorForecast(); };
+  if (j.running) setTimeout(loadSectorForecast, 2000);
+}
+
 async function loadRotation() {
   let r;
   try { r = await api("/api/rotation"); } catch (e) { $("rotAsOf").textContent = ""; $("rotAlerts").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
@@ -1556,7 +1582,7 @@ $("agSave").onclick = async () => {
     drawEditors();
     $("watchList").value = (state.watchlist || []).join(", ");
   } catch (e) { showError(e.message); }
-  loadTrade(); loadPortfolio(); loadRotation(); loadCapital(); loadKeys(); loadTrackRecord(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
+  loadTrade(); loadPortfolio(); loadRotation(); loadSectorForecast(); loadCapital(); loadKeys(); loadTrackRecord(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
   loadMarket(); loadForecasts(); loadLive(); loadHardware();
 })();
 </script>
