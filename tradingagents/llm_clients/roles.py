@@ -51,15 +51,20 @@ def validate(mapping) -> dict[str, dict[str, str]]:
     return out
 
 
+def tier_model(config: dict, tier: str) -> tuple[str, str]:
+    """(provider, model) of the quick or deep tier: the tier's own provider, else the run's."""
+    from .factory import tier_provider
+
+    return tier_provider(config, tier), config[f"{tier}_think_llm"]
+
+
 def resolve(config: dict) -> dict[str, tuple[str, str]]:
     """(provider, model) for every role."""
-    default = config["llm_provider"].lower()
     overrides = validate(config.get("agent_models"))
     out = {}
     for role, (_, _, tier) in ROLES.items():
         spec = overrides.get(role)
-        out[role] = (spec["provider"], spec["model"]) if spec else \
-            (default, config["deep_think_llm" if tier == "deep" else "quick_think_llm"])
+        out[role] = (spec["provider"], spec["model"]) if spec else tier_model(config, tier)
     return out
 
 

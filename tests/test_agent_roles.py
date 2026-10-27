@@ -51,8 +51,11 @@ def test_the_graph_builds_one_client_per_provider_and_model(tmp_path, monkeypatc
         def get_llm(self):
             return self.llm
 
-    monkeypatch.setattr(trading_graph, "create_llm_client",
-                        lambda provider, model, base_url=None, **k: Client(provider, model, base_url, **k))
+    from tradingagents.llm_clients import factory
+
+    fake = lambda provider, model, base_url=None, **k: Client(provider, model, base_url, **k)  # noqa: E731
+    monkeypatch.setattr(trading_graph, "create_llm_client", fake)
+    monkeypatch.setattr(factory, "create_llm_client", fake)   # the quick and deep tiers (upstream's tier clients)
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg.update(results_dir=str(tmp_path / "r"), data_cache_dir=str(tmp_path / "c"), memory_log_path=str(tmp_path / "m.md"),
                backend_url="http://own-endpoint", agent_models={"bear": {"provider": "google", "model": "g-flash"},
