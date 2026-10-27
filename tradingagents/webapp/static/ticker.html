@@ -844,16 +844,28 @@ function renderMarkdown(src) {
 // --- what each agent sent to the model and what came back ---
 function callsView(calls) {
   const tin = calls.reduce((a, c) => a + (c.input_tokens || 0), 0), tout = calls.reduce((a, c) => a + (c.output_tokens || 0), 0);
-  // Replies are Markdown and render as such; what was sent stays as sent (prompts and raw tool data).
-  const msg = (m, rendered) => `<div style="margin:6px 0"><span class="flabel">${esc(m.role)}${m.name ? " · " + esc(m.name) : ""}</span>` +
-    (m.content ? (rendered ? `<div style="max-height:420px;overflow:auto">${renderMarkdown(m.content)}</div>`
-                           : `<div class="report" style="max-height:260px;overflow:auto">${esc(m.content)}</div>`) : "") +
+  // Every message renders as Markdown (instructions, prompts, replies); raw data a tool returned (JSON, or CSV-like
+  // rows of numbers) stays monospaced, JSON pretty-printed, since Markdown would run its lines together.
+  const rawData = text => {
+    const t = String(text).trim();
+    if (/^[\[{]/.test(t)) { try { return JSON.stringify(JSON.parse(t), null, 2); } catch (e) { return t; } }
+    const rows = t.split(/\r?\n/).filter(l => l.trim());
+    const csv = rows.filter(l => (l.match(/,/g) || []).length >= 2 && !/^\s*([-*+#>|]|\d+[.)]\s)/.test(l)).length;
+    return rows.length >= 3 && csv / rows.length > 0.6 ? t : null;
+  };
+  const body = m => {
+    const data = rawData(m.content);
+    return data != null ? `<pre class="report" style="max-height:320px;overflow:auto;margin:4px 0">${esc(data)}</pre>`
+                        : `<div style="max-height:420px;overflow:auto">${renderMarkdown(m.content)}</div>`;
+  };
+  const msg = m => `<div style="margin:6px 0"><span class="flabel">${esc(m.role)}${m.name ? " · " + esc(m.name) : ""}</span>` +
+    (m.content ? body(m) : "") +
     (m.tool_calls ? `<div class="small">asks for: ${m.tool_calls.map(t => `<code>${esc(t.name)}(${esc(JSON.stringify(t.args))})</code>`).join(", ")}</div>` : "") + `</div>`;
   return `<p class="small muted">${calls.length} requests · ${tin.toLocaleString()} tokens sent · ${tout.toLocaleString()} received. Each request repeats the agent's instructions and the conversation so far; the reply is either tool calls (fetch data) or the agent's text.</p>` +
     calls.map(c => `<details style="margin:4px 0"><summary class="small"><b>#${c.n} ${esc(c.agent || "agent")}</b> · ${esc(c.model || "")} · ${c.input_tokens ?? "?"} in / ${c.output_tokens ?? "?"} out · ${c.seconds ?? "?"} s${c.error ? ` · <span class="neg">error</span>` : ""}${c.received && c.received.tool_calls ? " · tool calls" : ""}</summary>` +
       (c.tools_offered.length ? `<p class="small muted">Tools offered: ${c.tools_offered.map(esc).join(", ")}</p>` : "") +
-      `<h4 class="small" style="margin:8px 0 2px">Sent</h4>${c.sent.map(m => msg(m, false)).join("")}` +
-      `<h4 class="small" style="margin:8px 0 2px">Came back</h4>${c.error ? `<p class="neg small">${esc(c.error)}</p>` : msg(c.received || {}, true)}</details>`).join("");
+      `<h4 class="small" style="margin:8px 0 2px">Sent</h4>${c.sent.map(m => msg(m)).join("")}` +
+      `<h4 class="small" style="margin:8px 0 2px">Came back</h4>${c.error ? `<p class="neg small">${esc(c.error)}</p>` : msg(c.received || {})}</details>`).join("");
 }
 
 // --- signals: the saved trend, breakout and crash forecasts, and today's decision for this stock ---
