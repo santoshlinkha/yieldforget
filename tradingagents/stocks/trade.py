@@ -80,5 +80,6 @@ def plan(decision: dict | None, budget: float, patient_limits: dict[str, dict] |
     if not best:
         notes.append("No stock passes the model's gates today: waiting is the answer.")
     return {"ready": True, "decision_id": decision.get("id"), "data_to": decision.get("info_cutoff"),
+            "universe": decision.get("universe"),
             "executes": decision.get("execution_date"), "mode": mode, "budget": round(budget, 2),
             "best": best, "runners_up": picks[1:], "sells": sells, "notes": notes}

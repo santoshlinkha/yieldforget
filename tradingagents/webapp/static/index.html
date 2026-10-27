@@ -270,6 +270,8 @@ select option { background: var(--surface); color: var(--text); }
 .jobline { font-size: 13px; line-height: 1.45; }
 .jobline .evs { margin: 3px 0 2px 18px; font-size: 12px; color: var(--muted); }
 .jobline .ev { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#keysTable input { font: inherit; font-size: 13px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 10px; }
+#keysTable input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
 </style>
 </head>
 <body>
@@ -308,6 +310,7 @@ select option { background: var(--surface); color: var(--text); }
           <div class="card">
             <div class="card-head"><h3>Best stock to buy</h3><span class="muted small" id="buyMeta"></span></div>
             <div id="buyBox"><p class="muted">Loading…</p></div>
+            <div id="agentBox"></div>
           </div>
           <div class="card">
             <h3>Sell</h3>
@@ -503,6 +506,12 @@ select option { background: var(--surface); color: var(--text); }
         </div>
         <p class="muted small" id="capPlan"></p>
       </div>
+      <div class="card" id="watchCard">
+        <h3>Companies the model scores</h3>
+        <p class="muted">Every company in the S&amp;P 500 is scored after each close. Add any other US-listed stocks here (tickers, separated by commas or spaces): they are scored the same way, ranked against the S&amp;P 500, and can be picked as the best buy. Funds are not scored by the stock model.</p>
+        <textarea id="watchList" placeholder="e.g. PLTR, HIMS, SOFI, RKLB"></textarea>
+        <div class="row"><button id="watchSave">Save</button><span class="muted small" id="watchMsg"></span></div>
+      </div>
       <div class="card" id="keysCard">
         <h3>API keys</h3>
         <p class="muted">Stored in the app's <code>.env</code> file on this computer (never committed) and used at once, without a restart. The page only ever shows a masked form. Leave a box empty and press Remove to delete a key.</p>
@@ -607,7 +616,8 @@ async function loadTrade() {
 
   if (!t.ready) { $("buyBox").innerHTML = `<p class="muted">${esc(t.note)}</p>`; $("sellBox").innerHTML = ""; $("runnersTable").innerHTML = ""; }
   else {
-    $("buyMeta").textContent = `${(t.mode || "").toUpperCase()} · data to ${t.data_to} · for the close of ${t.executes}`;
+    const u = t.universe || {};
+    $("buyMeta").textContent = `${(t.mode || "").toUpperCase()} · ${u.sp500 ? `${u.sp500} S&P 500 companies${(u.extra || []).length ? ` + ${u.extra.length} of yours` : ""} scored · ` : ""}data to ${t.data_to} · for the close of ${t.executes}`;
     const x = t.best;
     $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side buy">BUY</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
         <span class="amt">${x.shares ? x.shares.toFixed(4) + " sh" : ""} · ${usd(x.dollars)}</span></div>
@@ -624,7 +634,7 @@ async function loadTrade() {
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell. SGOV is never sold except to fund a buy within the budget.</p>";
     $("runnersTable").innerHTML = t.runners_up.length ? "<tr><th class='l'>Ticker</th><th>Buy limit</th><th>Target</th><th>Stop</th><th>Expected net</th><th>P(profit)</th><th>P(large loss)</th></tr>" +
-      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td>${usd(x.buy_limit)}</td><td class="pos">${usd(x.target)}</td><td class="neg">${usd(x.stop)}</td><td>${spct(x.expected_net)}</td><td>${pct(x.p_win, 0)}</td><td>${pct(x.p_risk, 0)}</td></tr>`).join("")
+      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td>${usd(x.buy_limit)}</td><td class="pos">${usd(x.target)}</td><td class="neg">${usd(x.stop)}</td><td>${spct(x.expected_net)}</td><td>${pct(x.p_win, 0)}</td><td>${pct(x.p_risk, 0)}</td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     const tied = [t.best, ...t.runners_up].filter(x => x && x.tied_with);
     $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted." +
@@ -642,6 +652,11 @@ async function loadTrade() {
       ((pol.top || []).length + (pol.held || []).length ? `<table class="compact" style="margin-top:8px"><tr><th class="l">Ticker</th><th>Model's choice</th><th>Expected vs cash</th><th>Bad case</th><th>P(stop first)</th><th class="l">Action</th></tr>` +
         [...(pol.held || []), ...(pol.top || [])].map(rowP).join("") + "</table>" : "<p class='muted small'>No stock clears the buy margin and the risk budget: cash.</p>");
   }
+
+  agentTicker = agentTicker && t.runners_up.some(x => x.ticker === agentTicker) ? agentTicker : (t.best ? t.best.ticker : null);
+  agentDay = t.data_to;
+  document.querySelectorAll("[data-agents]").forEach(b => b.onclick = () => { agentTicker = b.dataset.agents; loadAgentReport(); runAgents(); });
+  loadAgentReport();
 
   const [cls, label] = STATUS[h.status] || STATUS.unknown;
   $("incBadge").innerHTML = `<span class="tag">${label}</span>`;
@@ -669,6 +684,43 @@ async function loadTrade() {
     : `<p class="muted">${esc(b.note || "")}</p>`;
   loadRecord();
 }
+// --- the TradingAgents team on the model's pick: run it, watch it, read its full report ---
+let agentTicker = null, agentDay = null, agentPolling = false;
+async function loadAgentReport() {
+  const box = $("agentBox");
+  if (!agentTicker) { box.innerHTML = ""; return; }
+  let r = {available: false}, j = {};
+  try { [r, j] = await Promise.all([api("/api/agent-report?ticker=" + encodeURIComponent(agentTicker)), api("/api/analyze")]); } catch (e) { /* shown as no report */ }
+  const mine = j.running && (j.progress || "").startsWith(agentTicker + " ");
+  let h = `<div style="margin:16px 0 4px;padding-top:12px;border-top:1px solid var(--border)"><b style="font-size:15px">AI agents' view of ${tk(agentTicker)}</b>` +
+    `<div class="muted small">TradingAgents team: four analysts, a bull/bear debate, a trader, a risk debate and a portfolio manager</div></div>`;
+  if (j.running) h += jobLine(j, "analysis") + (mine ? "" : `<p class="muted small">Another analysis is running; wait for it to finish.</p>`);
+  else h += `<div class="row" style="margin:4px 0 8px"><button id="runAgentsBtn">${r.available ? "Run again" : "Run the AI agents"} on ${esc(agentTicker)}</button>` +
+    `<span class="muted small">all four analysts, as of ${esc(agentDay || "the last close")}; free models first (Gemini, then OpenRouter), a few minutes</span></div>` +
+    (j.error && (j.attempts || []).length ? `<p class="neg small">Last run failed: ${esc(j.error)}</p>${tries(j.attempts)}` : "");
+  if (r.available) {
+    h += `<div class="agent-final">${miniMarkdown((r.final || "").split(/\r?\n/).slice(0, 14).join("\n"))}</div>` +
+      `<p class="muted small">Saved ${esc(r.saved_at.replace("T", " "))} for ${esc(r.date)}. The model's numbers above decide; the agents' view is context.` +
+      `${r.html ? ` <a href="/report?path=${encodeURIComponent(r.html)}" target="_blank" rel="noopener">Open the full report</a>` : ""}</p>` +
+      `<details id="agentFull"><summary><b>Full report</b></summary><div class="md" id="agentFullBody"><p class="muted">Loading…</p></div></details>`;
+  } else if (!j.running) h += `<p class="muted small">No AI analysis of ${esc(agentTicker)} saved yet.</p>`;
+  box.innerHTML = h;
+  const btn = $("runAgentsBtn");
+  if (btn) btn.onclick = runAgents;
+  const full = $("agentFull");
+  if (full) full.ontoggle = async () => {
+    if (!full.open || full.dataset.loaded) return;
+    try { const res = await fetch("/api/report?path=" + encodeURIComponent(r.markdown)); $("agentFullBody").innerHTML = miniMarkdown(await res.text()); full.dataset.loaded = 1; }
+    catch (e) { $("agentFullBody").textContent = e.message; }
+  };
+  if (j.running && !agentPolling) { agentPolling = true; setTimeout(() => { agentPolling = false; loadAgentReport(); }, 2000); }
+}
+async function runAgents() {
+  try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
+  catch (e) { showError(e.message); }
+  loadAgentReport();
+}
+
 async function loadRecord() {
   let r;
   try { r = await api("/api/model-record"); } catch (e) { $("recordBox").textContent = e.message; return; }
@@ -1134,6 +1186,16 @@ $("dcRun").onclick = async () => {
   try { await api("/api/decisions/run", {train: $("dcTrain").checked}); loadDecisions(); } catch (e) { showError(e.message); }
 };
 
+// --- the extra companies the stock model scores (beside the S&P 500) ---
+$("watchSave").onclick = async () => {
+  const tickers = $("watchList").value.split(/[\s,;]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
+  try {
+    const r = await api("/api/stocks/watchlist", {tickers});
+    $("watchList").value = r.watchlist.join(", ");
+    $("watchMsg").textContent = `${r.watchlist.length} saved. They are scored from the next decision run (Trade → Make today's decision).`;
+  } catch (e) { $("watchMsg").textContent = e.message; }
+};
+
 // --- API keys: masked here, saved to .env on this computer ---
 async function loadKeys() {
   let d;
@@ -1421,6 +1483,7 @@ $("agSave").onclick = async () => {
   try {
     state = await api("/api/state");
     drawEditors();
+    $("watchList").value = (state.watchlist || []).join(", ");
   } catch (e) { showError(e.message); }
   loadTrade(); loadRotation(); loadCapital(); loadKeys(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
   loadMarket(); loadForecasts(); loadLive(); loadHardware();

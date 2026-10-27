@@ -320,14 +320,15 @@ def review_lot(lot: dict, cutoff: pd.Timestamp, sessions: pd.DatetimeIndex, px: 
 
 
 def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value: float, spendable: float,
-            ira: dict, prices: pd.Series, validated: bool, cutoff, execute) -> list[dict]:
+            ira: dict, prices: pd.Series, validated: bool, cutoff, execute, extra: set | None = None) -> list[dict]:
     """ENTER (validated) or PAPER ENTER (experimental) and WAIT, with sizes and blocked constraints."""
     out = []
     # The model's own order: its score, then P(profit), then the ticker (the same order as the saved ranks),
     # so the input order never decides which tied stock comes first. Not the expected net: that comes from
     # a binned map that need not rise with the score, and would put lower-ranked stocks first. Ties of the
     # expected net are still marked, since tied stocks share one estimate.
-    cand = today[today["in_index"]].reset_index().rename(columns={"index": "ticker"})
+    # Candidates: today's S&P 500 members and the extra companies chosen in Settings (the watchlist).
+    cand = today[today["in_index"] | today.index.isin(list(extra or ()))].reset_index().rename(columns={"index": "ticker"})
     cand = cand.sort_values(["score_pct", "p_win", "ticker"], ascending=[False, False, True])
     ties = cand.groupby("expected_net")["ticker"].transform("count")
     cand = cand.assign(tied_with=ties - 1).set_index("ticker")
@@ -407,7 +408,8 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     # (outside the S&P 500 a stock is ranked against that day's members; funds are turned away by classify).
     wanted = {lot["ticker"] for lot in lots}
     wanted |= {t for t, q in store.ledger.state("combined", as_of).positions.items() if q and t not in CASH_FUNDS}
-    wanted |= {str(t).upper() for t in store.get("global", "stock_watchlist") or []}
+    watch = {str(t).upper() for t in store.get("global", "stock_watchlist") or []}
+    wanted |= watch
     data = D.load(sorted(wanted), cache_dir, progress=lambda stage, done=None, count=None, **_: say(
         f"loading data: {stage}" + (f" ({done} of {count})" if done is not None else f" ({count})" if count else "")))
     spy = data.close["SPY"].dropna()
@@ -474,7 +476,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     spendable = max(0.0, pot["available"] - state.cash.reserved)
     entry_lines = entries(today, {lot["ticker"] for lot in lots},
                           {x["ticker"] for x in reviews if x["action"] == "EXIT"}, r, sleeve_value, spendable, ira,
-                          prices, ev["validated"], cutoff, execute)
+                          prices, ev["validated"], cutoff, execute, extra=watch)
     if freshness > 4:
         for line in entry_lines:
             line["action"], line["blocked"] = "WAIT", [*line["blocked"], f"data is {freshness} days old"]
@@ -509,12 +511,15 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     try:
         rows_today = at.xs(cutoff, level="date", drop_level=False)
         rows_today = rows_today[rows_today["in_index"] | rows_today.index.get_level_values("ticker").isin(
-            [lot["ticker"] for lot in lots])]
+            [lot["ticker"] for lot in lots] + sorted(watch))]
         policy_view = live_view(latest_bundle(cache_dir, cutoff.date()), rows_today, {lot["ticker"] for lot in lots},
                                 dict(zip(today.index, today["cost_rt"], strict=False)), freshness)
     except Exception as exc:   # the rules' decision stands without it; the page says why
         policy_view = {"available": False, "note": f"the policy model could not score today: {exc}"}
     payload = {"lots": reviews, "entries": entry_lines, "freshness_days": freshness, "scores": scores,
+               "universe": {"sp500": int(today["in_index"].sum()),
+                            "extra": sorted(t for t in watch if t in today.index and not today.loc[t, "in_index"]),
+                            "extra_missing": sorted(t for t in watch if t not in today.index)},
                "policy": policy_view,
                "horizon": policy.horizon,
                "summary": {a: sum(1 for x in reviews + entry_lines if x["action"] == a)

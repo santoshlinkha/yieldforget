@@ -1396,12 +1396,34 @@ class App:
 
         return job.start(work)
 
-    def report(self, path: str) -> str:
+    def report(self, path: str, suffix: str = ".md") -> str:
         """A saved analysis report, only from the report folders."""
         target = Path(path).resolve()
-        if target.suffix != ".md" or not any(root in target.parents for root in self.report_roots()):
+        if target.suffix != suffix or not any(root in target.parents for root in self.report_roots()):
             raise ValueError("not a saved report")
         return target.read_text(encoding="utf-8")
+
+    def latest_agent_report(self, ticker: str) -> dict:
+        """The newest saved TradingAgents run for a ticker: its day, final decision text and report files."""
+        from tradingagents.dataflows.symbols import safe_ticker_component
+
+        ticker = ticker.strip().upper()
+        if not ticker:
+            raise ValueError("no ticker")
+        found = []
+        for root in self.report_roots():
+            base = root / safe_ticker_component(ticker)
+            if base.is_dir():
+                found += [d / "reports" for d in base.iterdir() if (d / "reports" / "complete_report.md").is_file()]
+        if not found:
+            return {"ticker": ticker, "available": False}
+        folder = max(found, key=lambda f: (f.parent.name, (f / "complete_report.md").stat().st_mtime))
+        final = folder / "0_FINAL_DECISION.md"
+        return {"ticker": ticker, "available": True, "date": folder.parent.name,
+                "saved_at": datetime.fromtimestamp((folder / "complete_report.md").stat().st_mtime).isoformat(timespec="minutes"),
+                "final": final.read_text(encoding="utf-8") if final.is_file() else None,
+                "markdown": str((folder / "complete_report.md").resolve()),
+                "html": str((folder / "complete_report.html").resolve()) if (folder / "complete_report.html").is_file() else None}
 
     # --- research ---
 
@@ -1490,13 +1512,17 @@ def make_handler(app: App):
                     self._send(HTTPStatus.OK, (STATIC / "ticker.html").read_bytes(), "text/html; charset=utf-8")
                 elif url.path == "/api/ticker":
                     self._json(app.ticker(query.get("symbol", "")))
+                elif url.path == "/api/agent-report":
+                    self._json(app.latest_agent_report(query.get("ticker", "")))
+                elif url.path == "/report":
+                    self._send(HTTPStatus.OK, app.report(query.get("path", ""), ".html").encode(), "text/html; charset=utf-8")
                 elif url.path == "/api/report":
                     self._send(HTTPStatus.OK, app.report(query.get("path", "")).encode(), "text/plain; charset=utf-8")
                 elif url.path == "/api/state":
                     context, _ = app.store.portfolio("combined", _today())
                     config = read_config(app.universe_path)
                     self._json({"portfolio": context.model_dump(exclude_none=True), "universe": config,
-                                "groups": GROUPS})
+                                "groups": GROUPS, "watchlist": app.store.get("global", "stock_watchlist") or []})
                 elif url.path == "/api/trade":
                     self._json(_finite(app.trade()))
                 elif url.path == "/api/income":

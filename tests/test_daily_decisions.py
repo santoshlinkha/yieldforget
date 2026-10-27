@@ -234,3 +234,17 @@ def test_validation_is_bound_to_the_model_code_policy_and_shadow_version(env):
     assert not daily.evidence(store.con, "barrier_20", feats, th, r)["validated"]
     shadow(version=SHADOW_VERSION, policy=pol.version(), **many)
     assert daily.evidence(store.con, "barrier_20", feats, th, r)["validated"]
+
+
+def test_companies_added_in_settings_compete_with_the_index_members():
+    today = pd.DataFrame({"expected_net": [0.05, 0.05, 0.05], "net_sd": [0.1] * 3, "net_q10": [-0.1] * 3,
+                          "expected_excess": [0.02] * 3, "p_win": [0.7] * 3, "p_risk": [0.05] * 3, "sigma": [0.02] * 3,
+                          "cost_rt": [0.003] * 3, "score_pct": [0.5, 0.99, 0.9], "in_index": [True, False, False]},
+                         index=["AAA", "PLTR", "XYZ"])
+    r = {**daily.DEFAULT_RULES, "max_names": 5, "max_position_share": 0.25, "min_order": 1.0, "max_large_loss_prob": 0.15}
+    args = (today, set(), set(), r, 1000.0, 1000.0, {"total": 6000.0, "by_ticker": {}},
+            pd.Series({"AAA": 10.0, "PLTR": 20.0, "XYZ": 5.0}))
+    without = daily.entries(*args, validated=True, cutoff=None, execute="2026-10-26")
+    assert [x["ticker"] for x in without] == ["AAA"]                     # outside the index: not a candidate
+    lines = daily.entries(*args, validated=True, cutoff=None, execute="2026-10-26", extra={"PLTR"})
+    assert [x["ticker"] for x in lines] == ["PLTR", "AAA"]              # ranked with the members, by score
