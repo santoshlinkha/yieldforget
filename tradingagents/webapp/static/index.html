@@ -267,7 +267,12 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px
 select:disabled { opacity: .55; cursor: not-allowed; }
 select option { background: var(--surface); color: var(--text); }
 .try .spin { display: inline-block; width: 9px; height: 9px; border-width: 2px; margin-right: 4px; vertical-align: -1px; }
-.jobline { font-size: 13px; line-height: 1.45; }
+.jobline { font-size: 13px; line-height: 1.45; min-width: 260px; }
+.pbar { height: 6px; border-radius: 99px; background: var(--border); overflow: hidden; margin: 2px 0 6px; }
+.pbar i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .6s ease; }
+.pbar.busy i { width: 30%; animation: pbar 1.4s ease-in-out infinite; }
+@keyframes pbar { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .pbar.busy i { animation: none; width: 100%; opacity: .4; } }
 .jobline .evs { margin: 3px 0 2px 18px; font-size: 12px; color: var(--muted); }
 .jobline .ev { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #keysTable input { font: inherit; font-size: 13px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 10px; }
@@ -329,10 +334,6 @@ select option { background: var(--surface); color: var(--text); }
           </div>
         </div>
         <div>
-          <div class="card">
-            <div class="card-head"><h3>SGOV interest</h3><span id="incBadge"></span></div>
-            <div id="incBox"></div>
-          </div>
           <div class="card">
             <div class="card-head"><h3>Trading budget</h3><button class="ghost" data-goto="settings">Settings →</button></div>
             <div id="budgetBox"></div>
@@ -512,11 +513,9 @@ select option { background: var(--surface); color: var(--text); }
       <div class="page-head"><div><h2>Settings</h2><p>The money settings, your holdings, the agents' models, and the ETFs to forecast. Kept in portfolio.sqlite3; the ETF list in its file next to the app.</p></div></div>
       <div class="card" id="capitalCard">
         <h3>Money</h3>
-        <p class="muted">The daily deposit goes into SGOV, the base, which is never traded. Its monthly interest and the broker's match on the deposits are the trading budget. Changing these moves no money; set the same recurring buy at Robinhood.</p>
+        <p class="muted">The money set aside for buying stocks. The model sizes buys from what is left of it: the budget less what goes into stocks, plus what comes back from sales. Saving a new amount starts the count again from today. It moves no money.</p>
         <div class="row">
-          <div style="width:200px"><label for="capDaily">SGOV buy ($ per market day)</label><input type="number" id="capDaily" step="0.01" min="0"></div>
-          <div style="width:170px"><label for="capMatch">Match on deposits (%)</label><input type="number" id="capMatch" step="0.1" min="0" max="10"></div>
-          <div style="width:220px"><label for="capDry">Interest has dried up under (% a year)</label><input type="number" id="capDry" step="0.1" min="0" max="10"></div>
+          <div style="width:220px"><label for="capBudget">Trading budget ($)</label><input type="number" id="capBudget" step="0.01" min="0"></div>
           <button id="capSave">Save</button>
           <span class="muted small" id="capStatus"></span>
         </div>
@@ -624,11 +623,10 @@ async function loadTrade() {
   const stocks = Object.entries(a.positions || {}).filter(([k]) => k !== "SGOV").reduce((s, [, p]) => s + (p.value || 0), 0);
   $("subtitle").textContent = `${t.data_to ? "data to " + t.data_to : "no decision yet"} · ${usd(a.equity || 0)}`;
   $("kpis").innerHTML =
-    kpi("Trading budget", usd(b.available || 0), b.started ? `interest + match since ${b.started}, less what is in stocks` : esc(b.note || ""), "hero") +
-    kpi("SGOV (the base)", usd(inc.sgov_value || 0), h.latest_yield != null ? `yielding ${pct(h.latest_yield, 2)} a year · ${usd(pr.interest_per_month || 0)}/month` : "") +
-    kpi("Interest earned", usd((b.interest || {}).earned || 0), `${esc((b.interest || {}).basis || "")} · last dividend ${h.last_dividend ? esc(h.last_dividend.date) : "–"}`) +
-    kpi("Match earned", usd((b.match || {}).earned || 0), `${pct((b.settings || {}).match_rate, 0)} of ${usd((b.match || {}).deposits || 0)} deposited (${esc((b.match || {}).basis || "")})`) +
-    kpi("In stocks", usd(stocks), `${Object.keys(a.positions || {}).filter(k => k !== "SGOV").length} names · ${usd(((b.traded || {}).spent) || 0)} bought, ${usd(((b.traded || {}).returned) || 0)} back`);
+    kpi("Trading budget", usd(b.set || 0), b.started ? `set on ${b.started} (Settings)` : esc(b.note || ""), "hero") +
+    kpi("Available now", usd(b.available || 0), "the budget less what is in stocks, plus sales") +
+    kpi("In stocks", usd(stocks), `${Object.keys(a.positions || {}).filter(k => k !== "SGOV").length} names · ${usd(((b.traded || {}).spent) || 0)} bought, ${usd(((b.traded || {}).returned) || 0)} back`) +
+    kpi("Account value", usd(a.equity || 0), `SGOV ${usd(inc.sgov_value || 0)} and stocks`);
 
   if (!t.ready) { $("buyBox").innerHTML = `<p class="muted">${esc(t.note)}</p>`; $("sellBox").innerHTML = ""; $("runnersTable").innerHTML = ""; }
   else {
@@ -674,28 +672,12 @@ async function loadTrade() {
   document.querySelectorAll("[data-agents]").forEach(b => b.onclick = () => { agentTicker = b.dataset.agents; loadAgentReport(); runAgents(); });
   loadAgentReport();
 
-  const [cls, label] = STATUS[h.status] || STATUS.unknown;
-  $("incBadge").innerHTML = `<span class="tag">${label}</span>`;
-  const alt = h.alternatives;
-  $("incBox").innerHTML = h.status === "unknown" ? `<p class="muted">${esc(h.message || "")}</p>` :
-    `<p>Latest dividend ${h.last_dividend ? usd(h.last_dividend.per_share) + " a share on " + esc(h.last_dividend.date) : "–"}: <b>${pct(h.latest_yield, 2)}</b> a year` +
-    `${h.trailing_yield != null ? ` (last twelve months ${pct(h.trailing_yield, 2)})` : ""}. The 13-week bill rate, what SGOV earns next: ${pct(h.bill_rate, 2)}` +
-    `${h.bill_rate_6m_ago != null ? `, ${pct(h.bill_rate_6m_ago, 2)} six months ago` : ""}. Your line for "dried up": ${pct(h.dry_yield, 1)}.</p>` +
-    (h.reasons || []).map(r => `<div class="${cls}">${esc(r)}</div>`).join("") +
-    (alt ? `<h4 style="margin:12px 0 4px">Where the daily ${usd((b.settings || {}).daily_sgov_usd || 0)} could go instead</h4>
-      ${alt.pick ? `<p><b>Suggested: ${tk(alt.pick)}</b>. ${esc(alt.why)}</p>` : `<p>${esc(alt.why)}</p>`}
-      <table class="compact"><tr><th class="l">Fund</th><th class="l">What</th><th>Yield</th><th>1 year</th><th>Worst fall, 5y</th></tr>` +
-      alt.rows.map(r => `<tr class="${r.ticker === alt.pick ? "chosen" : ""}"><td class="l"><b>${tk(r.ticker)}</b></td><td class="l small">${esc(r.what)}<div class="muted">${esc(r.fits)}</div></td><td>${r.yield == null ? "–" : pct(r.yield, 2)}</td><td>${r.one_year == null ? "–" : spct(r.one_year, 1)}</td><td>${r.worst_fall_5y == null ? "–" : spct(r.worst_fall_5y, 0)}</td></tr>`).join("") +
-      `</table><p class="muted small">${esc(alt.note)}</p>` : `<p class="muted small">While SGOV's interest holds up, the daily ${usd((b.settings || {}).daily_sgov_usd || 0)} keeps going into SGOV. If it falls under your line, or bill rates fall fast, other places for it are listed here.</p>`);
-
-  const i = b.interest || {}, m = b.match || {}, tr = b.traded || {};
+  const tr = b.traded || {};
   $("budgetBox").innerHTML = b.started ? `<table class="compact">
-      <tr><td class="l">SGOV interest since ${esc(b.started)}</td><td>${usd(i.earned || 0)}</td><td class="muted l small">${esc(i.basis)}${(i.items || []).length ? ": " + i.items.map(x => `${esc(x.date)} ${usd(x.amount)}`).join(", ") : ": no dividend yet"}</td></tr>
-      <tr><td class="l">Match (${pct((b.settings || {}).match_rate, 0)} of deposits)</td><td>${usd(m.earned || 0)}</td><td class="muted l small">${esc(m.basis)}: ${usd(m.deposits || 0)} deposited${m.sessions != null ? ` over ${m.sessions} sessions at ${usd((b.settings || {}).daily_sgov_usd || 0)}` : ""}</td></tr>
-      <tr><td class="l">Into stocks</td><td class="neg">−${usd(tr.spent || 0)}</td><td></td></tr>
-      <tr><td class="l">Back from sales</td><td class="pos">+${usd(tr.returned || 0)}</td><td></td></tr>
-      <tr><td class="l"><b>Available to trade</b></td><td><b>${usd(b.available || 0)}</b></td><td></td></tr></table>
-      <p class="muted small">Next month at today's rates: about ${usd(pr.interest_per_month || 0)} of interest and ${usd(pr.match_per_month || 0)} of match. ${esc(pr.limit_note || "")}</p>` +
+      <tr><td class="l">Budget set on ${esc(b.started)}</td><td>${usd(b.set || 0)}</td></tr>
+      <tr><td class="l">Into stocks since</td><td class="neg">−${usd(tr.spent || 0)}</td></tr>
+      <tr><td class="l">Back from sales</td><td class="pos">+${usd(tr.returned || 0)}</td></tr>
+      <tr><td class="l"><b>Available to trade</b></td><td><b>${usd(b.available || 0)}</b></td></tr></table>` +
       (b.notes || []).map(n => `<p class="muted small">${esc(n)}</p>`).join("")
     : `<p class="muted">${esc(b.note || "")}</p>`;
   loadRecord();
@@ -771,9 +753,13 @@ async function loadRecord() {
        <p class="${c.active ? "pos" : "muted"}">${c.active ? `Live calibration on: P(profit) and expected net are corrected from ${c.rows} matured predictions.` : esc(c.note || "")}</p>
        <table class="compact"><tr><th class="l">P(profit) said</th><th>Times</th><th>Average said</th><th>Happened</th></tr>${(r.calibration || []).map(x => `<tr><td class="l">${esc(x.bin)}</td><td>${x.n}</td><td>${pct(x.predicted, 0)}</td><td>${pct(x.realized, 0)}</td></tr>`).join("")}</table>`;
 }
-$("tdRun").onclick = async () => {
-  try { await api("/api/decisions/run", {train: $("tdTrain").checked}); loadTrade(); } catch (e) { showError(e.message); }
+// A click while a run is going shows its progress instead of an error.
+const startDecision = async (train, after) => {
+  try { await api("/api/decisions/run", {train}); }
+  catch (e) { if (!/already running/.test(e.message)) { showError(e.message); return; } }
+  after();
 };
+$("tdRun").onclick = () => startDecision($("tdTrain").checked, loadTrade);
 async function loadRotation() {
   let r;
   try { r = await api("/api/rotation"); } catch (e) { $("rotAsOf").textContent = ""; $("rotAlerts").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
@@ -1159,7 +1145,10 @@ function jobLine(j, name) {
   if (!j || !j.running) return "";
   const mins = s => s == null ? "" : s < 90 ? `${s}s` : `${Math.round(s / 60)} min`;
   const steps = (j.events || []).slice(-4, -1).map(e => `<div class="ev"><span class="muted">${esc(e.at)}</span> ${esc(e.text)}</div>`).join("");
-  return `<div class="jobline"><span class="spin"></span><b>${esc(j.progress)}</b> <span class="muted small">· ${mins(j.elapsed)}</span>` +
+  const bar = j.fraction != null
+    ? `<div class="pbar" title="${Math.round(j.fraction * 100)}%"><i style="width:${Math.max(3, Math.round(j.fraction * 100))}%"></i></div>`
+    : `<div class="pbar busy"><i></i></div>`;
+  return `<div class="jobline">${bar}<span class="spin"></span><b>${esc(j.progress)}</b> <span class="muted small">· ${j.fraction != null ? Math.round(j.fraction * 100) + "% · " : ""}${mins(j.elapsed)}</span>` +
     (steps ? `<div class="evs">${steps}</div>` : "") + tries(j.attempts) +
     (j.stuck ? `<div class="note small">No progress for ${mins(j.idle)}: a download or a provider is not answering. ` +
       `<button class="ghost" onclick="stopJob('${name}')">Stop waiting</button></div>` : "") + `</div>`;
@@ -1203,7 +1192,7 @@ async function loadDecisions() {
   $("dcRun").disabled = j.running;
   if (j.running) setTimeout(loadDecisions, 3000);
   const c = d.capital, st = c.settings;
-  $("dcCapital").innerHTML = `<p class="muted small">Daily SGOV buy ${usd(st.daily_sgov_usd)}, match ${pct(st.match_rate, 1)} (settings v${st.version}). Trading budget available ${usd(c.budget.available || 0)}; account value ${usd(c.value || 0)}.</p>`;
+  $("dcCapital").innerHTML = `<p class="muted small">Trading budget ${usd(st.trading_budget_usd || 0)}, available ${usd(c.budget.available || 0)} (settings v${st.version}); account value ${usd(c.value || 0)}.</p>`;
   const r = d.latest;
   if (!r) { $("dcHead").innerHTML = "<p class='muted'>No decision yet. Make one (fit models the first time).</p>"; $("dcLots").innerHTML = $("dcEntries").innerHTML = ""; }
   else {
@@ -1222,9 +1211,7 @@ async function loadDecisions() {
   $("dcHistory").innerHTML = "<tr><th class='l'>Data to</th><th>Executes</th><th>Mode</th><th class='l'>Actions</th><th>Settings</th></tr>" +
     d.history.map(h => `<tr><td class="l">${esc(h.info_cutoff)}</td><td>${esc(h.execution_date)}</td><td>${esc(h.mode)}</td><td class="l small">${Object.entries(h.summary || {}).filter(([, n]) => n).map(([a, n]) => `${a} ${n}`).join(", ")}${h.paper_enters ? `, paper ${h.paper_enters}` : ""}</td><td>v${h.settings_version}</td></tr>`).join("");
 }
-$("dcRun").onclick = async () => {
-  try { await api("/api/decisions/run", {train: $("dcTrain").checked}); loadDecisions(); } catch (e) { showError(e.message); }
-};
+$("dcRun").onclick = () => startDecision($("dcTrain").checked, loadDecisions);
 
 // --- the extra companies the stock model scores (beside the S&P 500) ---
 $("watchSave").onclick = async () => {
@@ -1268,16 +1255,14 @@ async function loadCapital() {
   let c;
   try { c = await api("/api/capital"); } catch (e) { $("capStatus").textContent = e.message; return; }
   const st = c.settings, b = c.budget;
-  $("capDaily").value = st.daily_sgov_usd; $("capMatch").value = +(st.match_rate * 100).toFixed(2); $("capDry").value = +(st.dry_yield * 100).toFixed(2);
-  $("capStatus").textContent = `settings version ${st.version} (${st.hash})`;
-  $("capPlan").textContent = `The strategy started ${c.started || "–"}. Account value ${usd(c.value || 0)}; trading budget available ${usd(b.available || 0)}.`;
+  $("capBudget").value = st.trading_budget_usd;
+  $("capStatus").textContent = `settings version ${st.version}`;
+  $("capPlan").textContent = b.started ? `Set on ${b.started}: ${usd(b.set || 0)}; ${usd((b.traded || {}).spent || 0)} into stocks since, ${usd((b.traded || {}).returned || 0)} back; available ${usd(b.available || 0)}. Account value ${usd(c.value || 0)}.`
+    : `No trading budget set yet. Account value ${usd(c.value || 0)}.`;
 }
 $("capSave").onclick = async () => {
-  try {
-    await api("/api/capital", {values: {daily_sgov_usd: +$("capDaily").value, match_rate: +$("capMatch").value / 100,
-                                        dry_yield: +$("capDry").value / 100}});
-    loadCapital(); loadTrade();
-  } catch (e) { showError(e.message); }
+  try { await api("/api/capital", {values: {trading_budget_usd: +$("capBudget").value}}); loadCapital(); loadTrade(); }
+  catch (e) { showError(e.message); }
 };
 
 // --- settings editors ---

@@ -16,10 +16,10 @@ DAY = date(2026, 10, 1)
 
 def test_defaults_persist_across_restarts_and_validate(tmp_path):
     store = Store(tmp_path)
-    assert capital.load(store) == capital.Capital(29.0, 0.03, 0.02)
+    assert capital.load(store) == capital.Capital(0.0, 29.0, 0.03, 0.02)
     capital.update(store, {"daily_sgov_usd": "30.005", "match_rate": 0.01})
     again = Store(tmp_path)
-    assert capital.load(again) == capital.Capital(30.0, 0.01, 0.02)
+    assert capital.load(again) == capital.Capital(0.0, 30.0, 0.01, 0.02)
     for bad in ({"daily_sgov_usd": -1}, {"match_rate": 0.5}, {"daily_sgov_usd": "lots"}, {"nope": 1}):
         with pytest.raises(ValueError):
             capital.update(again, bad)
@@ -42,7 +42,21 @@ def test_a_setting_change_moves_no_money(tmp_path):
     assert store.ledger.state(None, DAY).cash.total == 500.0
 
 
-def test_the_budget_is_interest_and_match_less_what_went_into_stocks(tmp_path, monkeypatch):
+def test_the_budget_is_what_was_set_less_what_went_into_stocks_since(tmp_path):
+    from datetime import date as d
+
+    store = Store(tmp_path)
+    assert income.budget(store, tmp_path, d.today())["available"] == 0.0           # nothing set yet
+    capital.update(store, {"trading_budget_usd": 100})
+    today = d.today()
+    store.ledger.contribute(100.0, today, settle_date=today)
+    store.ledger.fill("trading", "buy", "AAA", 2.0, 10.0, today, settle_date=today)
+    store.ledger.fill("trading", "sell", "AAA", 1.0, 12.0, today, settle_date=today)
+    b = income.budget(store, tmp_path, str(today))                                  # a date string works too
+    assert b["set"] == 100.0 and b["traded"] == {"spent": 20.0, "returned": 12.0} and b["available"] == 92.0
+
+
+def test_the_earlier_interest_budget_is_interest_and_match_less_what_went_into_stocks(tmp_path, monkeypatch):
     store = Store(tmp_path)
     store.ledger.record("opening_position", "trading", DAY, ticker="SGOV", quantity=100.0, source="manual")
     income.set_start(store, DAY)
@@ -50,20 +64,20 @@ def test_the_budget_is_interest_and_match_less_what_went_into_stocks(tmp_path, m
     monkeypatch.setattr(income, "_dividends", lambda cache, t: [(date(2026, 9, 1), 0.31), (date(2026, 10, 2), 0.30),
                                                                  (date(2026, 11, 2), 0.30)])
     as_of = date(2026, 11, 3)
-    b = income.budget(store, tmp_path, as_of)
+    b = income.interest_budget(store, tmp_path, as_of)
     assert b["interest"]["basis"] == "estimated" and b["interest"]["earned"] == 60.0       # the 09-01 one is before the start
     sessions = b["match"]["sessions"]
     assert b["match"]["earned"] == round(29.0 * sessions * 0.03, 2)
     store.ledger.contribute(100.0, DAY, settle_date=DAY)
     store.ledger.fill("trading", "buy", "AAA", 2.0, 10.0, date(2026, 10, 5), settle_date=date(2026, 10, 6))
     store.ledger.fill("trading", "sell", "AAA", 1.0, 12.0, date(2026, 10, 20), settle_date=date(2026, 10, 21))
-    b = income.budget(store, tmp_path, as_of)
+    b = income.interest_budget(store, tmp_path, as_of)
     assert b["match"]["basis"] == "recorded" and b["match"]["earned"] == 3.0               # 3% of the recorded deposit
     assert b["traded"] == {"spent": 20.0, "returned": 12.0}
     assert b["available"] == round(60.0 + 3.0 - 20.0 + 12.0, 2)
     # A recorded SGOV dividend replaces the estimate.
     store.ledger.record("dividend", "trading", date(2026, 10, 2), ticker="SGOV", cash=29.5, source="manual")
-    assert income.budget(store, tmp_path, as_of)["interest"] == {
+    assert income.interest_budget(store, tmp_path, as_of)["interest"] == {
         "earned": 29.5, "basis": "recorded", "items": [{"date": "2026-10-02", "amount": 29.5, "basis": "recorded"}]}
 
 

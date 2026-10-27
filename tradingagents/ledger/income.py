@@ -102,8 +102,34 @@ def traded(store, since: date, as_of: date) -> dict:
     return {"spent": round(spent, 2), "returned": round(back, 2)}
 
 
+def budget_set_on(store) -> date | None:
+    """The day the trading budget was last set (its newest settings-history entry)."""
+    row = store.con.execute("SELECT changed_at FROM settings_history WHERE scope = 'capital' AND key = 'trading_budget_usd'"
+                            " AND source != 'migration' ORDER BY id DESC LIMIT 1").fetchone()   # the default is not a choice
+    return date.fromisoformat(row[0][:10]) if row else None
+
+
 def budget(store, cache_dir, as_of: date | None = None) -> dict:
-    """What the interest and the match have made available for trading, and what is left of it."""
+    """The trading budget the owner set, less what went into stocks since it was set, plus what came back."""
+    from . import capital
+    from .sessions import as_date
+
+    as_of = as_date(as_of) if as_of else date.today()
+    cap = capital.load(store)
+    since = budget_set_on(store)
+    if since is None:
+        return {"set": 0.0, "started": None, "available": 0.0, "net": 0.0, "traded": {"spent": 0.0, "returned": 0.0},
+                "note": "No trading budget set yet: Settings > Money.", "settings": {"trading_budget_usd": 0.0}}
+    t = traded(store, since, as_of)
+    net = cap.trading_budget_usd - t["spent"] + t["returned"]
+    return {"set": cap.trading_budget_usd, "started": str(since), "as_of": str(as_of), "traded": t,
+            "available": round(max(net, 0.0), 2), "net": round(net, 2),
+            "notes": ["Buys recorded since the budget was set use it up; sales put the money back. Set it again to start over."],
+            "settings": {"trading_budget_usd": cap.trading_budget_usd}}
+
+
+def interest_budget(store, cache_dir, as_of: date | None = None) -> dict:
+    """The earlier rule: what SGOV's interest and the match made available for trading (kept for reference)."""
     from . import capital
     from .sessions import as_date
 

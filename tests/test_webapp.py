@@ -91,11 +91,10 @@ def test_the_trade_view_shows_the_budget_and_waits_for_a_decision(server, monkey
     monkeypatch.setattr(income, "_dividends", lambda cache, t: [(date(2026, 10, 1), 0.30), (date(2100, 1, 1), 0.30)])
     status, t = _call(base, "/api/trade")
     assert status == 200 and not t["ready"] and "decision" in t["note"]
-    b = t["income"]["budget"]
-    assert b["started"] and b["interest"]["basis"] == "estimated" and b["available"] >= 0
-    assert t["income"]["projection"]["match_per_month"] == round(5.0 * 21 * 0.03, 2)   # my_buys.json: $5 a day
-    status, c = _call(base, "/api/capital", {"values": {"daily_sgov_usd": 30, "match_rate": 0.01}})
-    assert status == 200 and c["settings"]["daily_sgov_usd"] == 30.0
+    assert t["income"]["budget"]["available"] == 0.0 and "No trading budget" in t["income"]["budget"]["note"]
+    status, c = _call(base, "/api/capital", {"values": {"trading_budget_usd": 250}})
+    assert status == 200 and c["settings"]["trading_budget_usd"] == 250.0 and c["budget"]["available"] == 250.0
+    assert _call(base, "/api/trade")[1]["income"]["budget"]["set"] == 250.0
     assert _call(base, "/api/capital", {"values": {"trading_capital_usd": 1}})[0] == 400
 
 

@@ -1,4 +1,8 @@
-"""The money amounts the owner sets for the trading account: the daily SGOV buy, the match rate, the dry-yield line.
+"""The money amounts the owner sets for the trading account: the trading budget (and, from earlier versions, the
+daily SGOV buy, the match rate and the dry-yield line, which the page no longer shows).
+
+- **trading_budget_usd** (default $0): the money set aside for buying stocks. What is left of it is the budget
+  less what went into stocks since it was last set, plus what came back from sales (``ledger.income.budget``).
 
 One canonical interface (``load``, ``update``, ``snapshot``) over the ``capital`` settings
 scope, validated, with every change kept in ``settings_history``.
@@ -28,15 +32,18 @@ import math
 from dataclasses import asdict, dataclass
 
 SCOPE = "capital"
-DEFAULTS = {"daily_sgov_usd": 29.00, "match_rate": 0.03, "dry_yield": 0.02}
-LIMITS = {"daily_sgov_usd": (0.0, 100_000.0), "match_rate": (0.0, 0.10), "dry_yield": (0.0, 0.10)}
-UNITS = {"daily_sgov_usd": "dollars", "match_rate": "a fraction (0.03 = 3%)", "dry_yield": "a fraction (0.02 = 2%)"}
+DEFAULTS = {"trading_budget_usd": 0.0, "daily_sgov_usd": 29.00, "match_rate": 0.03, "dry_yield": 0.02}
+LIMITS = {"trading_budget_usd": (0.0, 10_000_000.0), "daily_sgov_usd": (0.0, 100_000.0), "match_rate": (0.0, 0.10),
+          "dry_yield": (0.0, 0.10)}
+UNITS = {"trading_budget_usd": "dollars", "daily_sgov_usd": "dollars", "match_rate": "a fraction (0.03 = 3%)",
+         "dry_yield": "a fraction (0.02 = 2%)"}
 # Keys of the retired Investing/Trading split, removed when this scope is next written.
 RETIRED = ("trading_capital_usd", "investing_capital_usd", "daily_investment_usd")
 
 
 @dataclass(frozen=True)
 class Capital:
+    trading_budget_usd: float
     daily_sgov_usd: float
     match_rate: float
     dry_yield: float
@@ -52,7 +59,7 @@ def validate(key: str, value) -> float:
     lo, hi = LIMITS[key]
     if not math.isfinite(v) or v < lo or v > hi:
         raise ValueError(f"{key} must be between {lo:g} and {hi:g} ({UNITS[key]})")
-    return round(v, 2) if key == "daily_sgov_usd" else round(v, 4)
+    return round(v, 2) if key.endswith("_usd") else round(v, 4)
 
 
 def ensure(store) -> None:

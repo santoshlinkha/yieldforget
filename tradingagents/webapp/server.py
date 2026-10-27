@@ -67,7 +67,7 @@ class Job:
 
     def __init__(self):
         self.running, self._progress, self.result, self.error, self.log = False, "", None, None, []
-        self.attempts, self.events, self.gen = [], [], 0
+        self.attempts, self.events, self.gen, self.fraction = [], [], 0, None
         self.started_at = self.touched_at = 0.0
 
     @property
@@ -86,6 +86,7 @@ class Job:
         self.gen += 1
         gen = self.gen
         self.running, self.result, self.error, self.log, self.attempts, self.events = True, None, None, [], [], []
+        self.fraction = None
         self.started_at = time.time()
         self.progress = "starting"
 
@@ -122,6 +123,7 @@ class Job:
         now = time.time()
         return {"running": self.running, "progress": self._progress, "result": self.result,
                 "error": self.error, "log": self.log, "attempts": self.attempts, "events": self.events,
+                "fraction": self.fraction,
                 "elapsed": round(now - self.started_at) if self.started_at else None,
                 "idle": round(now - self.touched_at) if self.running else None,
                 "stuck": bool(self.running and now - self.touched_at >= self.STUCK_AFTER)}
@@ -229,13 +231,9 @@ class App:
         from tradingagents.ledger import income
 
         today = date.today()
-        pot = income.budget(self.store, self.cache_dir, today)
-        health = self._remember("income-health", self._inputs("income-health"),
-                                lambda: income.health(self.store, self.cache_dir, today))
         books = self.books()["sleeves"]["combined"]
         sgov = (books["positions"].get(income.RESERVE) or {}).get("value") or 0.0
-        return {"budget": pot, "health": health, "sgov_value": sgov,
-                "projection": income.projection(capital.load(self.store), health, sgov)}
+        return {"budget": income.budget(self.store, self.cache_dir, today), "sgov_value": sgov}
 
     def rotation(self) -> dict:
         from tradingagents.research.rotation import rotation
@@ -1076,9 +1074,12 @@ class App:
         train = bool(body.get("train"))
 
         def work(job):
-            def say(stage):
+            def say(stage, frac=None):
+                if frac is not None:
+                    job.fraction = max(job.fraction or 0.0, min(float(frac), 1.0))   # the bar never goes back
                 job.progress = stage
             rec = daily.run(self.store, self.cache_dir, date.today(), body.get("policy") or "barrier_20", train, say)
+            job.fraction = 1.0
             return {"id": rec["id"], "mode": rec["mode"], "summary": rec["summary"]}
 
         return self.decisions.start(work)

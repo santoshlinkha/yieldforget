@@ -393,7 +393,21 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     from . import data as D, macro as M
     from .targets import ewma_vol
 
-    say = progress or (lambda *_: None)
+    import inspect
+
+    sink = progress or (lambda *_: None)
+    try:
+        two = len(inspect.signature(sink).parameters) >= 2
+    except (TypeError, ValueError):
+        two = False
+
+    def say(text, frac=None):
+        """A short line on what is happening, and how far along the run is (0 to 1) when known."""
+        sink(text, frac) if two else sink(text)
+
+    # The training stages' share of the bar (only when this week's models must be fitted).
+    fit_frac = {"building the training panel": 0.40, "simulating the policy's trades": 0.50,
+                "cross-fitting the ranker": 0.58, "fitting the final models": 0.70}
     r = rules(store)
     as_of = as_of or date.today()
     policy = POLICIES[policy_name]
@@ -403,7 +417,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     for lot in all_lots:
         if lot["ticker"] in CASH_FUNDS:
             cash_fund[lot["ticker"]] = cash_fund.get(lot["ticker"], 0.0) + lot["shares"]
-    say("loading data")
+    say("Loading prices, dividends and filings for the S&P 500 and your companies", 0.02)
     # Besides the Trading lots: every stock held in any sleeve and the watchlist, so each gets a score
     # (outside the S&P 500 a stock is ranked against that day's members; funds are turned away by classify).
     wanted = {lot["ticker"] for lot in lots}
@@ -411,7 +425,9 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     watch = {str(t).upper() for t in store.get("global", "stock_watchlist") or []}
     wanted |= watch
     data = D.load(sorted(wanted), cache_dir, progress=lambda stage, done=None, count=None, **_: say(
-        f"loading data: {stage}" + (f" ({done} of {count})" if done is not None else f" ({count})" if count else "")))
+        f"Loading data: {stage}" + (f" ({done} of {count})" if done is not None else f" ({count})" if count else ""),
+        0.05 + 0.25 * (done / count) if done is not None and count else None))
+    say("Turning adjusted prices back into the prices stocks traded at", 0.31)
     spy = data.close["SPY"].dropna()
     cutoff = spy.index[spy.index <= pd.Timestamp(as_of)][-1]
     freshness = (pd.Timestamp(as_of) - cutoff).days
@@ -423,10 +439,13 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     data = as_of_data(data, cutoff)
     device, _ = choose_device(store.get("global", "compute_backend"), 300_000)
     sessions = data.close.index
+    say("Reading the economic data known at the close", 0.34)
     macro = M.features(pd.DatetimeIndex([cutoff]), cache_dir)
+    say("Loading this week's fitted models" + (" (fitting them if missing: several minutes)" if train else ""), 0.37)
     bundle, art = fit_bundle(data, M.features(P.decision_dates_for(sessions, cutoff), cache_dir) if train else None,
-                             cutoff, policy, cache_dir, device, say, train, prices=(px, div))
-    say("scoring today")
+                             cutoff, policy, cache_dir, device,
+                             lambda text: say(f"Fitting the models: {text}", fit_frac.get(text)), train, prices=(px, div))
+    say("Scoring every stock on today's close", 0.78)
     at = P.build(data, policy.horizon, dates=pd.DatetimeIndex([cutoff]), macro=macro)
     today = score_today(bundle, at.xs(cutoff, level="date", drop_level=False))
     # The live record, once enough has matured, recalibrates P(profit) and expected net (stocks.feedback).
@@ -508,6 +527,8 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     # kept apart from the rules above, with their own validation status.
     from .decision_layer import latest_bundle, live_view
 
+    say("Checking holdings and candidates, sizing buys to the budget", 0.86)
+
     try:
         rows_today = at.xs(cutoff, level="date", drop_level=False)
         rows_today = rows_today[rows_today["in_index"] | rows_today.index.get_level_values("ticker").isin(
@@ -546,6 +567,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                           "reserved": round(state.cash.reserved, 2), "unsettled": round(state.cash.unsettled, 2),
                           "lots": len(lots), "ira_total": round(ira["total"], 2)},
               **payload}
+    say("Saving the decision and every prediction", 0.92)
     with transaction(store.con):
         store.con.execute("INSERT INTO stock_decisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                           (decision_id, now_utc(), str(cutoff.date()), str(execute), r["sleeve"], mode,
@@ -560,6 +582,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
         say(f"could not score past predictions: {exc}")
     from .shadow import advance
 
+    say("Updating the paper (shadow) account", 0.97)
     record["shadow"] = advance(store, data, cutoff, decision_id, entry_lines, policy, snap, prices=(px, div))
     return record
 
