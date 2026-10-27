@@ -62,6 +62,10 @@ class OutcomeModel:
     # --- fitting ---
     def fit(self, train: pd.DataFrame, cal: pd.DataFrame, features: list[str]) -> OutcomeModel:
         self.features = features
+        # The last decision date learned from (fit or calibration): predicting it or earlier is refused.
+        dates = [f.index.get_level_values("date").max() for f in (train, cal)
+                 if "date" in (f.index.names or []) and len(f)]
+        self.trained_through = str(max(dates).date()) if dates else None
         y = outcome_class(train["outcome"]).map({c: i for i, c in enumerate(self.classes)})
         keep = y.notna()
         train, y = train[keep], y[keep].astype(int)
@@ -129,6 +133,10 @@ class OutcomeModel:
 
     # --- prediction ---
     def predict(self, rows: pd.DataFrame) -> pd.DataFrame:
+        from .training_store import guard
+
+        if "date" in (rows.index.names or []):
+            guard(getattr(self, "trained_through", None), rows.index.get_level_values("date"))
         p, mean, q10 = self._raw(rows)
         raw = p.copy()
         if self.calibrators:

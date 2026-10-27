@@ -208,10 +208,26 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
     px, div = px.loc[:cutoff, stocks], div.loc[:cutoff, stocks]
     say("simulating the policy's trades")
     tr = S.attach_trades(panel, px, data.low[stocks], data.close[stocks], div, policy)
+    # The training set, fingerprinted: the same data fitted before reuses that fit (stocks.training_store).
+    from . import training_store as TS
+
+    member = panel[panel["in_index"]]
+    table = member[[*feats, "label", "label_end", "pos_large_loss"]].join(tr[["net", "complete", "exit_date"]])
+    table = table[(pd.to_datetime(table["label_end"]) <= cutoff) | (pd.to_datetime(table["exit_date"]) <= cutoff)]
+    fp = TS.fingerprint(table, {"policy": policy.version(), "features": feats, "thresholds": th.version(),
+                                "version": BUNDLE_VERSION, "model_code": model_code_hash()})
+    seen = TS.find(cache_dir, fp)
+    if seen:
+        say("same training data as an earlier fit: reusing it")
+        blob = Path(seen["bundle_path"]).read_bytes()
+        bundle = pickle.loads(blob)  # noqa: S301  (the app's own training cache)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(blob)       # this week's key points at it too
+        return bundle, {"key": key, "sha256": hashlib.sha256(blob).hexdigest(), "reused": True,
+                        "same_data_as": seen["bundle_key"], "fingerprint": fp}
     edges = S.fold_edges(panel.index.get_level_values("date"))
     say("cross-fitting the ranker")
     oof = S.crossfit_primary(panel, feats, edges, [lambda: Ranker(device)])
-    member = panel[panel["in_index"]]
     rows = oof.join(tr[["net", "complete", "exit_date"]]).join(member[[*feats, "label_end", "pos_large_loss"]])
     # Only trades closed by the cutoff, and only outcomes known by then: nothing after it is learned from.
     rows = rows[rows["complete"] & (pd.to_datetime(rows["exit_date"]) <= cutoff)]
@@ -233,16 +249,28 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
                                             & (pd.to_datetime(member["label_end"]) <= cutoff)], feats, "pos_large_loss"),
         "features": feats, "policy": policy, "thresholds": th.version(),
         "meta": {"cutoff": str(cutoff.date()), "train_rows": len(train_rows), "oof_rows": len(rows),
-                 "seconds": round(time.time() - t0, 1), "device": device, "survivorship": data.survivorship},
+                 "seconds": round(time.time() - t0, 1), "device": device, "survivorship": data.survivorship,
+                 # The last decision date any model in the bundle learned from: scoring it or earlier is refused.
+                 "trained_through": str(max(train_rows.index.get_level_values("date").max(),
+                                            rows.index.get_level_values("date").max()).date()),
+                 "fingerprint": fp},
     }
     blob = pickle.dumps(bundle)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(blob)
-    return bundle, {"key": key, "sha256": hashlib.sha256(blob).hexdigest(), "reused": False}
+    try:
+        TS.save(cache_dir, fp, table, bundle["meta"], key, path)
+    except Exception as exc:   # saving the set must never lose the fit
+        say(f"could not save the training set: {exc}")
+    return bundle, {"key": key, "sha256": hashlib.sha256(blob).hexdigest(), "reused": False, "fingerprint": fp}
 
 
 def score_today(bundle: dict, rows: pd.DataFrame) -> pd.DataFrame:
-    """Inference at the cutoff (the inference step: no fitting)."""
+    """Inference at the cutoff (the inference step: no fitting). Rows on or before the last date the bundle
+    trained on are refused: the model is never scored on its own training data."""
+    from .training_store import guard
+
+    guard(bundle.get("meta", {}).get("trained_through"), rows.index.get_level_values("date"))
     s = bundle["ranker"].predict(rows)
     pct = within_date_pct(rows, s)
     out = pd.DataFrame(index=rows.index.get_level_values("ticker"))
