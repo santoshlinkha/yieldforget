@@ -136,3 +136,50 @@ def test_a_pick_is_judged_only_after_its_20_sessions_and_against_its_cost():
     still = T._follow(close, "AAA", str(idx[20].date()), 20)
     assert still["status"] == "open" and still["sessions"] == 8
     assert T._follow(close, "AAA", str(idx[-1].date()), 20)["status"] == "not bought yet"
+
+
+def test_the_second_models_buys_are_recorded_and_a_limit_fills_only_through_its_price(tmp_path, monkeypatch):
+    import json
+
+    from tradingagents.ledger.store import Store
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    close = pd.DataFrame({"AAA": 100.0, "BBB": 50.0, "SPY": 100.0}, index=idx)
+    low = close.copy()
+    low.loc[idx[3], "BBB"] = 40.0                                   # deep through the limit on the 3rd session
+    sigma = pd.DataFrame(0.02, index=idx, columns=close.columns)
+    p = {"ticker": "BBB", "data_to": str(idx[0].date()), "limit_k": 0.5, "limit_days": 5, "fill_buffer": 0.001,
+         "horizon": 20}
+    got = T._follow_limit(close, low, sigma, p)
+    assert got["entry_date"] == str(idx[3].date()) and got["entry"] == pytest.approx(50 * np.exp(-0.5 * 0.02 * np.sqrt(5)))
+    assert T._follow_limit(close, close, sigma, {**p, "ticker": "AAA"})["status"] == "no fill"   # never traded below
+
+    store = Store(tmp_path)
+    opts = lambda c, ex: [{"action": "cash", "expected_excess": 0.0}, {"action": c, "expected_excess": ex}]  # noqa: E731
+    payload = {"entries": [], "lots": [], "horizon": 20, "scores": {},
+               "policy": {"available": True, "policies": {"limit_dip": {"limit_k": 0.5, "limit_days": 5, "fill_buffer": 0.001}},
+                          "stocks": {"AAA": {"action": "insufficient evidence", "model_choice": "next_close",
+                                             "options": opts("next_close", 0.01), "validated": False},
+                                     "BBB": {"action": "insufficient evidence", "model_choice": "limit_dip",
+                                             "options": opts("limit_dip", 0.02), "validated": False},
+                                     "CCC": {"action": "insufficient evidence", "model_choice": "cash", "options": []}}}}
+    monkeypatch.setattr(T, "_picks", lambda con, per_day=5: [])
+    rows = [{"id": "d1", "info_cutoff": str(idx[0].date()), "execution_date": str(idx[1].date()),
+             "payload_json": json.dumps(payload)}]
+
+    class Con:                       # the decision as stock_decisions holds it; hidden rows in the real table
+        def execute(self, sql, *a):
+            if "track_record_hidden" in sql:
+                return store.con.execute(sql, *a)
+            return type("Rows", (), {"fetchall": lambda self: rows})()
+
+    picks = T._policy_picks(Con())
+    assert [(r["ticker"], r["choice"]) for r in picks] == [("BBB", "limit_dip"), ("AAA", "next_close")]   # cash left out
+    monkeypatch.setattr("tradingagents.research.prices.bars", lambda tickers, cache: {"Close": close, "Low": low})
+    out = T.build(Con(), tmp_path)
+    assert {r["ticker"] for r in out["policy"]} == {"AAA", "BBB"} and out["hidden"] == 0
+    T.hide(store.con, out["policy"][0]["key"])
+    again = T.build(Con(), tmp_path)
+    assert len(again["policy"]) == 1 and again["hidden"] == 1
+    assert T.restore_all(store.con) == 1 and len(T.build(Con(), tmp_path)["policy"]) == 2

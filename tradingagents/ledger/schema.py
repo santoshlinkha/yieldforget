@@ -471,4 +471,12 @@ CREATE TABLE agent_runs (
 );
 CREATE INDEX agent_runs_ticker ON agent_runs (ticker, as_of);
 """ + _guards("agent_runs"),
+    # Track-record rows the user deleted from view. The records themselves (decisions, ratings) are never touched;
+    # deleting adds a row here and restoring removes it.
+    9: """
+CREATE TABLE track_record_hidden (
+    key TEXT PRIMARY KEY,                  -- kind|data date|ticker|... as track_record builds it
+    hidden_at TEXT NOT NULL
+);
+""",
 }

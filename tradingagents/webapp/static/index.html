@@ -483,9 +483,15 @@ select option { background: var(--surface); color: var(--text); }
         <div class="table-wrap"><table id="recPicks" class="compact"></table></div>
       </div>
       <div class="card">
+        <h3>The second model's suggestions</h3>
+        <p class="muted small">The policy layer (buy at the next close, buy on a limit, or cash). It abstains ("insufficient evidence") until its validation passes, so these are the buys it <i>would</i> have made, recorded and judged anyway. A limit that never filled is not judged.</p>
+        <div class="table-wrap"><table id="recPolicy" class="compact"></table></div>
+      </div>
+      <div class="card">
         <h3>The AI agents' calls</h3>
         <div class="table-wrap"><table id="recAgents" class="compact"></table></div>
       </div>
+      <p class="muted small" id="recHidden"></p>
     </section>
 
     <section class="tab" id="forecasts">
@@ -774,19 +780,34 @@ async function loadTrackRecord() {
   $("recKpis").innerHTML =
     kpi("Best buy, correct", show(s.best_buy), s.best_buy.judged ? `average ${spct(s.best_buy.avg_return)} · vs SPY ${spct(s.best_buy.avg_vs_spy)}` : `${s.best_buy.open} still open`, "hero") +
     kpi("All picks, correct", show(s.all_picks), s.all_picks.judged ? `average ${spct(s.all_picks.avg_return)} · vs SPY ${spct(s.all_picks.avg_vs_spy)}` : `${s.all_picks.open} still open`) +
+    kpi("Second model, correct", show(s.policy), s.policy.judged ? `average ${spct(s.policy.avg_return)} · vs SPY ${spct(s.policy.avg_vs_spy)}` : `${s.policy.open} still open`) +
     kpi("AI agents, correct", show(s.agents), s.agents.judged ? `average ${spct(s.agents.avg_return)}` : `${s.agents.open} still open`);
   $("recRule").textContent = `Correct: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade).`;
+  const del = r => `<td><button class="ghost small-btn rec-del" data-key="${esc(r.key)}" title="Delete this row from the track record (the saved decision is kept; Restore brings it back)" aria-label="Delete">✕</button></td>`;
   const verdict = r => r.verdict === "correct" ? '<span class="pos"><b>✓ correct</b></span>' : r.verdict === "wrong" ? '<span class="neg"><b>✗ wrong</b></span>'
     : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
-  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th></tr>" +
+  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th><th></th></tr>" +
     d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
       `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
-      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")
+      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td>${del(r)}</tr>`).join("")
     : "<tr><td class='muted'>No decision saved yet.</td></tr>";
-  $("recAgents").innerHTML = d.agents.length ? "<tr><th class='l'>As of</th><th class='l'>Stock</th><th class='l'>Rating</th><th>Return</th><th class='l'>Result</th></tr>" +
+  const choice = r => r.choice === "limit_dip" ? `limit${r.limit ? " " + usd(r.limit) : ""}` : "next close";
+  $("recPolicy").innerHTML = (d.policy || []).length ? "<tr><th class='l'>Data to</th><th class='l'>Stock</th><th class='l'>Its choice</th><th>Expected vs cash</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th><th></th></tr>" +
+    d.policy.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">#${r.place}</span></td>` +
+      `<td class="l">${esc(choice(r))}<div class="muted small">${r.validated ? "validated" : "shown as: insufficient evidence"}</div></td><td>${spct(r.expected_excess)}</td>` +
+      `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
+      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td>${del(r)}</tr>`).join("")
+    : "<tr><td class='muted'>No suggestion from the second model saved yet.</td></tr>";
+  $("recAgents").innerHTML = d.agents.length ? "<tr><th class='l'>As of</th><th class='l'>Stock</th><th class='l'>Rating</th><th>Return</th><th class='l'>Result</th><th></th></tr>" +
     d.agents.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b></td><td class="l">${esc(r.rating)}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td>` +
-      `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td></tr>`).join("")
+      `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td>${del(r)}</tr>`).join("")
     : "<tr><td class='muted'>No AI agent rating saved yet.</td></tr>";
+  $("recHidden").innerHTML = d.hidden ? `${d.hidden} row(s) deleted from this view. <a href="#" id="recRestore">Restore all</a>` : "";
+  document.querySelectorAll("#record .rec-del").forEach(b => b.onclick = async () => {
+    if (!confirm("Delete this row from the track record? The saved decision or rating is kept, and Restore all brings it back.")) return;
+    try { await api("/api/track-record/hide", {key: b.dataset.key}); loadTrackRecord(); } catch (e) { alert(e.message); }
+  });
+  if ($("recRestore")) $("recRestore").onclick = async ev => { ev.preventDefault(); await api("/api/track-record/restore", {}); loadTrackRecord(); };
 }
 $("recRefresh").onclick = loadTrackRecord;
 

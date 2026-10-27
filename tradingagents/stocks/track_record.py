@@ -9,9 +9,21 @@ trade) and judged at the close ``horizon`` sessions later:
   claim: "profitable after costs"); **wrong** otherwise. Beating SPY over the same days is shown beside it.
 - **open**: fewer than ``horizon`` sessions have closed; the return so far is shown, not judged.
 
+**The second model's suggestions** (the policy layer, ``decision_layer``). From the same decisions, the stocks
+where its own choice was to buy, best expected excess over cash first (at most five a day). It abstains
+("insufficient evidence") until validated, so these are what it *would* have done, recorded and judged anyway:
+
+- ``next_close``: bought at the close after the data date, judged like the model's picks.
+- ``limit_dip``: a buy limit at close x exp(-0.5 sigma sqrt(5)) for 5 sessions, filled on the first session whose
+  low is 0.1% below it, at the limit; then held 20 sessions from the fill. Not filled: **no fill**, money stays in
+  cash, not judged.
+
 **The AI agents' calls.** Each rating on record (the memory log), judged the same way from the session after
 its analysis date: Buy and Overweight are correct when the stock rose, Sell and Underweight when it fell
 (they say avoid or reduce); Hold is not judged.
+
+**Deleting** a row hides it from this view (``track_record_hidden``); the decision or rating it came from is
+never changed, and restoring brings it back. Summaries count only the rows shown.
 
 Prices are the local store's adjusted closes (total return). Nothing here changes any record.
 """
@@ -39,11 +51,101 @@ def _picks(con, per_day: int = 5) -> list[dict]:
         payload = json.loads(r["payload_json"])
         passing = [e for e in payload.get("entries", []) if e.get("paper_action") or e.get("action") == "ENTER"]
         for i, e in enumerate(passing[:per_day]):
-            out.append({"decision_id": r["id"], "data_to": cutoff, "executes": r["execution_date"], "mode": r["mode"],
+            out.append({"key": f"pick|{cutoff}|{e['ticker']}|{i + 1}",
+                        "decision_id": r["id"], "data_to": cutoff, "executes": r["execution_date"], "mode": r["mode"],
                         "ticker": e["ticker"], "place": i + 1, "role": "best buy" if i == 0 else "runner-up",
                         "expected_net": e.get("expected_net"), "p_win": e.get("p_win"), "cost_rt": e.get("cost_rt") or 0.0,
                         "horizon": int(payload.get("horizon") or 20)})
     return out
+
+
+def _policy_picks(con, per_day: int = 5) -> list[dict]:
+    """The second model's buy choices per data date (its view even while it abstains)."""
+    import json
+
+    rows = con.execute("SELECT id, info_cutoff, execution_date, payload_json FROM stock_decisions"
+                       " ORDER BY info_cutoff, created_at").fetchall()
+    latest = {}
+    for r in rows:
+        latest[r["info_cutoff"]] = r
+    out = []
+    for cutoff, r in sorted(latest.items(), reverse=True):
+        payload = json.loads(r["payload_json"])
+        pv = payload.get("policy") or {}
+        if not pv.get("available"):
+            continue
+        held = {lot["ticker"] for lot in payload.get("lots", [])}
+        scores = payload.get("scores") or {}
+        spec = (pv.get("policies") or {}).get("limit_dip") or {}
+        buys = []
+        for t, d in (pv.get("stocks") or {}).items():
+            choice = d.get("model_choice")
+            if t in held or choice not in ("next_close", "limit_dip"):
+                continue
+            opt = next((o for o in d.get("options", []) if o.get("action") == choice), {})
+            buys.append((opt.get("expected_excess") or 0.0, t, choice, opt, d))
+        buys.sort(key=lambda b: (-b[0], b[1]))
+        for i, (ex, t, choice, opt, d) in enumerate(buys[:per_day]):
+            out.append({"key": f"policy|{cutoff}|{t}", "decision_id": r["id"], "data_to": cutoff,
+                        "executes": r["execution_date"], "ticker": t, "place": i + 1, "choice": choice,
+                        "expected_excess": ex, "q10_excess": opt.get("q10_excess"), "p_nofill": opt.get("p_nofill"),
+                        "shown_as": d.get("action"), "validated": bool(d.get("validated")),
+                        "cost_rt": (scores.get(t) or {}).get("cost_rt") or 0.0, "horizon": 20,
+                        "limit_k": spec.get("limit_k", 0.5), "limit_days": spec.get("limit_days", 5),
+                        "fill_buffer": spec.get("fill_buffer", 0.001)})
+    return out
+
+
+def _follow_limit(close: pd.DataFrame, low: pd.DataFrame, sigma: pd.DataFrame, p: dict) -> dict:
+    """A limit below the data date's close, good for ``limit_days`` sessions; then held ``horizon`` from the fill."""
+    t = p["ticker"]
+    if t not in close or t not in low or t not in sigma:
+        return {"status": "no prices"}
+    c, lo = close[t].dropna(), low[t].reindex(close.index)
+    at = c.index[c.index <= pd.Timestamp(p["data_to"])]
+    s = sigma[t].reindex(at).dropna()
+    if not len(at) or not len(s):
+        return {"status": "no prices"}
+    limit = float(c.loc[at[-1]] * np.exp(-p["limit_k"] * s.iloc[-1] * np.sqrt(p["limit_days"])))
+    window = c.index[c.index > at[-1]][:p["limit_days"]]
+    fill = next((d for d in window if np.isfinite(lo.get(d, np.nan)) and lo[d] <= limit * (1 - p["fill_buffer"])), None)
+    out = {"limit": limit}
+    if fill is None:
+        out["status"] = "no fill" if len(window) == p["limit_days"] else "waiting for a fill"
+        out["sessions"] = len(window)
+        return out
+    path = c.loc[fill:]
+    k = min(len(path) - 1, p["horizon"])
+    out.update({"entry_date": str(fill.date()), "entry": limit, "sessions": int(k), "last_date": str(path.index[k].date()),
+                "last": float(path.iloc[k]), "return": float(path.iloc[k] / limit - 1)})
+    if "SPY" in close:
+        spy = close["SPY"].dropna().loc[fill:path.index[k]]
+        out["spy"] = float(spy.iloc[-1] / spy.iloc[0] - 1) if len(spy) > 1 else 0.0
+    out["status"] = "done" if k >= p["horizon"] else "open"
+    return out
+
+
+def hidden(con) -> set[str]:
+    try:
+        return {r[0] for r in con.execute("SELECT key FROM track_record_hidden")}
+    except Exception:   # an older database without the table: nothing hidden
+        return set()
+
+
+def hide(con, key: str) -> None:
+    from tradingagents.ledger.db import now_utc, transaction
+
+    if not key:
+        raise ValueError("no row to delete")
+    with transaction(con):
+        con.execute("INSERT OR IGNORE INTO track_record_hidden VALUES (?, ?)", (str(key), now_utc()))
+
+
+def restore_all(con) -> int:
+    from tradingagents.ledger.db import transaction
+
+    with transaction(con):
+        return con.execute("DELETE FROM track_record_hidden").rowcount
 
 
 def _follow(close: pd.DataFrame, ticker: str, after: str, horizon: int) -> dict:
@@ -71,17 +173,32 @@ def _follow(close: pd.DataFrame, ticker: str, after: str, horizon: int) -> dict:
 def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | None = None) -> dict:
     from tradingagents.research.prices import bars
 
-    picks = _picks(con)
+    gone = hidden(con)
+    picks = [p for p in _picks(con) if p["key"] not in gone]
+    policy = [p for p in _policy_picks(con) if p["key"] not in gone]
     agents = []
     if config is not None:
         from tradingagents.memory import TradingMemoryLog
 
         for e in TradingMemoryLog(config).load_entries():
             if e.get("rating") and e.get("ticker") and e.get("date"):
-                agents.append({"ticker": e["ticker"].upper(), "data_to": str(e["date"])[:10],
-                               "rating": str(e["rating"]).title(), "horizon": 20})
-    tickers = sorted({p["ticker"] for p in picks} | {a["ticker"] for a in agents} | {"SPY"})
-    close = bars(tickers, cache_dir)["Close"] if len(tickers) > 1 else pd.DataFrame()
+                row = {"ticker": e["ticker"].upper(), "data_to": str(e["date"])[:10],
+                       "rating": str(e["rating"]).title(), "horizon": 20}
+                row["key"] = f"agent|{row['data_to']}|{row['ticker']}|{row['rating']}"
+                if row["key"] not in gone:
+                    agents.append(row)
+    tickers = sorted({p["ticker"] for p in picks + policy} | {a["ticker"] for a in agents} | {"SPY"})
+    frames = bars(tickers, cache_dir) if len(tickers) > 1 else {"Close": pd.DataFrame(), "Low": pd.DataFrame()}
+    close, low = frames["Close"], frames.get("Low", pd.DataFrame())
+    from .targets import ewma_vol
+
+    sigma = ewma_vol(close) if not close.empty else pd.DataFrame()
+    for p in policy:
+        p.update(_follow(close, p["ticker"], p["data_to"], p["horizon"]) if p["choice"] == "next_close"
+                 else _follow_limit(close, low, sigma, p))
+        if p["status"] == "done":
+            p["verdict"] = "correct" if p["return"] - p["cost_rt"] > 0 else "wrong"
+            p["beat_spy"] = p.get("spy") is not None and p["return"] > p["spy"]
     for p in picks:
         p.update(_follow(close, p["ticker"], p["data_to"], p["horizon"]))
         if p["status"] == "done":
@@ -104,9 +221,12 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
                 "avg_vs_spy": float(np.mean([r["return"] - r["spy"] for r in done if r.get("spy") is not None] or [np.nan])),
                 "open": sum(1 for r in rows if r.get("status") == "open" and (key is None or key(r)))}
 
-    return {"picks": picks, "agents": sorted(agents, key=lambda a: a["data_to"], reverse=True),
+    return {"picks": picks, "policy": policy, "agents": sorted(agents, key=lambda a: a["data_to"], reverse=True),
+            "hidden": len(gone),
             "summary": {"best_buy": summary(picks, lambda r: r["place"] == 1), "all_picks": summary(picks),
-                        "agents": summary(agents)},
+                        "policy": summary(policy), "agents": summary(agents)},
             "rules": {"correct_pick": "the return over 20 sessions from the next close beat the round-trip cost",
+                      "correct_policy": "the same, from the next close or from the limit fill; a limit that never "
+                                        "filled is not judged",
                       "correct_agent": "Buy/Overweight: the stock rose over 20 sessions; Sell/Underweight: it fell; "
                                        "Hold: not judged"}}

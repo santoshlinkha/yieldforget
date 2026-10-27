@@ -106,6 +106,8 @@ Combined by the decision layer: the action with the highest expected excess that
 (chosen on 2014–24 data) and a −15% bad-case budget; held stocks judged from now on. Status: **not validated**
 (2025–26 holdout: probabilities worse than base rates, −0.94% vs cash per decision), so it **abstains** on
 every stock and gives the AI agents nothing.
+Its would-be buys (its own choice while it abstains, at most five a day) are still recorded in the Track
+record tab and judged like the internal model's picks; a limit that never filled is not judged.
 
 ### D. Sector rotation (Trade page)
 

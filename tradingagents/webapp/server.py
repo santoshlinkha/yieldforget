@@ -1766,6 +1766,13 @@ def make_handler(app: App):
                         raise ValueError("that job is not stuck: it is not running, or it reported progress in the "
                                          f"last {Job.STUCK_AFTER // 60} minutes")
                     self._json(job.state())
+                elif self.path == "/api/track-record/hide":
+                    from tradingagents.stocks import track_record
+                    track_record.hide(app.store.con, str(body.get("key") or ""))
+                    self._json({"hidden": True})
+                elif self.path == "/api/track-record/restore":
+                    from tradingagents.stocks import track_record
+                    self._json({"restored": track_record.restore_all(app.store.con)})
                 elif self.path == "/api/decisions/run":
                     self._started(app.start_decisions(body), "A decision run")
                 elif self.path == "/api/capital":
