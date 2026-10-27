@@ -232,3 +232,15 @@ def test_live_status_names_the_agent_and_the_tool():
     s.on_llm_end(None, run_id=rid, metadata={"langgraph_node": "Bull Researcher"})
     assert lines[0] == "Market Analyst: thinking" and lines[1] == "Market Analyst: fetching get_stock_data"
     assert lines[2].startswith("Bull Researcher: answered in")
+
+
+def test_a_recorded_buy_shows_in_the_portfolio_with_its_value_but_sgov_does_not(server):
+    base, tmp_path, _ = server
+    status, out = _call(base, "/api/ledger/fill", {"sleeve": "trading", "side": "buy", "ticker": "AAA", "quantity": 2,
+                                                   "price": 90.0, "date": "2026-10-20", "broker_record": True})
+    assert status == 200, out
+    status, p = _call(base, "/api/portfolio-view")
+    held = {h["ticker"]: h for h in p["holdings"]}
+    assert status == 200 and "SGOV" not in held and set(held) == {"AAA", "BBB"}       # SGOV is never listed
+    assert held["AAA"]["units"] == 12 and held["AAA"]["value"] == 1200.0               # 10 held + 2 bought, at 100
+    assert p["trades"][0]["ticker"] == "AAA" and p["trades"][0]["quantity"] == 2 and p["bought"] == 180.0

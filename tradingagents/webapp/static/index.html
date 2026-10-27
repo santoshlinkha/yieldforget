@@ -291,6 +291,7 @@ select option { background: var(--surface); color: var(--text); }
       </div>
       <nav role="tablist">
         <button role="tab" data-tab="today" aria-selected="true">Trade</button>
+        <button role="tab" data-tab="portfolio">Portfolio</button>
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
         <button role="tab" data-tab="decisions">Decisions</button>
@@ -310,7 +311,6 @@ select option { background: var(--surface); color: var(--text); }
         <div class="row"><button id="tdRun" title="The internal model's decision for the next session, from the latest close (free, on this machine)">Make today's decision</button>
           <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="tdTrain"> fit models if needed</label>
           <span class="muted small" id="tdStatus"></span></div></div>
-      <div class="kpis" id="kpis"></div>
       <div class="split wide">
         <div>
           <div class="card">
@@ -324,7 +324,8 @@ select option { background: var(--surface); color: var(--text); }
           </div>
           <div class="card">
             <h3>Runners-up</h3>
-            <p class="muted small" id="runnersNote">The next stocks that pass the model's gates, in its order, in case the first is not wanted.</p>
+            <div class="row" style="margin:0 0 6px;justify-content:space-between"><p class="muted small" id="runnersNote" style="margin:0">The next stocks that pass the model's gates, in its order, in case the first is not wanted.</p>
+              <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on each runner-up, one after another (free models first)">Run the AI agents on all</button></div>
             <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
           </div>
           <div class="card">
@@ -334,10 +335,6 @@ select option { background: var(--surface); color: var(--text); }
           </div>
         </div>
         <div>
-          <div class="card">
-            <div class="card-head"><h3>Trading budget</h3><button class="ghost" data-goto="settings">Settings →</button></div>
-            <div id="budgetBox"></div>
-          </div>
           <div class="card">
             <h3>The model's live record</h3>
             <div id="recordBox" class="small"></div>
@@ -454,6 +451,25 @@ select option { background: var(--surface); color: var(--text); }
         <div class="card"><h3>Prospective shadow account</h3><div id="dcShadow"></div></div>
         <div class="card"><h3>Action history</h3><div class="table-wrap"><table id="dcHistory" class="compact"></table></div></div>
       </div>
+    </section>
+
+    <section class="tab" id="portfolio">
+      <div class="page-head"><div><h2>Portfolio</h2><p>The stocks you recorded buying, at the latest close: units, what you paid (first in, first out), value and profit.</p></div></div>
+      <div class="kpis" id="pfKpis"></div>
+      <div class="card">
+        <h3>Record a trade</h3>
+        <div class="row">
+          <div style="width:110px"><label for="pfSide">Side</label><select id="pfSide"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
+          <div style="width:120px"><label for="pfTicker">Ticker</label><input type="text" id="pfTicker" placeholder="GEN"></div>
+          <div style="width:120px"><label for="pfUnits">Units</label><input type="number" id="pfUnits" step="any" min="0" placeholder="1.5"></div>
+          <div style="width:130px"><label for="pfPrice">Price ($)</label><input type="number" id="pfPrice" step="0.01" min="0"></div>
+          <div style="width:160px"><label for="pfDate">Date</label><input type="date" id="pfDate"></div>
+          <button id="pfSave">Save trade</button>
+        </div>
+        <p class="small" id="pfMsg"></p>
+      </div>
+      <div class="card"><h3>Holdings</h3><div class="table-wrap"><table id="pfTable" class="compact"></table></div></div>
+      <div class="card"><h3>Trades</h3><div class="table-wrap"><table id="pfTrades" class="compact"></table></div></div>
     </section>
 
     <section class="tab" id="record">
@@ -621,12 +637,7 @@ async function loadTrade() {
   $("tdRun").disabled = !!j.running;
   if (j.running) setTimeout(loadTrade, 3000);
   const stocks = Object.entries(a.positions || {}).filter(([k]) => k !== "SGOV").reduce((s, [, p]) => s + (p.value || 0), 0);
-  $("subtitle").textContent = `${t.data_to ? "data to " + t.data_to : "no decision yet"} · ${usd(a.equity || 0)}`;
-  $("kpis").innerHTML =
-    kpi("Trading budget", usd(b.set || 0), b.started ? `set on ${b.started} (Settings)` : esc(b.note || ""), "hero") +
-    kpi("Available now", usd(b.available || 0), "the budget less what is in stocks, plus sales") +
-    kpi("In stocks", usd(stocks), `${Object.keys(a.positions || {}).filter(k => k !== "SGOV").length} names · ${usd(((b.traded || {}).spent) || 0)} bought, ${usd(((b.traded || {}).returned) || 0)} back`) +
-    kpi("Account value", usd(a.equity || 0), `SGOV ${usd(inc.sgov_value || 0)} and stocks`);
+  $("subtitle").textContent = t.data_to ? "data to " + t.data_to : "no decision yet";
 
   if (!t.ready) { $("buyBox").innerHTML = `<p class="muted">${esc(t.note)}</p>`; $("sellBox").innerHTML = ""; $("runnersTable").innerHTML = ""; }
   else {
@@ -634,25 +645,30 @@ async function loadTrade() {
     $("buyMeta").textContent = `${(t.mode || "").toUpperCase()} · ${u.sp500 ? `${u.sp500} S&P 500 companies${(u.extra || []).length ? ` + ${u.extra.length} of yours` : ""} scored · ` : ""}data to ${t.data_to} · for the close of ${t.executes}`;
     const x = t.best;
     $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side buy">BUY</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
-        <span class="amt">${x.shares ? x.shares.toFixed(4) + " sh" : ""} · ${usd(x.dollars)}</span></div>
+        <button class="ghost small-btn" id="boughtBest" title="Record that you bought it (Portfolio tab)">I bought this</button></div>
       <table class="compact" style="margin-top:10px"><tr><th class="l">Buy price</th><td><b>limit ${usd(x.buy_limit)}</b> <span class="muted">(the last close; the model enters at the next close)</span></td></tr>` +
       (x.patient ? `<tr><th class="l">Or, patient</th><td>limit ${usd(x.patient.price)} <span class="muted">(its median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not a fill; stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)})</span></td></tr>` : "") +
       `<tr><th class="l">Sell at target</th><td class="pos">${usd(x.target)} (${spct(x.target_pct, 1)})</td></tr>
        <tr><th class="l">Sell at stop</th><td class="neg">${usd(x.stop)} (${spct(x.stop_pct, 1)})</td></tr>
-       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (on a close)</td></tr>
-       <tr><th class="l">The model</th><td>expected net ${spct(x.expected_net)} · P(profit after costs) ${pct(x.p_win, 0)} · P(large loss) ${pct(x.p_risk, 0)} · vs SPY ${spct(x.expected_vs_spy)}</td></tr></table>`
+       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (on a close)</td></tr></table>`
       : "") + (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
     $("sellBox").innerHTML = t.sells.length ? `<table class="compact"><tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Bought</th><th>Unrealized</th><th>Sell at target</th><th>Sell at stop</th><th>Deadline</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
         <td>${money(s.last_close)}</td><td>${money(s.entry)}</td><td>${s.unrealized == null ? "–" : spct(s.unrealized)}</td><td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
-    $("runnersTable").innerHTML = t.runners_up.length ? "<tr><th class='l'>Ticker</th><th>Buy limit</th><th>Target</th><th>Stop</th><th>Expected net</th><th>P(profit)</th><th>P(large loss)</th></tr>" +
-      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td>${usd(x.buy_limit)}</td><td class="pos">${usd(x.target)}</td><td class="neg">${usd(x.stop)}</td><td>${spct(x.expected_net)}</td><td>${pct(x.p_win, 0)}</td><td>${pct(x.p_risk, 0)}</td></tr>`).join("")
+    $("runnersTable").innerHTML = t.runners_up.length ? "<tr><th class='l'>Ticker</th><th>Buy limit</th><th>Target</th><th>Stop</th><th class='l'>AI agents</th></tr>" +
+      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td>${usd(x.buy_limit)}</td><td class="pos">${usd(x.target)}</td><td class="neg">${usd(x.stop)}</td><td class="l small" data-agentcell="${esc(x.ticker)}">…</td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
-    const tied = [t.best, ...t.runners_up].filter(x => x && x.tied_with);
-    $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted." +
-      (tied.length ? " Stocks the model scores alike share one estimate of the expected gain and its chances, so those numbers repeat; the order comes from the ranking itself." : "");
+    $("runnersAll").hidden = !t.runners_up.length;
+    $("runnersAll").onclick = async () => {
+      try { await api("/api/ai-decisions", {tickers: t.runners_up.map(x => x.ticker), analysts: ["market", "social", "news", "fundamentals"], date: t.data_to}); }
+      catch (e) { showError(e.message); }
+      agentTicker = t.runners_up[0].ticker; loadAgentReport(); runnerAgents(t.runners_up);
+    };
+    runnerAgents(t.runners_up);
+    if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfPrice").value = x.buy_limit.toFixed(2); $("pfUnits").focus(); };
+    $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted.";
   }
 
   const pol = t.policy || {};
@@ -672,14 +688,6 @@ async function loadTrade() {
   document.querySelectorAll("[data-agents]").forEach(b => b.onclick = () => { agentTicker = b.dataset.agents; loadAgentReport(); runAgents(); });
   loadAgentReport();
 
-  const tr = b.traded || {};
-  $("budgetBox").innerHTML = b.started ? `<table class="compact">
-      <tr><td class="l">Budget set on ${esc(b.started)}</td><td>${usd(b.set || 0)}</td></tr>
-      <tr><td class="l">Into stocks since</td><td class="neg">−${usd(tr.spent || 0)}</td></tr>
-      <tr><td class="l">Back from sales</td><td class="pos">+${usd(tr.returned || 0)}</td></tr>
-      <tr><td class="l"><b>Available to trade</b></td><td><b>${usd(b.available || 0)}</b></td></tr></table>` +
-      (b.notes || []).map(n => `<p class="muted small">${esc(n)}</p>`).join("")
-    : `<p class="muted">${esc(b.note || "")}</p>`;
   loadRecord();
 }
 // --- the TradingAgents team on the model's pick: run it, watch it, read its full report ---
@@ -713,11 +721,49 @@ async function loadAgentReport() {
   };
   if (j.running && !agentPolling) { agentPolling = true; setTimeout(() => { agentPolling = false; loadAgentReport(); }, 2000); }
 }
+async function runnerAgents(list) {
+  for (const x of list) {
+    const cell = document.querySelector(`[data-agentcell="${x.ticker}"]`);
+    if (!cell) continue;
+    try {
+      const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
+      const word = r.available && r.final ? (r.final.match(/FINAL DECISION:\s*([A-Z ]+)/) || [])[1] : null;
+      cell.innerHTML = r.available ? `<b>${esc((word || "saved").trim())}</b> <span class="muted">${esc(r.date)}</span>` : '<span class="muted">not run</span>';
+    } catch (e) { cell.textContent = "–"; }
+  }
+}
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
   catch (e) { showError(e.message); }
   loadAgentReport();
 }
+
+// --- portfolio: the stocks you bought, their value and profit ---
+async function loadPortfolio() {
+  let d;
+  try { d = await api("/api/portfolio-view"); } catch (e) { $("pfTable").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
+  if (!$("pfDate").value) $("pfDate").value = d.as_of;
+  $("pfKpis").innerHTML = kpi("Portfolio value", usd(d.value || 0), `${d.holdings.length} stock${d.holdings.length === 1 ? "" : "s"} at the latest close`, "hero") +
+    kpi("Paid", usd(d.cost || 0), "what the units you hold cost") +
+    kpi("Unrealized", `<span class="${d.unrealized >= 0 ? "pos" : "neg"}">${susd(d.unrealized || 0)}</span>`, d.cost ? spct(d.unrealized / d.cost, 1) : "–") +
+    kpi("Realized", `<span class="${d.realized >= 0 ? "pos" : "neg"}">${susd(d.realized || 0)}</span>`, "from what you sold");
+  $("pfTable").innerHTML = d.holdings.length ? "<tr><th class='l'>Ticker</th><th>Units</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Profit</th><th class='l'>Since</th></tr>" +
+    d.holdings.map(r => `<tr><td class="l"><b>${tk(r.ticker)}</b></td><td>${(+r.units).toFixed(4)}</td><td>${money(r.avg_cost)}</td><td>${money(r.price)}</td><td>${money(r.value)}</td>` +
+      `<td class="${(r.pnl || 0) >= 0 ? "pos" : "neg"}">${r.pnl == null ? "–" : susd(r.pnl)} <span class="muted small">${r.pnl_pct == null ? "" : spct(r.pnl_pct, 1)}</span></td><td class="l">${esc(r.since)}</td></tr>`).join("")
+    : "<tr><td class='muted'>No stocks recorded yet. Record a buy above, or press \"I bought this\" on the Trade tab.</td></tr>";
+  $("pfTrades").innerHTML = d.trades.length ? "<tr><th class='l'>Date</th><th class='l'>Side</th><th class='l'>Ticker</th><th>Units</th><th>Price</th><th>Amount</th></tr>" +
+    d.trades.map(r => `<tr><td class="l">${esc(r.trade_date)}</td><td class="l">${r.quantity > 0 ? '<span class="side buy">BUY</span>' : '<span class="side sell">SELL</span>'}</td><td class="l"><b>${tk(r.ticker)}</b></td><td>${Math.abs(r.quantity).toFixed(4)}</td><td>${money(r.price)}</td><td>${usd(Math.abs(r.cash))}</td></tr>`).join("")
+    : "<tr><td class='muted'>No trades yet.</td></tr>";
+}
+$("pfSave").onclick = async () => {
+  const ticker = $("pfTicker").value.trim().toUpperCase(), units = +$("pfUnits").value, price = +$("pfPrice").value;
+  if (!ticker || !(units > 0) || !(price > 0)) { $("pfMsg").innerHTML = '<span class="neg">Enter a ticker, the units and the price.</span>'; return; }
+  try {
+    const r = await api("/api/ledger/fill", {sleeve: "trading", side: $("pfSide").value, ticker, quantity: units, price, date: $("pfDate").value, broker_record: true, note: "recorded on the Portfolio tab"});
+    $("pfMsg").innerHTML = `<span class="pos">Saved: ${esc($("pfSide").value)} ${units} ${esc(ticker)} at ${usd(price)}.</span>` + ((r.warnings || []).length ? ` <span class="muted">${esc(r.warnings.join("; "))}</span>` : "");
+    $("pfUnits").value = ""; loadPortfolio(); loadTrade();
+  } catch (e) { $("pfMsg").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+};
 
 // --- track record: were the picks and the agents' calls right? ---
 async function loadTrackRecord() {
@@ -1510,7 +1556,7 @@ $("agSave").onclick = async () => {
     drawEditors();
     $("watchList").value = (state.watchlist || []).join(", ");
   } catch (e) { showError(e.message); }
-  loadTrade(); loadRotation(); loadCapital(); loadKeys(); loadTrackRecord(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
+  loadTrade(); loadPortfolio(); loadRotation(); loadCapital(); loadKeys(); loadTrackRecord(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
   loadMarket(); loadForecasts(); loadLive(); loadHardware();
 })();
 </script>

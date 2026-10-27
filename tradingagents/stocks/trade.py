@@ -75,8 +75,6 @@ def plan(decision: dict | None, budget: float, patient_limits: dict[str, dict] |
     if mode != "validated":
         notes.append("Experimental: the model has not yet beaten SPY in its decision study and the live record, so "
                      "the buy is its best idea on paper, not a validated signal. Size it as an experiment.")
-    if best and budget < 1:
-        notes.append("Nothing left in the trading budget: set one in Settings > Money to size this buy.")
     if not best:
         notes.append("No stock passes the model's gates today: waiting is the answer.")
     return {"ready": True, "decision_id": decision.get("id"), "data_to": decision.get("info_cutoff"),

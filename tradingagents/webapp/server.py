@@ -276,6 +276,39 @@ class App:
                                   "last_event": books["events"][0]["recorded_at"] if books["events"] else None}})
         return out
 
+    def portfolio_view(self) -> dict:
+        """The stocks you recorded buying (not SGOV): units, average cost (first in, first out), value and profit."""
+        from tradingagents.ledger.income import RESERVE
+        from tradingagents.stocks.daily import lots_from_ledger
+
+        today = _today()
+        lots = [lot for lot in lots_from_ledger(self.store, "trading", today) if lot["ticker"] != RESERVE]
+        fills = [e for e in self.store.ledger.events("trading", today) if e["kind"] == "fill" and e["ticker"] != RESERVE]
+        tickers = sorted({lot["ticker"] for lot in lots} | {e["ticker"] for e in fills})
+        prices = latest_prices(self.cache_dir, tickers) if tickers else {}
+        rows = {}
+        for lot in lots:
+            r = rows.setdefault(lot["ticker"], {"ticker": lot["ticker"], "units": 0.0, "cost": 0.0, "since": lot["entry_date"]})
+            r["units"] += lot["shares"]
+            r["cost"] += lot["shares"] * (lot.get("entry_px") or 0.0)
+            r["since"] = min(r["since"], lot["entry_date"])
+        for r in rows.values():
+            px = prices.get(r["ticker"])
+            r["avg_cost"] = r["cost"] / r["units"] if r["units"] else None
+            r["price"] = px
+            r["value"] = r["units"] * px if px else None
+            r["pnl"] = r["value"] - r["cost"] if r["value"] is not None else None
+            r["pnl_pct"] = r["pnl"] / r["cost"] if r["pnl"] is not None and r["cost"] else None
+        bought = -sum(e["cash"] for e in fills if e["cash"] < 0)
+        sold = sum(e["cash"] for e in fills if e["cash"] > 0)
+        open_cost = sum(r["cost"] for r in rows.values())
+        value = sum(r["value"] or 0.0 for r in rows.values())
+        return {"as_of": today, "holdings": sorted(rows.values(), key=lambda r: -(r["value"] or 0)),
+                "value": value, "cost": open_cost, "unrealized": value - open_cost,
+                "realized": sold - (bought - open_cost), "bought": bought, "sold": sold,
+                "trades": [{k: e[k] for k in ("id", "trade_date", "ticker", "quantity", "price", "cash", "note")}
+                           for e in sorted(fills, key=lambda e: (e["trade_date"], e["id"]), reverse=True)]}
+
     def model_record(self) -> dict:
         from tradingagents.stocks import feedback
 
@@ -1513,6 +1546,8 @@ def make_handler(app: App):
                     self._send(HTTPStatus.OK, (STATIC / "ticker.html").read_bytes(), "text/html; charset=utf-8")
                 elif url.path == "/api/ticker":
                     self._json(app.ticker(query.get("symbol", "")))
+                elif url.path == "/api/portfolio-view":
+                    self._json(_finite(app.portfolio_view()))
                 elif url.path == "/api/track-record":
                     from tradingagents.stocks import track_record
                     self._json(_finite(track_record.build(app.store.con, app.cache_dir, config=app.config)))
