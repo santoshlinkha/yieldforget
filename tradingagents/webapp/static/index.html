@@ -186,6 +186,10 @@ button:disabled { opacity: .5; cursor: default; }
 .seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; }
 .check { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; margin: 0; white-space: nowrap; font-weight: 500; }
+.undo-bar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center;
+  gap: 12px; background: var(--text); color: var(--bg); border-radius: 10px; padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+.undo-bar[hidden] { display: none; }
+.undo-bar .small-btn { color: var(--bg); border-color: currentColor; }
 .note { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
 .ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-line); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
 .log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -492,6 +496,7 @@ select option { background: var(--surface); color: var(--text); }
         <div class="table-wrap"><table id="recAgents" class="compact"></table></div>
       </div>
       <p class="muted small" id="recHidden"></p>
+      <div class="undo-bar" id="recUndo" hidden></div>
     </section>
 
     <section class="tab" id="forecasts">
@@ -773,6 +778,19 @@ $("pfSave").onclick = async () => {
 };
 
 // --- track record: were the picks and the agents' calls right? ---
+let undoTimer = null;
+function showUndo(text, key) {
+  const bar = $("recUndo");
+  bar.innerHTML = `<span>${esc(text)}</span>` + (key ? ` <button class="ghost small-btn" id="recUndoBtn">Undo</button>` : "");
+  bar.hidden = false;
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => { bar.hidden = true; }, 10000);
+  if (key) $("recUndoBtn").onclick = async () => {
+    bar.hidden = true;
+    await api("/api/track-record/unhide", {key});
+    loadTrackRecord();
+  };
+}
 async function loadTrackRecord() {
   let d;
   try { d = await api("/api/track-record"); } catch (e) { $("recPicks").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
@@ -803,9 +821,12 @@ async function loadTrackRecord() {
       `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td>${del(r)}</tr>`).join("")
     : "<tr><td class='muted'>No AI agent rating saved yet.</td></tr>";
   $("recHidden").innerHTML = d.hidden ? `${d.hidden} row(s) deleted from this view. <a href="#" id="recRestore">Restore all</a>` : "";
+  // Delete at once (no prompt): the row goes, stays gone after a refresh, and Undo brings it back.
   document.querySelectorAll("#record .rec-del").forEach(b => b.onclick = async () => {
-    if (!confirm("Delete this row from the track record? The saved decision or rating is kept, and Restore all brings it back.")) return;
-    try { await api("/api/track-record/hide", {key: b.dataset.key}); loadTrackRecord(); } catch (e) { alert(e.message); }
+    const row = b.closest("tr"), key = b.dataset.key, name = row.querySelector("b") ? row.querySelector("b").textContent : "row";
+    row.hidden = true;
+    try { await api("/api/track-record/hide", {key}); } catch (e) { row.hidden = false; showUndo(`Could not delete: ${e.message}`); return; }
+    showUndo(`Deleted ${name}.`, key);
   });
   if ($("recRestore")) $("recRestore").onclick = async ev => { ev.preventDefault(); await api("/api/track-record/restore", {}); loadTrackRecord(); };
 }

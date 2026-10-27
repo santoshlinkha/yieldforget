@@ -182,4 +182,6 @@ def test_the_second_models_buys_are_recorded_and_a_limit_fills_only_through_its_
     T.hide(store.con, out["policy"][0]["key"])
     again = T.build(Con(), tmp_path)
     assert len(again["policy"]) == 1 and again["hidden"] == 1
+    assert T.unhide(store.con, out["policy"][0]["key"]) == 1 and T.build(Con(), tmp_path)["hidden"] == 0   # Undo
+    T.hide(store.con, out["policy"][1]["key"])
     assert T.restore_all(store.con) == 1 and len(T.build(Con(), tmp_path)["policy"]) == 2

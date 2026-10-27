@@ -141,6 +141,13 @@ def hide(con, key: str) -> None:
         con.execute("INSERT OR IGNORE INTO track_record_hidden VALUES (?, ?)", (str(key), now_utc()))
 
 
+def unhide(con, key: str) -> int:
+    from tradingagents.ledger.db import transaction
+
+    with transaction(con):
+        return con.execute("DELETE FROM track_record_hidden WHERE key = ?", (str(key),)).rowcount
+
+
 def restore_all(con) -> int:
     from tradingagents.ledger.db import transaction
 

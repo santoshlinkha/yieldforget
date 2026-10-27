@@ -1770,6 +1770,9 @@ def make_handler(app: App):
                     from tradingagents.stocks import track_record
                     track_record.hide(app.store.con, str(body.get("key") or ""))
                     self._json({"hidden": True})
+                elif self.path == "/api/track-record/unhide":
+                    from tradingagents.stocks import track_record
+                    self._json({"restored": track_record.unhide(app.store.con, str(body.get("key") or ""))})
                 elif self.path == "/api/track-record/restore":
                     from tradingagents.stocks import track_record
                     self._json({"restored": track_record.restore_all(app.store.con)})
