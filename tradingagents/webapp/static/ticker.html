@@ -189,19 +189,31 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .vchecks .mk.ok { color: var(--buy); } .vchecks .mk.no { color: var(--sell); } .vchecks .mk.na { color: var(--faint); }
 #reports a.on { font-weight: 700; text-decoration: underline; }
 #reports .runView:not(:empty) { margin: 8px 0 4px; }
+.modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+  background: rgba(10, 15, 26, .35); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.modal[hidden] { display: none; }
+.modal .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  width: min(980px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.modal .bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.modal .bar b { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.modal .body { overflow: auto; padding: 16px; }
+.modal .body > .md { border: 0; background: none; padding: 0; }
+body.modal-open { overflow: hidden; }
 .md { font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px; padding: 14px 16px; }
+.md .md { background: none; border: 0; padding: 0; }
 .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 16px 0 6px; line-height: 1.3; }
 .md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3 { font-size: 14.5px; } .md h4, .md h5, .md h6 { font-size: 13.5px; }
 .md p { margin: 6px 0; } .md ul, .md ol { margin: 6px 0; padding-left: 22px; } .md li { margin: 2px 0; }
+.md li > ul, .md li > ol { margin: 2px 0; }
 .md code { font: 12px ui-monospace, Consolas, monospace; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
 .md pre { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; }
 .md pre code { border: 0; padding: 0; background: none; white-space: pre; }
 .md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--border); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
 .md .tablewrap { overflow-x: auto; margin: 8px 0; }
-.md table { font-size: 12.5px; width: auto; min-width: 50%; }
+.md table { font-size: 12.5px; width: auto; min-width: 50%; border-collapse: collapse; }
 .md th { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--text); background: var(--surface); }
 .md th, .md td { text-align: left; border: 1px solid var(--border); padding: 5px 8px; white-space: normal; }
 .md a { color: var(--accent); }
@@ -661,6 +673,8 @@ async function load() {
     }
     const order = run => run.date + "|" + (run.run ? "0" + run.run : "1");
     rp.runs = Object.values(byDay).sort((a, b) => (order(a) < order(b) ? 1 : -1));
+    const allRuns = rp.runs.length;
+    rp.runs = rp.runs.slice(0, 5);                // the latest five runs; older ones stay saved on disk
     const earlier = run => {
       const t = (run.run.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/) || []).slice(1);
       return t.length ? ` · earlier run (${t[0]}-${t[1]}-${t[2]} ${t[3]}:${t[4]}), superseded` : " · earlier run, superseded";
@@ -673,6 +687,7 @@ async function load() {
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") +
       `<div class="runView"></div></details>`).join("")
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
+    if (allRuns > rp.runs.length) h += `<p class="muted small">Showing the latest ${rp.runs.length} of ${allRuns} runs.</p>`;
     $("reports").innerHTML = h;
     // A report opens inside its own run, one at a time; collapsing the run closes it.
     const show = (a, html) => {
@@ -688,12 +703,16 @@ async function load() {
     $("reports").querySelectorAll("a[data-calls]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
       const r = await getJSON(`/api/requests?ticker=${encodeURIComponent(symbol)}&date=${a.dataset.calls}${a.dataset.callrun ? "&run=" + encodeURIComponent(a.dataset.callrun) : ""}`).catch(e => ({error: e.message}));
-      show(a, r.error ? `<p class="neg">${esc(r.error)}</p>` : callsView(r.requests));
+      openModal(`${symbol} · ${a.dataset.calls} · what was sent to the AI`, r.error ? `<p class="neg">${esc(r.error)}</p>` : callsView(r.requests));
     });
     $("reports").querySelectorAll("a[data-path]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
-      const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
-      show(a, renderMarkdown(await res.text()));
+      const day = (a.closest("details") || {}).dataset || {};
+      openModal(`${symbol} · ${day.day || day.run || ""} · ${a.textContent}`, '<p class="muted">Loading…</p>');
+      try {
+        const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
+        $("reportModalBody").innerHTML = renderMarkdown(await res.text());
+      } catch (e) { $("reportModalBody").innerHTML = `<p class="neg">${esc(e.message)}</p>`; }
     });
     $("reports").querySelectorAll("a[data-open]").forEach(a => a.onclick = ev => { ev.preventDefault(); openRun(a.dataset.open); });
     // /ticker/AVGO#report=2026-10-23 opens that run's final decision (the Decisions page links here).
@@ -701,9 +720,30 @@ async function load() {
     if (linked && !openRun.done) { openRun.done = true; openRun(linked); }
   }
 }
+// --- a report in a floating window over the blurred page: closed by the button, Esc or a click outside ---
+function openModal(title, html) {
+  if (!openModal.bound) {                       // bound on first use: the window's markup closes the page
+    openModal.bound = true;
+    $("reportModalClose").onclick = closeModal;
+    $("reportModal").addEventListener("click", ev => { if (ev.target === $("reportModal")) closeModal(); });
+    document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !$("reportModal").hidden) closeModal(); });
+  }
+  $("reportModalTitle").textContent = title;
+  $("reportModalBody").innerHTML = html;
+  $("reportModalBody").scrollTop = 0;
+  $("reportModal").hidden = false;
+  document.body.classList.add("modal-open");
+  $("reportModalClose").focus();
+}
+function closeModal() {
+  $("reportModal").hidden = true;
+  document.body.classList.remove("modal-open");
+}
 // --- Markdown, rendered safely: every piece of text is escaped first; links only to web addresses ---
 function mdInline(t) {
   const codes = [];
+  // The agents sometimes wrap numbers in LaTeX: $\$815.31$ is $815.31 and $+25.38$ is +25.38.
+  t = String(t).replace(/\$\\\$([^$]+)\$/g, "$$$1").replace(/\$([-+]?\$?[\d.,]+%?)\$/g, "$1");
   let h = esc(t).replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
   h = h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>")
@@ -747,23 +787,26 @@ function openRun(day) {
   box.scrollIntoView({behavior: "smooth", block: "start"});
 }
 function renderMarkdown(src) {
-  const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+  const lines = String(src || "").replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n");
   const out = [];
-  let para = [], list = null;
+  let para = [];
+  const stack = [];                            // open lists: {tag, indent}
   const flushPara = () => { if (para.length) { out.push(`<p>${mdInline(para.join(" "))}</p>`); para = []; } };
-  const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map(i => `<li>${mdInline(i)}</li>`).join("")}</${list.tag}>`); list = null; } };
+  const closeLists = (indent = -1) => {
+    while (stack.length && stack[stack.length - 1].indent > indent) out.push(`</li></${stack.pop().tag}>`);
+  };
   const cells = row => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i], t = line.trim();
+    const line = lines[i], t = line.trim(), indent = line.length - line.trimStart().length;
     if (/^```/.test(t)) {                      // fenced code block
-      flushPara(); flushList();
+      flushPara(); closeLists();
       const body = [];
       while (++i < lines.length && !/^```/.test(lines[i].trim())) body.push(lines[i]);
       out.push(`<pre><code>${esc(body.join("\n"))}</code></pre>`);
       continue;
     }
     if (t.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
-      flushPara(); flushList();                // a table: header, separator, then rows
+      flushPara(); closeLists();               // a table: header, separator, then rows
       const head = cells(t), rows = [];
       i += 1;
       while (i + 1 < lines.length && lines[i + 1].includes("|") && lines[i + 1].trim()) rows.push(cells(lines[++i]));
@@ -771,23 +814,30 @@ function renderMarkdown(src) {
         rows.map(r => `<tr>${head.map((_, k) => `<td>${mdInline(r[k] ?? "")}</td>`).join("")}</tr>`).join("") + `</table></div>`);
       continue;
     }
-    if (!t) { flushPara(); flushList(); continue; }
+    if (!t) { flushPara(); continue; }         // a blank line ends a paragraph; lists may continue after it
     let m;
-    if ((m = t.match(/^(#{1,6})\s+(.*)$/))) { flushPara(); flushList(); out.push(`<h${m[1].length}>${mdInline(m[2].replace(/\s#+$/, ""))}</h${m[1].length}>`); continue; }
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { flushPara(); flushList(); out.push("<hr>"); continue; }
-    if ((m = t.match(/^>\s?(.*)$/))) { flushPara(); flushList(); out.push(`<blockquote>${mdInline(m[1])}</blockquote>`); continue; }
     if ((m = t.match(/^([-*+]|\d+[.)])\s+(.*)$/))) {
       flushPara();
       const tag = /\d/.test(m[1]) ? "ol" : "ul";
-      if (!list || list.tag !== tag) { flushList(); list = {tag, items: []}; }
-      list.items.push(m[2]);
+      closeLists(indent);                      // leave any deeper lists
+      const top = stack[stack.length - 1];
+      if (top && top.indent === indent && top.tag !== tag) { out.push(`</li></${stack.pop().tag}>`); }
+      const cur = stack[stack.length - 1];
+      if (cur && cur.indent === indent) out.push(`</li><li>${mdInline(m[2])}`);
+      else { out.push(`<${tag}><li>${mdInline(m[2])}`); stack.push({tag, indent}); }
       continue;
     }
-    if (list && /^\s{2,}/.test(line)) { list.items[list.items.length - 1] += " " + t; continue; }   // a wrapped list item
-    flushList();
+    if (stack.length && indent > stack[stack.length - 1].indent) {   // a wrapped or continued list item
+      out.push(" " + mdInline(t));
+      continue;
+    }
+    closeLists();
+    if ((m = t.match(/^(#{1,6})\s+(.*)$/))) { flushPara(); out.push(`<h${m[1].length}>${mdInline(m[2].replace(/\s#+$/, ""))}</h${m[1].length}>`); continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { flushPara(); out.push("<hr>"); continue; }
+    if ((m = t.match(/^>\s?(.*)$/))) { flushPara(); out.push(`<blockquote>${mdInline(m[1])}</blockquote>`); continue; }
     para.push(t);
   }
-  flushPara(); flushList();
+  flushPara(); closeLists();
   return `<div class="md">${out.join("")}</div>`;
 }
 
@@ -1066,5 +1116,9 @@ load();
 loadSignals();
 pollAnalysis(true);
 </script>
+<div class="modal" id="reportModal" hidden role="dialog" aria-modal="true" aria-labelledby="reportModalTitle">
+  <div class="panel"><div class="bar"><b id="reportModalTitle"></b><button class="ghost" id="reportModalClose" aria-label="Close">✕ Close</button></div>
+    <div class="body" id="reportModalBody"></div></div>
+</div>
 </body>
 </html>

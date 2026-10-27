@@ -1513,6 +1513,22 @@ class App:
             raise ValueError("not a saved report")
         return target.read_text(encoding="utf-8")
 
+    def _last_agent_run(self, ticker: str) -> dict | None:
+        """The newest routed run of the agents on a ticker (``agent_runs``): status, when, which model, why it failed."""
+        try:
+            row = self.store.con.execute("SELECT as_of, finished_at, status, actual_provider, actual_model, attempts_json,"
+                                         " error FROM agent_runs WHERE ticker = ? ORDER BY finished_at DESC LIMIT 1",
+                                         (ticker,)).fetchone()
+        except Exception:   # an older database without the table
+            return None
+        if not row:
+            return None
+        tried = json.loads(row["attempts_json"] or "[]")
+        why = next((a.get("why") for a in reversed(tried) if a.get("state") == "failed" and a.get("why")), None)
+        return {"as_of": row["as_of"], "finished_at": row["finished_at"], "status": row["status"],
+                "model": f"{row['actual_provider']}/{row['actual_model']}" if row["actual_provider"] else None,
+                "why": why or (row["error"] or "")[:120] or None}
+
     def latest_agent_report(self, ticker: str) -> dict:
         """The newest saved TradingAgents run for a ticker: its day, final decision text and report files."""
         from tradingagents.dataflows.symbols import safe_ticker_component
@@ -1525,13 +1541,25 @@ class App:
             base = root / safe_ticker_component(ticker)
             if base.is_dir():
                 found += [d / "reports" for d in base.iterdir() if (d / "reports" / "complete_report.md").is_file()]
+        last_run = self._last_agent_run(ticker)
         if not found:
-            return {"ticker": ticker, "available": False}
+            return {"ticker": ticker, "available": False, "last_run": last_run}
         folder = max(found, key=lambda f: (f.parent.name, (f / "complete_report.md").stat().st_mtime))
         final = folder / "0_FINAL_DECISION.md"
+        text = final.read_text(encoding="utf-8") if final.is_file() else ""
+        # The agents' own call, as the final-decision file states it (the heading is the internal model's verdict).
+        seen = re.search(r"rating (\w+), i\.e\. ([A-Z]+)", text)
+        used = re.search(r"\*\*Agent models\*\*: ([^\n(]+)", text)
+        rating, action = seen.groups() if seen else (None, None)
+        pm = folder / "5_portfolio" / "decision.md"
+        if rating is None and pm.is_file():      # an older run: the portfolio manager's rating only
+            got = re.search(r"\*\*Rating\*\*:\s*(\w+)", pm.read_text(encoding="utf-8"))
+            rating = got.group(1) if got else None
         return {"ticker": ticker, "available": True, "date": folder.parent.name,
+                "agent_rating": rating, "agent_action": action,
+                "agent_models": used.group(1).strip() if used else None, "last_run": last_run,
                 "saved_at": datetime.fromtimestamp((folder / "complete_report.md").stat().st_mtime).isoformat(timespec="minutes"),
-                "final": final.read_text(encoding="utf-8") if final.is_file() else None,
+                "final": text or None,
                 "markdown": str((folder / "complete_report.md").resolve()),
                 "html": str((folder / "complete_report.html").resolve()) if (folder / "complete_report.html").is_file() else None}
 

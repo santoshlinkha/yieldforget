@@ -102,3 +102,19 @@ def test_every_routed_agent_run_is_recorded_failures_included_and_never_edited(t
     assert row["requested_provider"] == tried[0]["provider"] and len(row["route_version"]) > 8
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         app.store.con.execute("UPDATE agent_runs SET status = 'ok'")
+
+
+def test_the_runners_up_cell_reads_the_agents_own_call_not_the_models_verdict(tmp_path, monkeypatch):
+    from tradingagents.webapp import server as srv
+
+    app = srv.App(tmp_path / "my_portfolio.json", tmp_path / "my_buys.json", tmp_path / "u.json",
+                  {**srv.DEFAULT_CONFIG, "data_cache_dir": str(tmp_path / "c"), "results_dir": str(tmp_path / "r")})
+    folder = tmp_path / "r" / "FICO" / "2026-10-23" / "reports"
+    folder.mkdir(parents=True)
+    (folder / "complete_report.md").write_text("# Report", encoding="utf-8")
+    (folder / "0_FINAL_DECISION.md").write_text(
+        "# FINAL DECISION: BUY\n\n- **The agents' view** (shown, not used): rating Hold, i.e. WATCH; differs\n"
+        "- **Agent models**: google/gemini-3.5-flash-lite (after a fallback)\n", encoding="utf-8")
+    r = app.latest_agent_report("fico")
+    assert (r["agent_rating"], r["agent_action"], r["agent_models"]) == ("Hold", "WATCH", "google/gemini-3.5-flash-lite")
+    assert r["last_run"] is None and app.latest_agent_report("NONE")["available"] is False
