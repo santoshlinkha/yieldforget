@@ -289,6 +289,7 @@ select option { background: var(--surface); color: var(--text); }
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
         <button role="tab" data-tab="decisions">Decisions</button>
+        <button role="tab" data-tab="record">Track record</button>
         <button role="tab" data-tab="settings">Settings</button>
       </nav>
       <div class="status" id="subtitle">Loading…</div>
@@ -451,6 +452,21 @@ select option { background: var(--surface); color: var(--text); }
       <div class="split">
         <div class="card"><h3>Prospective shadow account</h3><div id="dcShadow"></div></div>
         <div class="card"><h3>Action history</h3><div class="table-wrap"><table id="dcHistory" class="compact"></table></div></div>
+      </div>
+    </section>
+
+    <section class="tab" id="record">
+      <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made and every rating the AI agents gave, followed for 20 trading days after the day they could first be bought. Judged only once the 20 days are over; until then the return so far is shown.</p></div>
+        <button class="ghost" id="recRefresh">Refresh</button></div>
+      <div class="kpis" id="recKpis"></div>
+      <div class="card">
+        <h3>The model's picks</h3>
+        <p class="muted small" id="recRule"></p>
+        <div class="table-wrap"><table id="recPicks" class="compact"></table></div>
+      </div>
+      <div class="card">
+        <h3>The AI agents' calls</h3>
+        <div class="table-wrap"><table id="recAgents" class="compact"></table></div>
       </div>
     </section>
 
@@ -720,6 +736,30 @@ async function runAgents() {
   catch (e) { showError(e.message); }
   loadAgentReport();
 }
+
+// --- track record: were the picks and the agents' calls right? ---
+async function loadTrackRecord() {
+  let d;
+  try { d = await api("/api/track-record"); } catch (e) { $("recPicks").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
+  const s = d.summary, show = x => x.judged ? `${x.correct} of ${x.judged} (${pct(x.hit_rate, 0)})` : "none judged yet";
+  $("recKpis").innerHTML =
+    kpi("Best buy, correct", show(s.best_buy), s.best_buy.judged ? `average ${spct(s.best_buy.avg_return)} · vs SPY ${spct(s.best_buy.avg_vs_spy)}` : `${s.best_buy.open} still open`, "hero") +
+    kpi("All picks, correct", show(s.all_picks), s.all_picks.judged ? `average ${spct(s.all_picks.avg_return)} · vs SPY ${spct(s.all_picks.avg_vs_spy)}` : `${s.all_picks.open} still open`) +
+    kpi("AI agents, correct", show(s.agents), s.agents.judged ? `average ${spct(s.agents.avg_return)}` : `${s.agents.open} still open`);
+  $("recRule").textContent = `Correct: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade).`;
+  const verdict = r => r.verdict === "correct" ? '<span class="pos"><b>✓ correct</b></span>' : r.verdict === "wrong" ? '<span class="neg"><b>✗ wrong</b></span>'
+    : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
+  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th></tr>" +
+    d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
+      `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
+      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")
+    : "<tr><td class='muted'>No decision saved yet.</td></tr>";
+  $("recAgents").innerHTML = d.agents.length ? "<tr><th class='l'>As of</th><th class='l'>Stock</th><th class='l'>Rating</th><th>Return</th><th class='l'>Result</th></tr>" +
+    d.agents.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b></td><td class="l">${esc(r.rating)}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td>` +
+      `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td></tr>`).join("")
+    : "<tr><td class='muted'>No AI agent rating saved yet.</td></tr>";
+}
+$("recRefresh").onclick = loadTrackRecord;
 
 async function loadRecord() {
   let r;
@@ -1485,7 +1525,7 @@ $("agSave").onclick = async () => {
     drawEditors();
     $("watchList").value = (state.watchlist || []).join(", ");
   } catch (e) { showError(e.message); }
-  loadTrade(); loadRotation(); loadCapital(); loadKeys(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
+  loadTrade(); loadRotation(); loadCapital(); loadKeys(); loadTrackRecord(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
   loadMarket(); loadForecasts(); loadLive(); loadHardware();
 })();
 </script>

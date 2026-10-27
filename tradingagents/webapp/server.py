@@ -1512,6 +1512,9 @@ def make_handler(app: App):
                     self._send(HTTPStatus.OK, (STATIC / "ticker.html").read_bytes(), "text/html; charset=utf-8")
                 elif url.path == "/api/ticker":
                     self._json(app.ticker(query.get("symbol", "")))
+                elif url.path == "/api/track-record":
+                    from tradingagents.stocks import track_record
+                    self._json(_finite(track_record.build(app.store.con, app.cache_dir, config=app.config)))
                 elif url.path == "/api/agent-report":
                     self._json(app.latest_agent_report(query.get("ticker", "")))
                 elif url.path == "/report":

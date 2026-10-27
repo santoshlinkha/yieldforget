@@ -112,3 +112,16 @@ def test_predictions_are_saved_scored_once_and_calibrate_only_with_enough_data(t
     path = feedback.export(con, tmp_path / "hist")
     assert path.exists() and len(pd.read_csv(path)) == 360
     assert date.fromisoformat(pd.read_csv(path)["matured_on"].dropna().iloc[0])
+
+
+def test_a_pick_is_judged_only_after_its_20_sessions_and_against_its_cost():
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    close = pd.DataFrame({"AAA": np.linspace(100, 110, 30), "SPY": 100.0, "BBB": np.linspace(100, 90, 30)}, index=idx)
+    done = T._follow(close, "AAA", str(idx[0].date()), 20)
+    assert done["entry_date"] == str(idx[1].date()) and done["sessions"] == 20 and done["status"] == "done"
+    assert done["return"] == pytest.approx(close["AAA"].iloc[21] / close["AAA"].iloc[1] - 1) and done["spy"] == 0.0
+    still = T._follow(close, "AAA", str(idx[20].date()), 20)
+    assert still["status"] == "open" and still["sessions"] == 8
+    assert T._follow(close, "AAA", str(idx[-1].date()), 20)["status"] == "not bought yet"
