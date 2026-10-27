@@ -95,7 +95,7 @@ def collect_ratings(tickers, config: dict, analysts=DEFAULT_ANALYSTS, trade_date
 
 
 def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, report_dir, est_usd: float = 0.30,
-            allow_paid: bool = False) -> tuple[dict, str]:
+            allow_paid: bool = False, progress=None) -> tuple[dict, str]:
     """One full TradingAgents run for ``ticker`` as of ``trade_date``, its reports saved under ``report_dir``.
 
     Paid, so only on an explicit request (``allow_paid``), through the gateway: held to the budget,
@@ -111,10 +111,12 @@ def analyze(ticker: str, trade_date: str, config: dict, analysts, gateway, repor
     used = roles.models_used(config, [r for r in roles.ROLES if r not in ANALYST_ROLES or r in analysts])
 
     def work(callback):
+        from tradingagents.llm_clients.live_status import LiveStatus
         from tradingagents.llm_clients.request_log import RequestLog
 
         folder = fresh_report_folder(report_dir)   # an earlier run for this day is archived, not overwritten
-        graph = TradingAgentsGraph(analysts, config=config, callbacks=[callback, RequestLog(folder)])
+        live = [LiveStatus(progress)] if progress else []
+        graph = TradingAgentsGraph(analysts, config=config, callbacks=[callback, RequestLog(folder), *live])
         state, rating = graph.propagate(ticker, trade_date)
         graph.save_reports(state, ticker, folder)
         from tradingagents.agents.entry_plan import from_state, save_run_file

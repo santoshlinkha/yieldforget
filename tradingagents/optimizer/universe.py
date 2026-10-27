@@ -175,15 +175,17 @@ def read_config(path: str | Path | None) -> dict:
     that list.
     """
     if not (path and Path(path).exists()):
-        return {"groups": list(DEFAULT_GROUPS), "extra": []}
+        return {"groups": list(DEFAULT_GROUPS), "extra": [], "exclude": []}
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"universe file {path} is not usable: {exc}") from exc
     if "tickers" in data and "groups" not in data:
-        return {"groups": [], "extra": [t.strip().upper() for t in data["tickers"] if t.strip()]}
+        return {"groups": [], "extra": [t.strip().upper() for t in data["tickers"] if t.strip()], "exclude": []}
     groups = [g for g in data.get("groups", DEFAULT_GROUPS) if g in GROUPS]
-    return {"groups": groups, "extra": [t.strip().upper() for t in data.get("extra", []) if t.strip()]}
+    return {"groups": groups, "extra": [t.strip().upper() for t in data.get("extra", []) if t.strip()],
+            # Tickers left out of every list for now (e.g. the leveraged funds); remove them here to bring them back.
+            "exclude": [t.strip().upper() for t in data.get("exclude", []) if t.strip()]}
 
 
 def tickers_for(config: dict, cache_dir: str | Path | None = None) -> list[str]:
@@ -199,7 +201,14 @@ def tickers_for(config: dict, cache_dir: str | Path | None = None) -> list[str]:
             _sp500_names.update(members)
             out += list(members)
     out += config.get("extra", [])
-    return list(dict.fromkeys(out))
+    skip = set(config.get("exclude", []))
+    return [t for t in dict.fromkeys(out) if t not in skip]
+
+
+def etf_list(config: dict) -> list[str]:
+    """The ETFs the forecasts use: the built-in list and the extra tickers, less the excluded ones."""
+    skip = set(config.get("exclude", []))
+    return [t for t in dict.fromkeys([*ETFS, *config.get("extra", [])]) if t not in skip]
 
 
 def load_universe(path: str | Path | None, cache_dir: str | Path | None = None) -> list[str]:

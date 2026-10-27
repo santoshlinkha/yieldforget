@@ -408,7 +408,8 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     wanted = {lot["ticker"] for lot in lots}
     wanted |= {t for t, q in store.ledger.state("combined", as_of).positions.items() if q and t not in CASH_FUNDS}
     wanted |= {str(t).upper() for t in store.get("global", "stock_watchlist") or []}
-    data = D.load(sorted(wanted), cache_dir)
+    data = D.load(sorted(wanted), cache_dir, progress=lambda stage, done=None, count=None, **_: say(
+        f"loading data: {stage}" + (f" ({done} of {count})" if done is not None else f" ({count})" if count else "")))
     spy = data.close["SPY"].dropna()
     cutoff = spy.index[spy.index <= pd.Timestamp(as_of)][-1]
     freshness = (pd.Timestamp(as_of) - cutoff).days

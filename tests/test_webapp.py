@@ -159,3 +159,77 @@ def test_a_pasted_answer_is_kept_with_its_prompt_and_a_second_one_archives_the_f
     archived = list((day / "archive").iterdir())
     assert len(archived) == 1 and '"Hold"' in (archived[0] / "chat_answer.md").read_text()
     assert '"Sell"' in (day / "reports" / "chat_answer.md").read_text()
+
+
+def test_failed_providers_move_on_through_gemini_then_free_openrouter_models(tmp_path, monkeypatch):
+    from tradingagents.webapp import server as srv
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "y")
+    app = srv.App(tmp_path / "my_portfolio.json", tmp_path / "my_buys.json", tmp_path / "u.json",
+                  {**srv.DEFAULT_CONFIG, "data_cache_dir": str(tmp_path / "c"), "results_dir": str(tmp_path / "r")})
+    app.store.set("global", "ai_fallbacks", ["google", "openrouter"])
+    app.store.set("global", "ai_primary", {"provider": "google", "quick": "gemini-3.8-flash", "deep": "gemini-3.8-flash"})
+    g = app.store.settings("global")
+    chain = [(c["llm_provider"], c["deep_think_llm"]) for c in app.agent_attempts(g)]
+    assert chain[0] == ("google", "gemini-3.8-flash")
+    assert [p for p, _ in chain[1:]] == ["google"] * (len(chain) - 1 - 3) + ["openrouter"] * 3
+    assert all(m.endswith(":free") for p, m in chain if p == "openrouter")
+    prices = app.gateway().policy.prices
+    assert prices["openrouter/" + chain[-1][1]].input == 0.0          # free models are priced at $0
+    assert srv._short_error(RuntimeError("Error code: 429 - rate limited upstream")) == "rate limited"
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    assert all(c["llm_provider"] != "openrouter" for c in app.agent_attempts(g))   # no key, no OpenRouter
+
+
+def test_keys_are_saved_to_the_env_file_masked_on_the_page_and_limited_to_known_names(tmp_path, monkeypatch):
+    from tradingagents.webapp import keys
+
+    env = tmp_path / ".env"
+    env.write_text("OTHER=1\nOPENROUTER_API_KEY=old\n", encoding="utf-8")
+    monkeypatch.setattr(keys, "env_path", lambda: env)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    out = keys.save("OPENROUTER_API_KEY", "sk-or-v1-abcdef1234567890")
+    assert out["masked"] == "sk-or-…7890" and "abcdef" not in str(keys.listing())
+    assert env.read_text().splitlines() == ["OTHER=1", "OPENROUTER_API_KEY=sk-or-v1-abcdef1234567890"]
+    import os
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-v1-abcdef1234567890"     # used at once
+    keys.save("OPENROUTER_API_KEY", "")
+    assert env.read_text().splitlines() == ["OTHER=1"] and "OPENROUTER_API_KEY" not in os.environ
+    with pytest.raises(ValueError):
+        keys.save("PATH", "x")                                              # only known key names
+    with pytest.raises(ValueError):
+        keys.save("GROQ_API_KEY", "a b")
+
+
+def test_a_stuck_job_can_be_given_up_and_its_late_result_is_ignored(monkeypatch):
+    from tradingagents.webapp import server as srv
+
+    gate = threading.Event()
+    job = srv.Job()
+    job.start(lambda j: (gate.wait(5), "late")[1])
+    assert job.running and not job.stop_waiting()                        # it reported progress just now
+    job.touched_at -= srv.Job.STUCK_AFTER + 1
+    assert job.state()["stuck"] and job.stop_waiting() and not job.running
+    assert job.start(lambda j: "fresh")                                   # a new run can start
+    gate.set()
+    for _ in range(50):
+        if not job.running:
+            break
+        time.sleep(0.05)
+    assert job.result == "fresh"                                          # the abandoned run never overwrites it
+
+
+def test_live_status_names_the_agent_and_the_tool():
+    import uuid
+
+    from tradingagents.llm_clients.live_status import LiveStatus
+
+    lines = []
+    s = LiveStatus(lines.append)
+    rid = uuid.uuid4()
+    s.on_chat_model_start({}, [[]], run_id=rid, metadata={"langgraph_node": "Market Analyst"})
+    s.on_tool_start({"name": "get_stock_data"}, "", metadata={"langgraph_node": "tools_market"})
+    s.on_llm_end(None, run_id=rid, metadata={"langgraph_node": "Bull Researcher"})
+    assert lines[0] == "Market Analyst: thinking" and lines[1] == "Market Analyst: fetching get_stock_data"
+    assert lines[2].startswith("Bull Researcher: answered in")

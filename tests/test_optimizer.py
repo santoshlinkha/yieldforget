@@ -218,10 +218,13 @@ def test_universe_config_reads_old_and_new_forms(tmp_path):
 
     old = tmp_path / "old.json"
     old.write_text(json.dumps({"tickers": ["vti", "gld"]}))
-    assert read_config(old) == {"groups": [], "extra": ["VTI", "GLD"]}
+    assert read_config(old) == {"groups": [], "extra": ["VTI", "GLD"], "exclude": []}
     new = tmp_path / "new.json"
-    new.write_text(json.dumps({"groups": ["themes", "bogus"], "extra": ["pltr"]}))
-    assert read_config(new) == {"groups": ["themes"], "extra": ["PLTR"]}
+    new.write_text(json.dumps({"groups": ["themes", "bogus"], "extra": ["pltr"], "exclude": ["soxl"]}))
+    assert read_config(new) == {"groups": ["themes"], "extra": ["PLTR"], "exclude": ["SOXL"]}
+    from tradingagents.optimizer.universe import etf_list, tickers_for
+
+    assert "SOXL" not in etf_list(read_config(new)) and "SOXL" not in tickers_for({"groups": ["etfs"], "exclude": ["SOXL"]})
 
 
 def test_market_overview_from_prices():

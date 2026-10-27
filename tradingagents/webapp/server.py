@@ -26,6 +26,7 @@ import math
 import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
@@ -46,7 +47,7 @@ from tradingagents.optimizer.data import fetch_closes, latest_prices
 from tradingagents.optimizer.market import market_brief, market_overview, market_tickers, save_json
 from tradingagents.optimizer.plan import OptimizerSettings
 from tradingagents.optimizer.universe import (
-    ETFS,
+    etf_list,
     GROUPS,
     THEME_GROUPS,
     describe,
@@ -62,29 +63,68 @@ STATIC = Path(__file__).parent / "static"
 class Job:
     """A background task the page polls: its progress, result or error."""
 
+    STUCK_AFTER = 600   # seconds without progress before the page may stop waiting
+
     def __init__(self):
-        self.running, self.progress, self.result, self.error, self.log = False, "", None, None, []
+        self.running, self._progress, self.result, self.error, self.log = False, "", None, None, []
+        self.attempts, self.events, self.gen = [], [], 0
+        self.started_at = self.touched_at = 0.0
+
+    @property
+    def progress(self) -> str:
+        return self._progress
+
+    @progress.setter
+    def progress(self, text: str):
+        """Every progress line also goes to the short live list the page shows."""
+        self._progress, self.touched_at = text, time.time()
+        self.events = [*self.events[-7:], {"at": time.strftime("%H:%M:%S"), "text": str(text)[:140]}]
 
     def start(self, work) -> bool:
         if self.running:
             return False
-        self.running, self.progress, self.result, self.error, self.log = True, "starting", None, None, []
+        self.gen += 1
+        gen = self.gen
+        self.running, self.result, self.error, self.log, self.attempts, self.events = True, None, None, [], [], []
+        self.started_at = time.time()
+        self.progress = "starting"
 
         def run():
+            result, error = None, None
             try:
-                self.result = work(self)
+                result = work(self)
             except Exception as exc:  # shown on the page rather than lost in a thread
                 logger.exception("background job failed")
-                self.error = str(exc)
+                error = str(exc)
             finally:
-                self.running = False
+                if gen == self.gen:   # a run the page stopped waiting for never overwrites a newer one
+                    self.result, self.error, self.running = result, error, False
 
         threading.Thread(target=run, daemon=True).start()
         return True
 
+    def stop_waiting(self) -> bool:
+        """Give up on a run that has made no progress for ``STUCK_AFTER`` seconds. Python cannot kill the thread:
+        it may still finish in the background, but its result is ignored and a new run can start."""
+        if not self.running or time.time() - self.touched_at < self.STUCK_AFTER:
+            return False
+        self.gen += 1
+        self.running = False
+        self.error = (f"stopped waiting after {(time.time() - self.started_at) / 60:.0f} min: no progress since "
+                      f"'{self._progress}' for {(time.time() - self.touched_at) / 60:.0f} min (a download or a provider "
+                      "never answered). Run it again; if it keeps happening, restart the app.")
+        return True
+
+    def say(self, text: str):
+        self.progress = text
+
     def state(self) -> dict:
-        return {"running": self.running, "progress": self.progress, "result": self.result,
-                "error": self.error, "log": self.log}
+        now = time.time()
+        return {"running": self.running, "progress": self._progress, "result": self.result,
+                "error": self.error, "log": self.log, "attempts": self.attempts, "events": self.events,
+                "elapsed": round(now - self.started_at) if self.started_at else None,
+                "idle": round(now - self.touched_at) if self.running else None,
+                "stuck": bool(self.running and now - self.touched_at >= self.STUCK_AFTER)}
 
 
 def _finite(value):
@@ -101,6 +141,20 @@ def _finite(value):
 # Free on a Gemini free-tier key (a Google project without billing), tried in order when the provider
 # before fails; each model has its own free quota.
 GEMINI_FALLBACKS = ("gemini-3.8-flash", "gemini-3.5-flash-lite")
+
+
+JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "screen", "analysis")
+
+
+def _short_error(exc: Exception) -> str:
+    """A provider failure in a few words for the status line."""
+    text = str(exc)
+    for needle, short in (("429", "rate limited"), ("rate", "rate limited"), ("quota", "out of quota"),
+                          ("401", "bad key"), ("403", "not allowed"), ("404", "model not available"),
+                          ("insufficient", "out of credit"), ("timed out", "timed out"), ("tool", "no tool support")):
+        if needle in text.lower():
+            return short
+    return text[:80]
 
 
 def _today() -> str:
@@ -142,6 +196,9 @@ class App:
     def gateway(self) -> Gateway:
         g = self.store.settings("global")
         prices = {k: Price(**v) for k, v in g["ai_prices"].items()}
+        # OpenRouter's ":free" models cost nothing; the budget still counts their requests.
+        prices.update({f"openrouter/{m}": Price(0.0, 0.0) for m in g["ai_openrouter_models"]
+                       if m.endswith(":free") and f"openrouter/{m}" not in prices})
         return Gateway(self.store.con, Policy(Budget(**g["ai_budget"]), prices, list(g["ai_fallbacks"])), self.owner)
 
     # --- planning ---
@@ -300,6 +357,12 @@ class App:
                 for moves in ([elsewhere, {}] if elsewhere else [{}]):
                     attempts.append({**config, "llm_provider": "google", "quick_think_llm": model,
                                      "deep_think_llm": model, "backend_url": None, "agent_models": moves})
+        # Then the free OpenRouter models, every role on one model, when the key is set.
+        if "openrouter" in g["ai_fallbacks"] and os.environ.get("OPENROUTER_API_KEY"):
+            for model in g["ai_openrouter_models"]:
+                if (config["llm_provider"], config["deep_think_llm"]) != ("openrouter", model):
+                    attempts.append({**config, "llm_provider": "openrouter", "quick_think_llm": model,
+                                     "deep_think_llm": model, "backend_url": None, "agent_models": {}})
         return attempts
 
     def ai_usage(self) -> dict:
@@ -319,7 +382,8 @@ class App:
                             "deep": config["deep_think_llm"]},
                 "app_default": {"provider": self.config["llm_provider"], "quick": self.config["quick_think_llm"],
                                 "deep": self.config["deep_think_llm"]},
-                "fallbacks": [f"google/{m}" for m in GEMINI_FALLBACKS] if "google" in g["ai_fallbacks"] else [],
+                "fallbacks": [f"{c['llm_provider']}/{c['deep_think_llm']}" for c in self.agent_attempts(g)[1:]
+                              if not c.get("agent_models")],
                 "providers": sorted(PROVIDER_API_KEY_ENV), "providers_with_keys": keys,
                 "catalog": {p: {"quick": first_model(p, "quick"), "deep": first_model(p, "deep")} for p in keys},
                 "suggested": suggest(config["llm_provider"], keys)}
@@ -355,7 +419,7 @@ class App:
         if universe == "etf":
             context, _ = self.store.portfolio("combined", _today())
             held = [p.ticker.upper() for p in context.positions]
-            tickers = [t for t in dict.fromkeys([*ETFS, *read_config(self.universe_path)["extra"], *held])
+            tickers = [t for t in dict.fromkeys([*etf_list(read_config(self.universe_path)), *held])
                        if t not in ("SGOV", "BIL")]
         elif universe == "stock":
             tickers = sorted(get_sp500_members(self.cache_dir))
@@ -410,7 +474,7 @@ class App:
             return False
         context, _ = self.store.portfolio("combined", _today())
         held = [p.ticker.upper() for p in context.positions]
-        tickers = [t for t in dict.fromkeys([*ETFS, *read_config(self.universe_path)["extra"], *held])
+        tickers = [t for t in dict.fromkeys([*etf_list(read_config(self.universe_path)), *held])
                    if t not in ("SGOV", "BIL")]
 
         def work(job):
@@ -654,28 +718,38 @@ class App:
         from tradingagents.stocks.decision_layer import agent_evidence
 
         evidence = agent_evidence(daily.load(self.store.con), ticker)   # empty unless the model is validated
-        for cfg in self.agent_attempts(g):
+        attempts = self.agent_attempts(g)
+        job.attempts = []                  # what the page shows: each provider tried, and how it went
+        for n, cfg in enumerate(attempts, 1):
             if evidence:
                 cfg = {**cfg, "quant_evidence": {ticker.upper(): evidence}}
             who = f"{cfg['llm_provider']} ({cfg['deep_think_llm']})"
-            job.progress = f"agents analyzing {ticker} as of {day} on {who} ({', '.join(analysts)}); a few minutes"
+            job.attempts.append({"provider": cfg["llm_provider"], "model": cfg["deep_think_llm"], "state": "trying"})
+            job.progress = (f"{ticker} as of {day}: try {n} of {len(attempts)} on {who}"
+                            f"{' after ' + str(n - 1) + ' failed' if n > 1 else ''}; a few minutes")
             try:
-                result, how = analyze(ticker, day, cfg, analysts, self.gateway(), folder, est_usd=est, allow_paid=True)
+                tag = f"{ticker} · {cfg['llm_provider']}"
+                result, how = analyze(ticker, day, cfg, analysts, self.gateway(), folder, est_usd=est, allow_paid=True,
+                                      progress=lambda text, tag=tag: job.say(f"{tag} · {text}"))
             except AIInProgress:
                 raise
             except AIBlocked as exc:
                 # Over budget or switched off stops here; a model with no price is a setup gap another
                 # provider can cover.
                 if not str(exc).startswith("no price"):
+                    job.attempts[-1].update(state="failed", why=str(exc)[:120])
                     raise
                 errors.append(f"{who}: {exc}")
-            except Exception as exc:  # out of credit, bad key, unreachable: the next provider, if any
+                job.attempts[-1].update(state="failed", why=str(exc)[:120])
+            except Exception as exc:  # out of credit, bad key, rate limit, unreachable: the next provider, if any
                 logger.warning("analysis on %s failed: %s", who, exc)
                 errors.append(f"{who}: {str(exc)[:200]}")
+                job.attempts[-1].update(state="failed", why=_short_error(exc))
             else:
+                job.attempts[-1]["state"] = "ok"
                 job.log += [f"{ticker}: {e} -> moved on" for e in errors]
                 out = {**result, "how": how, "ticker": ticker, "provider": cfg["llm_provider"],
-                       "model": cfg["deep_think_llm"], "fell_back": bool(errors)}
+                       "model": cfg["deep_think_llm"], "fell_back": bool(errors), "attempts": list(job.attempts)}
                 out["final"] = self._write_decision(ticker, day, folder, out, cfg)
                 plans = result.get("entry_plans") or {}
                 if plans.get("trader") or plans.get("final"):
@@ -1429,6 +1503,9 @@ def make_handler(app: App):
                     self._json(_finite(app.income()))
                 elif url.path == "/api/rotation":
                     self._json(_finite(app.rotation()))
+                elif url.path == "/api/keys":
+                    from tradingagents.webapp import keys
+                    self._json({"keys": keys.listing(), "file": keys.env_path().name})
                 elif url.path == "/api/model-record":
                     self._json(_finite(app.model_record()))
                 elif url.path == "/api/ledger":
@@ -1512,7 +1589,9 @@ def make_handler(app: App):
                 elif self.path == "/api/universe":
                     groups = [g for g in body.get("groups", []) if g in GROUPS]
                     extra = [str(t).strip().upper() for t in body.get("extra", []) if str(t).strip()]
-                    app.universe_path.write_text(json.dumps({"groups": groups, "extra": list(dict.fromkeys(extra))},
+                    exclude = body.get("exclude", read_config(app.universe_path).get("exclude", []))
+                    app.universe_path.write_text(json.dumps({"groups": groups, "extra": list(dict.fromkeys(extra)),
+                                                             "exclude": [str(t).strip().upper() for t in exclude]},
                                                             indent=2), encoding="utf-8")
                     self._json({"ok": True})
                 elif self.path == "/api/market/explain":
@@ -1528,6 +1607,20 @@ def make_handler(app: App):
                 elif self.path == "/api/ai-budget":
                     with app.lock:
                         self._json(app.set_ai_budget(body))
+                elif self.path == "/api/keys":
+                    from tradingagents.webapp import keys
+                    with app.lock:
+                        saved = keys.save(str(body.get("env") or ""), str(body.get("value") or ""))
+                    self._json({"saved": saved, "keys": keys.listing()})
+                elif self.path == "/api/jobs/stop":
+                    name = str(body.get("job") or "")
+                    job = getattr(app, name, None) if name in JOB_NAMES else None
+                    if not isinstance(job, Job):
+                        raise ValueError(f"unknown job {name!r}")
+                    if not job.stop_waiting():
+                        raise ValueError("that job is not stuck: it is not running, or it reported progress in the "
+                                         f"last {Job.STUCK_AFTER // 60} minutes")
+                    self._json(job.state())
                 elif self.path == "/api/decisions/run":
                     self._started(app.start_decisions(body), "A decision run")
                 elif self.path == "/api/capital":

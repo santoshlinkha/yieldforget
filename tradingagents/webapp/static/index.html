@@ -77,7 +77,7 @@ nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
 .risk-track { flex: 1; min-width: 120px; display: flex; flex-direction: column; }
 .toggles { display: flex; gap: 16px; }
 .riskopts { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.riskopts select, .riskopts input { font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.riskopts input { font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
 .riskopts input { width: 64px; }
 @media (max-width: 760px) {
   .appbar .wrap { gap: 12px; } .brand .acct, .appbar .status { display: none; }
@@ -102,7 +102,7 @@ h3 { font-size: 14px; font-weight: 600; margin: 0 0 12px; letter-spacing: -.005e
 .change-list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .settings-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.settings-grid select, .settings-grid input { font: inherit; font-size: 14px; font-weight: 400; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.settings-grid input { font: inherit; font-size: 14px; font-weight: 400; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 a.tk { color: inherit; font-weight: 600; text-decoration: none; }
 a.tk:hover { color: var(--accent); text-decoration: underline; }
 h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 16px 0 8px; }
@@ -250,6 +250,26 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
 .spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+.tries { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; }
+.try { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.try.ok { color: var(--buy, #3ecf8e); border-color: currentColor; }
+.try.failed { color: var(--sell, #f0616d); border-color: currentColor; text-decoration: line-through; text-decoration-thickness: 1px; }
+.try.trying { color: var(--accent, #6aa9ff); border-color: currentColor; }
+/* Every dropdown: one look. The chevron is drawn with two gradients so it follows the theme's colours. */
+select { -webkit-appearance: none; appearance: none; font: inherit; font-size: 13.5px; color: var(--text);
+  background-color: var(--surface-2, var(--surface));
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px; background-repeat: no-repeat;
+  border: 1px solid var(--border-strong, var(--border)); border-radius: 8px; padding: 7px 32px 7px 11px; min-height: 34px;
+  line-height: 1.2; cursor: pointer; transition: border-color .15s, box-shadow .15s; max-width: 100%; }
+select:hover { border-color: var(--accent); }
+select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+select:disabled { opacity: .55; cursor: not-allowed; }
+select option { background: var(--surface); color: var(--text); }
+.try .spin { display: inline-block; width: 9px; height: 9px; border-width: 2px; margin-right: 4px; vertical-align: -1px; }
+.jobline { font-size: 13px; line-height: 1.45; }
+.jobline .evs { margin: 3px 0 2px 18px; font-size: 12px; color: var(--muted); }
+.jobline .ev { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
 </head>
 <body>
@@ -483,6 +503,12 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         </div>
         <p class="muted small" id="capPlan"></p>
       </div>
+      <div class="card" id="keysCard">
+        <h3>API keys</h3>
+        <p class="muted">Stored in the app's <code>.env</code> file on this computer (never committed) and used at once, without a restart. The page only ever shows a masked form. Leave a box empty and press Remove to delete a key.</p>
+        <div class="table-wrap"><table id="keysTable" class="compact"></table></div>
+        <p class="small" id="keysMsg"></p>
+      </div>
       <div class="grid">
         <div class="card">
           <h3>Holdings</h3>
@@ -567,7 +593,7 @@ async function loadTrade() {
   try { t = await api("/api/trade"); } catch (e) { $("buyBox").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
   const inc = t.income, b = inc.budget, h = inc.health || {}, pr = inc.projection || {}, a = t.account || {};
   const j = t.job || {};
-  $("tdStatus").textContent = j.running ? j.progress + "…" : j.error ? "Failed: " + j.error : "";
+  $("tdStatus").innerHTML = j.running ? jobLine(j, "decisions") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` : "";
   $("tdRun").disabled = !!j.running;
   if (j.running) setTimeout(loadTrade, 3000);
   const stocks = Object.entries(a.positions || {}).filter(([k]) => k !== "SGOV").reduce((s, [, p]) => s + (p.value || 0), 0);
@@ -1029,6 +1055,27 @@ function aiCost() {
   $("aiRunInfo").textContent = n && k ? `${n} stock${n > 1 ? "s" : ""} × ${k} analyst${k > 1 ? "s" : ""}: up to about ${usd(n * per)} reserved at paid rates (free on a free-tier Gemini key); a stock already analyzed that day is reused at no charge` : "pick stocks and analysts";
   $("aiRunPicked").disabled = !n || !k || aiData.job.running;
 }
+// Each AI provider tried for a run: trying (spinning), failed (struck, with the reason) or ok.
+function tries(list) {
+  if (!list || !list.length) return "";
+  return `<span class="tries">` + list.map(a => `<span class="try ${a.state}" title="${esc(a.provider + " / " + a.model + (a.why ? ": " + a.why : ""))}">` +
+    `${a.state === "trying" ? '<span class="spin"></span>' : ""}${esc(a.provider)} ${esc(String(a.model).split("/").pop().replace(":free", ""))}` +
+    `${a.state === "failed" && a.why ? " · " + esc(a.why) : ""}</span>`).join("") + `</span>`;
+}
+// A running job in a few short lines: what it is doing now, for how long, the last steps, and a way out if stuck.
+function jobLine(j, name) {
+  if (!j || !j.running) return "";
+  const mins = s => s == null ? "" : s < 90 ? `${s}s` : `${Math.round(s / 60)} min`;
+  const steps = (j.events || []).slice(-4, -1).map(e => `<div class="ev"><span class="muted">${esc(e.at)}</span> ${esc(e.text)}</div>`).join("");
+  return `<div class="jobline"><span class="spin"></span><b>${esc(j.progress)}</b> <span class="muted small">· ${mins(j.elapsed)}</span>` +
+    (steps ? `<div class="evs">${steps}</div>` : "") + tries(j.attempts) +
+    (j.stuck ? `<div class="note small">No progress for ${mins(j.idle)}: a download or a provider is not answering. ` +
+      `<button class="ghost" onclick="stopJob('${name}')">Stop waiting</button></div>` : "") + `</div>`;
+}
+async function stopJob(name) {
+  try { await fetch("/api/jobs/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({job: name})}); }
+  finally { location.reload(); }
+}
 async function loadAiDecisions() {
   try { aiData = await api("/api/ai-decisions"); } catch (e) { $("aiState").textContent = e.message; return; }
   const d = aiData, j = d.job;
@@ -1039,7 +1086,7 @@ async function loadAiDecisions() {
   $("aiLeft").textContent = `left: ${usd(Math.max(0, d.budget.left_today))} today, ${usd(Math.max(0, d.budget.left_month))} this month`;
   aiRender();
   $("aiDecLog").textContent = (j.log || []).join("\n");
-  if (j.running) { $("aiState").innerHTML = `<span class="spin"></span>${esc(j.progress)}…`; setTimeout(loadAiDecisions, 6000); }
+  if (j.running) { $("aiState").innerHTML = jobLine(j, "analysis"); setTimeout(loadAiDecisions, 2000); }
   else if (j.error) $("aiState").innerHTML = `<span class="neg">${esc(j.error)}</span>`;
   else if (j.result && j.result.done) $("aiState").textContent = `Last run: ${Object.keys(j.result.done).length} analyzed, ${Object.keys(j.result.failed).length} failed, as of ${j.result.date}.`;
   else $("aiState").textContent = "";
@@ -1060,7 +1107,7 @@ async function loadDecisions() {
   let d;
   try { d = await api("/api/decisions"); } catch (e) { $("dcHead").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
   const j = d.job;
-  $("dcStatus").textContent = j.running ? j.progress + "…" : j.error ? "Failed: " + j.error : "";
+  $("dcStatus").innerHTML = j.running ? jobLine(j, "decisions") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` : "";
   $("dcRun").disabled = j.running;
   if (j.running) setTimeout(loadDecisions, 3000);
   const c = d.capital, st = c.settings;
@@ -1086,6 +1133,33 @@ async function loadDecisions() {
 $("dcRun").onclick = async () => {
   try { await api("/api/decisions/run", {train: $("dcTrain").checked}); loadDecisions(); } catch (e) { showError(e.message); }
 };
+
+// --- API keys: masked here, saved to .env on this computer ---
+async function loadKeys() {
+  let d;
+  try { d = await api("/api/keys"); } catch (e) { $("keysMsg").textContent = e.message; return; }
+  $("keysTable").innerHTML = "<tr><th class='l'>Service</th><th class='l'>Key</th><th class='l'>New key</th><th></th></tr>" +
+    d.keys.map(k => `<tr><td class="l"><b>${esc(k.label)}</b><div class="small muted">${esc(k.env)}</div></td>` +
+      `<td class="l">${k.set ? `<code>${esc(k.masked)}</code>` : '<span class="muted">not set</span>'}</td>` +
+      `<td class="l"><input type="password" autocomplete="off" spellcheck="false" data-env="${esc(k.env)}" placeholder="paste a key" style="width:100%;min-width:180px"></td>` +
+      `<td class="l" style="white-space:nowrap"><button class="ghost" data-save="${esc(k.env)}">Save</button>` +
+      (k.set ? ` <button class="ghost" data-remove="${esc(k.env)}">Remove</button>` : "") + `</td></tr>`).join("");
+  const send = async (env, value) => {
+    try {
+      const r = await api("/api/keys", {env, value});
+      $("keysMsg").innerHTML = `<span class="pos">${esc(env)} ${r.saved.set ? "saved as " + esc(r.saved.masked) : "removed"}.</span>`;
+      loadKeys(); loadAgents();
+    } catch (e) { $("keysMsg").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+  };
+  $("keysTable").querySelectorAll("[data-save]").forEach(b => b.onclick = () => {
+    const v = $("keysTable").querySelector(`input[data-env="${b.dataset.save}"]`).value.trim();
+    if (!v) { $("keysMsg").innerHTML = '<span class="neg">Paste a key first.</span>'; return; }
+    send(b.dataset.save, v);
+  });
+  $("keysTable").querySelectorAll("[data-remove]").forEach(b => b.onclick = () => {
+    if (confirm(`Remove ${b.dataset.remove} from .env?`)) send(b.dataset.remove, "");
+  });
+}
 
 // --- money: the daily SGOV buy, the match and the dry-yield line ---
 async function loadCapital() {
@@ -1294,7 +1368,7 @@ function agPrimaryRender() {
   $("agPrimary").innerHTML = agData.providers.map(p => `<option value="${p}" ${p === d.provider ? "selected" : ""}>${p}${keys.has(p) ? "" : " (no key)"}</option>`).join("");
   $("agQuick").value = d.quick; $("agDeep").value = d.deep;
   $("agPrimaryNote").innerHTML = (d.provider === "google" ? "Gemini Flash models are <b>free</b> on a free-tier key (a Google project without billing): rate-limited, and Google may use the content to improve its products. The budget still counts them at the paid rate, so it never under-counts. " : "") +
-    (agData.fallbacks.length ? `If a run fails (bad key, out of credit, rate limit), it moves to ${agData.fallbacks.map(esc).join(", then ")}.` : "No fallback provider is allowed.");
+    (agData.fallbacks.length ? `If a run fails (bad key, out of credit, rate limit, a model that cannot call tools), it moves on, in order, to ${agData.fallbacks.map(esc).join(", then ")}; each try shows as a small chip by the run's status.` : "No fallback provider is allowed.");
 }
 function agSyncDefault() {
   agData.default = {provider: $("agPrimary").value, quick: $("agQuick").value.trim(), deep: $("agDeep").value.trim()};
@@ -1348,7 +1422,7 @@ $("agSave").onclick = async () => {
     state = await api("/api/state");
     drawEditors();
   } catch (e) { showError(e.message); }
-  loadTrade(); loadRotation(); loadCapital(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
+  loadTrade(); loadRotation(); loadCapital(); loadKeys(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
   loadMarket(); loadForecasts(); loadLive(); loadHardware();
 })();
 </script>

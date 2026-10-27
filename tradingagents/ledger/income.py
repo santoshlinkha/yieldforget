@@ -105,8 +105,9 @@ def traded(store, since: date, as_of: date) -> dict:
 def budget(store, cache_dir, as_of: date | None = None) -> dict:
     """What the interest and the match have made available for trading, and what is left of it."""
     from . import capital
+    from .sessions import as_date
 
-    as_of = as_of or date.today()
+    as_of = as_date(as_of) if as_of else date.today()   # callers pass a date or "YYYY-MM-DD"
     cap = capital.load(store)
     since = start(store)
     if since is None:
@@ -140,8 +141,9 @@ def trailing_yield(dividends: list[tuple[date, float]], price: float, as_of: dat
 def health(store, cache_dir, as_of: date | None = None, closes: pd.DataFrame | None = None) -> dict:
     """Is SGOV's interest drying up? Its latest and trailing yield, and where bill rates are heading."""
     from . import capital
+    from .sessions import as_date
 
-    as_of = as_of or date.today()
+    as_of = as_date(as_of) if as_of else date.today()
     dry = capital.load(store).dry_yield
     if closes is None:
         try:
