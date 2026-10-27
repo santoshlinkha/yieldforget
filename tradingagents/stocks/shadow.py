@@ -25,6 +25,8 @@ from .positions import Book, Lot, executable_prices
 # bought on the latest session got that same session as its deadline. Version-1 snapshots stay as they are;
 # the first update under version 2 starts a new account at that update's cutoff, with no trades carried over.
 SHADOW_VERSION = 2
+# The paper capital a new shadow account starts with; an existing record keeps its own.
+SHADOW_CAPITAL = 1000.0
 RESTART_REASON = ("version 2: orders are frozen once per cutoff and pending orders count against the name "
                   "limit; deadlines come from the exchange calendar. The version-1 account had executed no trade.")
 
@@ -86,7 +88,7 @@ def advance(store, data, cutoff: pd.Timestamp, decision_id: str, entry_lines: li
     state = _load(store.con)
     if state is None or state.get("version", 1) < SHADOW_VERSION:
         previous = state
-        capital = float(capital_snapshot["trading_capital_usd"])
+        capital = float(capital_snapshot.get("shadow_capital_usd") or SHADOW_CAPITAL)
         state = {"version": SHADOW_VERSION, "inception": str(cutoff.date()), "capital": capital,
                  "capital_version": capital_snapshot["version"], "cash": capital, "settling": {}, "lots": [],
                  "costs": 0.0, "pending": [], "last": str(cutoff.date()), "spy_units": None, "closed": [],

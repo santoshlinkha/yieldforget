@@ -1,19 +1,22 @@
 """The application's records in one place: open the database, import the old files once,
-and read or change settings per sleeve.
+and read or change settings.
+
+There is one account, kept in the ``trading`` sleeve: SGOV as its base and the stocks bought
+with SGOV's interest and the broker's match (``ledger.income``). The Investing sleeve of
+earlier versions is retired by ``retire_investing``, once.
 
 First open: the files that came before the database (holdings, buys, risk level,
 scan list, paper tracker) are copied into ``legacy_imports`` byte for byte. Your
-holdings become opening positions in the Investing sleeve, dated the day the
-holdings file was last saved, and the risk level becomes Investing's setting.
-The files are left where they are; the database is the record from then on.
-The Trading sleeve starts empty: funding it is a transfer you make yourself
-(see ``trading_assignment_preview``).
+holdings become opening positions, dated the day the holdings file was last saved,
+and the strategy starts that day. The files are left where they are; the database
+is the record from then on.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,8 +26,6 @@ from .db import DEFAULT_NAME, connect, now_utc, transaction
 
 # Settings each sleeve has, with their defaults. Values are JSON.
 SLEEVE_DEFAULTS = {
-    "investing": {"risk_level": 2, "risk_model": "worst_case", "target_growth": None, "daily_contribution": 27.61,
-                  "return_model": "vol_prior", "forecast_horizon": 20, "forecast_model": "xgb_quantile"},
     "trading": {"risk_level": 2, "risk_model": "worst_case", "target_growth": None, "daily_contribution": 0.0,
                 "initial_allocation": 1000.0, "return_model": "vol_prior", "forecast_horizon": 20,
                 "forecast_model": "xgb_quantile"},
@@ -41,6 +42,8 @@ GLOBAL_DEFAULTS = {
     # The agents' default provider and models ({"provider", "quick", "deep"}); empty: the app's configured ones.
     "ai_primary": {},
     "compute_backend": "auto",
+    # The day the SGOV-interest trading strategy started: interest and match count from here (ledger.income).
+    "income_start": None,
     # Stock research: the saved watchlist, and the limits stock recommendations respect.
     "stock_watchlist": [],
     "stock_rules": {"sleeve": "trading", "max_position_share": 0.25, "max_names": 5, "min_order": 1.0,
@@ -63,9 +66,6 @@ class Store:
     def get(self, scope: str, key: str):
         from . import capital
 
-        if (scope, key) in capital.ALIASES:     # old per-sleeve keys read the canonical capital settings
-            capital.ensure(self)
-            scope, key = capital.SCOPE, capital.ALIASES[(scope, key)]
         row = self.con.execute("SELECT value_json FROM settings WHERE scope = ? AND key = ?", (scope, key)).fetchone()
         if row:
             return json.loads(row[0])
@@ -83,9 +83,6 @@ class Store:
     def set(self, scope: str, key: str, value, source: str = "user"):
         from . import capital
 
-        if (scope, key) in capital.ALIASES:
-            capital.ensure(self)
-            scope, key = capital.SCOPE, capital.ALIASES[(scope, key)]
         if scope == capital.SCOPE:
             value = capital.validate(key, value)   # the backend checks every amount, whoever sends it
         if (scope, key) == ("global", "ai_primary") and value:
@@ -142,58 +139,100 @@ class Store:
                 day = datetime.fromtimestamp(holdings.stat().st_mtime).date().isoformat()
                 for p in book.get("positions", []):
                     if p.get("quantity"):
-                        self.ledger.record("opening_position", "investing", day, ticker=p["ticker"].upper(),
+                        self.ledger.record("opening_position", "trading", day, ticker=p["ticker"].upper(),
                                            quantity=float(p["quantity"]), source="migration",
                                            source_ref="my_portfolio.json",
                                            note="holdings at migration; price and cost basis not recorded")
                 if book.get("cash"):
-                    self.ledger.record("opening_cash", "investing", day, cash=float(book["cash"]), source="migration",
+                    self.ledger.record("opening_cash", "trading", day, cash=float(book["cash"]), source="migration",
                                        source_ref="my_portfolio.json", note="settled cash at migration")
-            risk = self.folder / "my_risk.json"
-            if risk.exists():
-                saved = json.loads(risk.read_text(encoding="utf-8"))
-                for key, name in (("level", "risk_level"), ("model", "risk_model"), ("target_growth", "target_growth")):
-                    if key in saved:
-                        self.set("investing", name, saved[key], source="migration")
+                self.set("global", "income_start", day, source="migration")
             buys = self.folder / "my_buys.json"
             if buys.exists():
                 data = json.loads(buys.read_text(encoding="utf-8"))
                 per_day = sum((data.get("daily") or {}).values()) + sum((data.get("weekly") or {}).values()) / 5
-                self.set("investing", "daily_contribution", round(per_day, 2), source="migration")
+                if per_day:
+                    from . import capital
+
+                    self.set(capital.SCOPE, "daily_sgov_usd", round(per_day, 2), source="migration")
 
     def legacy(self, name: str) -> bytes | None:
         row = self.con.execute("SELECT payload FROM legacy_imports WHERE source_path LIKE ? ORDER BY id LIMIT 1",
                                (f"%{name}",)).fetchone()
         return row[0] if row else None
 
-    # --- the Trading sleeve ---
+    # --- one account ---
 
-    def trading_assignment_preview(self, amount: float, prices: dict[str, float], as_of,
-                                   prefer: tuple[str, ...] = ("SGOV",)) -> dict:
-        """What could move from Investing to fund Trading with about ``amount``: settled cash
-        first, then the cash-like fund, then nothing else unless you pick it. A preview;
-        nothing moves until you confirm with ``ledger.transfer``."""
-        state = self.ledger.state("investing", as_of, prices)
-        # Only what Trading still lacks: funding it twice would double its allocation.
-        already = self.ledger.state("trading", as_of, prices).equity
-        target, amount = amount, max(amount - already, 0.0)
-        steps, left = [], amount
-        if state.cash.available > 0.005:
-            take = min(left, state.cash.available)
-            steps.append({"cash": round(take, 2)})
-            left -= take
-        for t in prefer:
-            if left <= 0.005 or t not in state.positions or t not in prices:
-                continue
-            qty = min(state.positions[t], left / prices[t])
-            steps.append({"ticker": t, "quantity": round(qty, 6), "price": prices[t], "value": round(qty * prices[t], 2)})
-            left -= qty * prices[t]
-        return {"amount": amount, "target": target, "trading_already": round(already, 2),
-                "steps": steps, "short_by": round(max(left, 0.0), 2),
-                "unsettled_not_movable": round(state.cash.unsettled, 2),
-                "note": ("Moves only what Investing really holds. Unsettled proceeds cannot move until they settle. "
-                         "To use other holdings, pick them yourself.")}
+    def retire_investing(self, as_of, backup_dir: Path | None = None) -> dict | None:
+        """Fold the retired Investing sleeve into the one trading account, once; ``None`` when there is none.
 
+        The database is copied to ``backup_dir`` first. Then every Investing record (its events, the
+        transfers between the sleeves, its recommendations, orders, reservations, ideas and settings)
+        is deleted, and what the whole account held on ``as_of`` is restated in Trading as opening
+        positions and cash, so the account's holdings do not change. The strategy starts that day.
+        """
+        con = self.con
+        if not con.execute("SELECT 1 FROM sleeves WHERE name = 'investing'").fetchone():
+            return None
+        before = self.ledger.state(None, as_of)
+        folder = Path(backup_dir or self.folder / "backups")
+        folder.mkdir(parents=True, exist_ok=True)
+        backup = folder / f"{self.path.stem}_before_retiring_investing_{as_of}.sqlite3"
+        dest = sqlite3.connect(backup)
+        con.backup(dest)
+        dest.close()
+        transfers = [r[0] for r in con.execute("SELECT DISTINCT transfer_id FROM events WHERE sleeve = 'investing'"
+                                               " AND transfer_id IS NOT NULL")]
+        ids = [r[0] for r in con.execute(
+            f"SELECT id FROM events WHERE sleeve = 'investing' OR transfer_id IN ({','.join('?' * len(transfers))})",
+            transfers)]
+        marks = ",".join("?" * len(ids))
+        recs = [r[0] for r in con.execute("SELECT id FROM recommendations WHERE sleeve = 'investing'")]
+        rmarks = ",".join("?" * len(recs))
+        # The ledger is append-only by trigger; the guards are lifted for this one deletion, in its transaction.
+        from .schema import _guards
+
+        guarded = ("event_voids", "events", "order_status", "orders", "decisions", "recommendation_status",
+                   "recommendations", "stock_ideas")
+        with transaction(con):
+            for table in guarded:
+                con.execute(f"DROP TRIGGER IF EXISTS {table}_no_update")
+                con.execute(f"DROP TRIGGER IF EXISTS {table}_no_delete")
+            con.execute(f"DELETE FROM event_voids WHERE event_id IN ({marks}) OR replaced_by IN ({marks})", ids + ids)
+            con.execute(f"UPDATE events SET supersedes = NULL WHERE supersedes IN ({marks})", ids)
+            con.execute(f"DELETE FROM events WHERE id IN ({marks})", ids)
+            con.execute(f"DELETE FROM order_status WHERE order_id IN (SELECT id FROM orders WHERE recommendation_id"
+                        f" IN ({rmarks}) OR sleeve = 'investing')", recs)
+            con.execute(f"DELETE FROM orders WHERE recommendation_id IN ({rmarks}) OR sleeve = 'investing'", recs)
+            for table in ("decisions", "recommendation_status"):
+                con.execute(f"DELETE FROM {table} WHERE recommendation_id IN ({rmarks})", recs)
+            con.execute(f"DELETE FROM recommendations WHERE id IN ({rmarks})", recs)
+            for table in ("reservations", "stock_ideas"):
+                con.execute(f"DELETE FROM {table} WHERE sleeve = 'investing'")
+            con.execute("DELETE FROM settings WHERE scope = 'investing'")
+            con.execute("DELETE FROM settings WHERE scope = 'capital' AND key IN ('trading_capital_usd',"
+                        " 'investing_capital_usd', 'daily_investment_usd')")
+            con.execute("DELETE FROM sleeves WHERE name = 'investing'")
+            for table in guarded:
+                for statement in _guards(table).strip().splitlines():
+                    con.execute(statement)
+        now = self.ledger.state("trading", as_of)
+        restated = {}
+        for t in sorted(set(before.positions) | set(now.positions)):
+            delta = before.positions.get(t, 0.0) - now.positions.get(t, 0.0)
+            if abs(delta) > 1e-9:
+                self.ledger.record("opening_position", "trading", as_of, ticker=t, quantity=delta, source="migration",
+                                   note="the retired Investing sleeve, folded into the one account",
+                                   uid=uuid.uuid4().hex)
+                restated[t] = round(delta, 6)
+        cash = before.cash.total - now.cash.total
+        if abs(cash) > 0.005:
+            self.ledger.record("opening_cash", "trading", as_of, cash=cash, source="migration",
+                               note="the retired Investing sleeve's cash", uid=uuid.uuid4().hex)
+        if not self.get("global", "income_start"):
+            self.set("global", "income_start", str(as_of), source="migration")
+        return {"backup": str(backup), "deleted_events": len(ids), "deleted_recommendations": len(recs),
+                "restated": restated, "cash": round(cash, 2)}
 
     # --- views for the optimizer and the old files ---
 
@@ -219,10 +258,9 @@ class Store:
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         tmp.replace(path)
 
-    def adjust_holdings(self, wanted: dict[str, float], as_of, sleeve: str = "investing", note: str | None = None) -> list[int]:
-        """Bring the account's share counts to ``wanted`` with audited adjustment events in one
-        sleeve: for corrections the broker's records cannot supply. Refuses to take a sleeve
-        below zero."""
+    def adjust_holdings(self, wanted: dict[str, float], as_of, sleeve: str = "trading", note: str | None = None) -> list[int]:
+        """Bring the account's share counts to ``wanted`` with audited adjustment events: for
+        corrections the broker's records cannot supply. Refuses to take a holding below zero."""
         combined = self.ledger.state(None, as_of).positions
         own = self.ledger.state(sleeve, as_of).positions
         ids = []
@@ -232,8 +270,7 @@ class Store:
                 if abs(delta) < 1e-9:
                     continue
                 if own.get(t, 0.0) + delta < -1e-9:
-                    raise ValueError(f"{t}: the change would leave {sleeve} with {own.get(t, 0.0) + delta:g} shares; "
-                                     f"some are in the other sleeve")
+                    raise ValueError(f"{t}: the change would leave {own.get(t, 0.0) + delta:g} shares")
                 # Each edit is its own event: two identical edits on one day are both real.
                 ids.append(self.ledger.record("adjustment", sleeve, as_of, ticker=t, quantity=delta, source="manual",
                                               note=note or "holdings edited in the app", uid=uuid.uuid4().hex)[0])

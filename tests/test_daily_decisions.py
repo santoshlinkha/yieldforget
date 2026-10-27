@@ -62,10 +62,10 @@ def test_a_decision_has_dates_modes_sizes_and_is_frozen(env):
     assert len(sized) + staying <= 5
     for x in sized:
         assert x["dollars"] <= 0.25 * rec["account"]["sleeve_value"] + 1e-6
-    assert sum(x["dollars"] for x in sized) <= rec["account"]["settled_cash"] + 1e-6
-    assert rec["settings"]["capital"]["trading_capital_usd"] == 1000.0
+    assert sum(x["dollars"] for x in sized) <= rec["account"]["budget"] + 1e-6   # only the trading budget is spent
+    assert rec["settings"]["capital"]["daily_sgov_usd"] == 29.0
     stored = daily.load(store.con, rec["id"])
-    capital.update(store, {"trading_capital_usd": 3000})
+    capital.update(store, {"daily_sgov_usd": 40})
     assert daily.load(store.con, rec["id"]) == stored                    # later settings never change a record
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         store.con.execute("UPDATE stock_decisions SET mode = 'validated'")
@@ -76,11 +76,11 @@ def test_models_are_reused_when_only_the_dollar_amounts_change(env):
 
     store, data, cache, cutoff, _ = env
     first = daily.run(store, cache, cutoff.date(), train=True)
-    capital.update(store, {"trading_capital_usd": 1500, "daily_investment_usd": 10})
+    capital.update(store, {"daily_sgov_usd": 10, "match_rate": 0.01})
     second = daily.run(store, cache, cutoff.date(), train=False)          # no training allowed, and none needed
     assert first["model"]["bundle"]["reused"] is False and second["model"]["bundle"]["reused"] is True
     assert second["model"]["bundle"]["sha256"] == first["model"]["bundle"]["sha256"]
-    assert second["settings"]["capital"]["trading_capital_usd"] == 1500.0
+    assert second["settings"]["capital"]["daily_sgov_usd"] == 10.0
 
 
 def test_no_lot_is_sold_on_its_entry_session(env):
@@ -134,7 +134,7 @@ def test_the_shadow_account_freezes_its_capital_and_advances_once(env):
     store, data, cache, cutoff, sessions = env
     daily.run(store, cache, sessions[-10].date(), train=True)
     first = json.loads(store.con.execute("SELECT state_json FROM shadow_snapshots ORDER BY id LIMIT 1").fetchone()[0])
-    capital.update(store, {"trading_capital_usd": 9000})
+    capital.update(store, {"daily_sgov_usd": 90})
     daily.run(store, cache, cutoff.date(), train=True)
     last = json.loads(store.con.execute("SELECT state_json FROM shadow_snapshots ORDER BY id DESC LIMIT 1").fetchone()[0])
     assert first["capital"] == last["capital"] == 1000.0               # frozen at inception

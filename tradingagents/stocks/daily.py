@@ -427,6 +427,11 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     say("scoring today")
     at = P.build(data, policy.horizon, dates=pd.DatetimeIndex([cutoff]), macro=macro)
     today = score_today(bundle, at.xs(cutoff, level="date", drop_level=False))
+    # The live record, once enough has matured, recalibrates P(profit) and expected net (stocks.feedback).
+    from . import feedback
+
+    live = feedback.calibration(store.con)
+    today = feedback.apply(today, live)
     prices = px.loc[cutoff]
     from tradingagents.optimizer.data import latest_prices
 
@@ -440,7 +445,12 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     state = store.ledger.state(r["sleeve"], as_of)
     cash_fund_value = sum(q * price_of(t) for t, q in cash_fund.items())
     held_value = sum(lot["shares"] * price_of(lot["ticker"]) for lot in lots)
-    sleeve_value = state.cash.total + held_value + cash_fund_value
+    # SGOV is the base and is not traded: stocks are bought only with the trading budget (SGOV's interest and the
+    # match, less what is already in stocks), and positions are sized against that budget plus the stocks held.
+    from tradingagents.ledger import income
+
+    pot = income.budget(store, cache_dir, as_of)
+    sleeve_value = pot["available"] + held_value
     ev = evidence(store.con, policy_name, bundle["features"], Thresholds(), r)
     ew = ewma_vol(data.close[stocks])
     reviews = []
@@ -461,7 +471,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     by_ticker = {t: q * float(ira_prices.get(t, np.nan) or 0) for t, q in combined.positions.items()}
     ira = {"total": sum(by_ticker.values()) + combined.cash.total, "by_ticker": by_ticker}
     execute = next_session(cutoff.date())
-    spendable = max(0.0, state.cash.available)      # available = settled minus reservations
+    spendable = max(0.0, pot["available"] - state.cash.reserved)
     entry_lines = entries(today, {lot["ticker"] for lot in lots},
                           {x["ticker"] for x in reviews if x["action"] == "EXIT"}, r, sleeve_value, spendable, ira,
                           prices, ev["validated"], cutoff, execute)
@@ -498,8 +508,10 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                            for a in ("ENTER", "WAIT", "HOLD", "REDUCE", "EXIT", "REVIEW")},
                "paper_enters": sum(1 for x in entry_lines if x.get("paper_action") == "PAPER ENTER"),
                "cash_fund": {"holdings": cash_fund, "value": round(cash_fund_value, 2),
-                             "note": ("held as a cash equivalent; selling it frees settled cash the next session (T+1), "
-                                      "so buys funded by it come a session later") if cash_fund else None},
+                             "note": ("the base: never traded beyond the budget. To fund a buy, sell that much SGOV; the "
+                                      "sale settles the next session (T+1), so the buy comes a session later")
+                             if cash_fund else None},
+               "budget": {k: pot.get(k) for k in ("started", "available", "net", "interest", "match", "traded")},
                "limitations": ["Levels are close-confirmed: exits execute at the next close and gaps can lose more "
                                "than the stated risk level.", "Recommendations only: nothing is sent to the broker.",
                                f"Universe survivorship: {data.survivorship}."]}
@@ -508,8 +520,10 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
               "sleeve": r["sleeve"], "settings": {"capital": snap, "rules": r},
               "model": {"policy": policy.__dict__, "policy_version": policy.version(), "bundle": art,
                         "bundle_meta": bundle["meta"], "thresholds": bundle["thresholds"], "evidence": ev,
+                        "live_calibration": {k: v for k, v in live.items() if k != "p_win_map"},
                         "code": code_version()},
               "account": {"sleeve_value": round(sleeve_value, 2), "cash_fund_value": round(cash_fund_value, 2),
+                          "budget": pot["available"],
                           "settled_cash": round(state.cash.settled, 2),
                           "reserved": round(state.cash.reserved, 2), "unsettled": round(state.cash.unsettled, 2),
                           "lots": len(lots), "ira_total": round(ira["total"], 2)},
@@ -519,6 +533,13 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                           (decision_id, now_utc(), str(cutoff.date()), str(execute), r["sleeve"], mode,
                            json.dumps(record["settings"], default=str), json.dumps(record["model"], default=str),
                            json.dumps(record["account"], default=str), json.dumps(payload, default=str)))
+    # Every prediction is saved before its outcome is known, and earlier ones that have matured are scored.
+    feedback.record(store.con, record, model_key=str(art.get("key") if isinstance(art, dict) else art))
+    try:
+        feedback.resolve(store.con, cache_dir)
+        feedback.export(store.con, store.folder / "results" / "model_history")
+    except Exception as exc:   # scoring past predictions never blocks today's decision
+        say(f"could not score past predictions: {exc}")
     from .shadow import advance
 
     record["shadow"] = advance(store, data, cutoff, decision_id, entry_lines, policy, snap, prices=(px, div))

@@ -39,48 +39,22 @@ def test_sessions_follow_the_exchange_calendar():
 
 def test_sale_proceeds_settle_next_session_and_buys_need_settled_cash(ledger):
     ledger.contribute(100.0, MON)
-    ledger.fill("investing", "buy", "AAA", 1, 80.0, MON)
+    ledger.fill("trading", "buy", "AAA", 1, 80.0, MON)
     with pytest.raises(LedgerError, match="settled"):
-        ledger.fill("investing", "buy", "AAA", 1, 80.0, MON)
-    ledger.fill("investing", "sell", "AAA", 1, 90.0, MON)
-    s = ledger.state("investing", MON)
+        ledger.fill("trading", "buy", "AAA", 1, 80.0, MON)
+    ledger.fill("trading", "sell", "AAA", 1, 90.0, MON)
+    s = ledger.state("trading", MON)
     assert s.cash.settled == pytest.approx(20.0) and s.cash.unsettled == pytest.approx(90.0)
-    assert ledger.state("investing", TUE).cash.settled == pytest.approx(110.0)
-
-
-def test_transfers_move_value_between_sleeves_without_changing_the_account(ledger):
-    ledger.contribute(500.0, MON)
-    ledger.fill("investing", "buy", "CASHLIKE", 4, 100.0, MON)
-    before = ledger.state(None, MON, {"CASHLIKE": 100.0})
-    ledger.transfer("investing", "trading", MON, ticker="CASHLIKE", quantity=2, price=100.0)
-    ledger.transfer("investing", "trading", MON, cash=50.0)
-    after = ledger.state(None, MON, {"CASHLIKE": 100.0})
-    assert after.equity == pytest.approx(before.equity) and after.positions == before.positions
-    trading = ledger.state("trading", MON, {"CASHLIKE": 100.0})
-    assert trading.equity == pytest.approx(250.0)
-    # For the sleeve the transfer is a capital flow; for the account it is nothing.
-    assert ledger.flows("trading", "2026-10-01", MON) == pytest.approx(250.0)
-    assert ledger.flows(None, "2026-10-01", MON) == pytest.approx(500.0)
-    with pytest.raises(LedgerError):
-        ledger.transfer("investing", "trading", MON, ticker="CASHLIKE", quantity=5, price=100.0)
-
-
-def test_unsettled_cash_cannot_fund_the_trading_sleeve(ledger):
-    ledger.contribute(10.0, MON)
-    ledger.fill("investing", "buy", "AAA", 1, 10.0, MON)
-    ledger.fill("investing", "sell", "AAA", 1, 1000.0, MON)
-    with pytest.raises(LedgerError, match="unsettled"):
-        ledger.transfer("investing", "trading", MON, cash=1000.0)
-    ledger.transfer("investing", "trading", TUE, cash=1000.0)
+    assert ledger.state("trading", TUE).cash.settled == pytest.approx(110.0)
 
 
 def test_investment_pnl_excludes_contributions(ledger):
     ledger.contribute(1000.0, MON)
-    ledger.fill("investing", "buy", "AAA", 10, 100.0, MON)
+    ledger.fill("trading", "buy", "AAA", 10, 100.0, MON)
     ledger.contribute(27.61, TUE)
-    end = ledger.state("investing", TUE, {"AAA": 110.0})
+    end = ledger.state("trading", TUE, {"AAA": 110.0})
     start_equity = 0.0
-    pnl = end.equity - start_equity - ledger.flows("investing", "2026-10-01", TUE)
+    pnl = end.equity - start_equity - ledger.flows("trading", "2026-10-01", TUE)
     assert pnl == pytest.approx(100.0)
 
 
@@ -88,38 +62,38 @@ def test_events_are_deduplicated_and_survive_a_restart(tmp_path):
     path = tmp_path / "t.sqlite3"
     led = Ledger(connect(path))
     led.ensure_account()
-    first, new = led.record("contribution", "investing", MON, cash=50.0, uid="broker-123")
-    again, new_again = led.record("contribution", "investing", MON, cash=50.0, uid="broker-123")
+    first, new = led.record("contribution", "trading", MON, cash=50.0, uid="broker-123")
+    again, new_again = led.record("contribution", "trading", MON, cash=50.0, uid="broker-123")
     assert new and not new_again and first == again
     led.con.close()
     reopened = Ledger(connect(path))
-    assert reopened.state("investing", MON).cash.settled == pytest.approx(50.0)
+    assert reopened.state("trading", MON).cash.settled == pytest.approx(50.0)
 
 
 def test_recorded_events_cannot_be_edited_or_deleted_only_voided(ledger):
-    event, _ = ledger.record("contribution", "investing", MON, cash=50.0)
+    event, _ = ledger.record("contribution", "trading", MON, cash=50.0)
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         ledger.con.execute("UPDATE events SET cash = 5 WHERE id = ?", (event,))
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         ledger.con.execute("DELETE FROM events WHERE id = ?", (event,))
     ledger.void(event, "entered twice")
-    assert ledger.state("investing", MON).cash.settled == 0
-    assert len(ledger.events("investing", include_void=True)) == 1
+    assert ledger.state("trading", MON).cash.settled == 0
+    assert len(ledger.events("trading", include_void=True)) == 1
 
 
 def test_reservations_reduce_what_can_be_spent(ledger):
     ledger.contribute(100.0, MON)
-    rid = ledger.reserve("investing", 60.0, "collateral", as_of=MON)
-    assert ledger.state("investing", MON).cash.available == pytest.approx(40.0)
+    rid = ledger.reserve("trading", 60.0, "collateral", as_of=MON)
+    assert ledger.state("trading", MON).cash.available == pytest.approx(40.0)
     with pytest.raises(LedgerError):
-        ledger.fill("investing", "buy", "AAA", 1, 50.0, MON)
+        ledger.fill("trading", "buy", "AAA", 1, 50.0, MON)
     ledger.release(rid)
-    ledger.fill("investing", "buy", "AAA", 1, 50.0, MON)
+    ledger.fill("trading", "buy", "AAA", 1, 50.0, MON)
 
 
 def test_reconcile_reports_differences(ledger):
     ledger.contribute(100.0, MON)
-    ledger.fill("investing", "buy", "AAA", 1, 50.0, MON)
+    ledger.fill("trading", "buy", "AAA", 1, 50.0, MON)
     assert ledger.reconcile({"AAA": 1.0}, 50.0, MON) == []
     problems = ledger.reconcile({"AAA": 2.0}, 40.0, MON)
     assert any("AAA" in p for p in problems) and any("cash" in p for p in problems)
@@ -130,32 +104,12 @@ def test_legacy_files_are_kept_and_become_opening_positions(tmp_path):
     (tmp_path / "my_risk.json").write_text(json.dumps({"level": 5}))
     (tmp_path / "my_buys.json").write_text(json.dumps({"daily": {"AAA": 20}, "weekly": {"BBB": 5}}))
     store = Store(tmp_path)
-    assert store.ledger.state("investing", "2100-01-01").positions == {"AAA": 2.5}
-    assert store.ledger.state("trading", "2100-01-01").positions == {}
-    assert store.get("investing", "risk_level") == 5 and store.get("trading", "risk_level") == 2
-    assert store.get("investing", "daily_contribution") == 21.0
+    assert store.ledger.state("trading", "2100-01-01").positions == {"AAA": 2.5}
+    assert store.get("capital", "daily_sgov_usd") == 21.0          # the recurring buys become the daily SGOV buy
+    assert store.get("global", "income_start") is not None         # the strategy starts with the holdings
     assert json.loads(store.legacy("my_risk.json")) == {"level": 5}
     Store(tmp_path)   # opening again imports nothing twice
-    assert len(store.ledger.events("investing")) == 1
-
-
-def test_trading_assignment_is_only_a_preview_of_what_exists(tmp_path):
-    (tmp_path / "my_portfolio.json").write_text(json.dumps({"positions": [{"ticker": "SGOV", "quantity": 5}]}))
-    store = Store(tmp_path)
-    preview = store.trading_assignment_preview(1000.0, {"SGOV": 100.0}, "2100-01-01")
-    assert preview["steps"] == [{"ticker": "SGOV", "quantity": 5, "price": 100.0, "value": 500.0}]
-    assert preview["short_by"] == 500.0
-    assert store.ledger.state("trading", "2100-01-01").positions == {}
-
-
-def test_sleeve_settings_are_separate_and_keep_history(tmp_path):
-    store = Store(tmp_path)
-    store.set("trading", "risk_level", 7)
-    assert store.get("investing", "risk_level") == 2 and store.get("trading", "risk_level") == 7
-    store.set("trading", "risk_level", 8)
-    assert [r[0] for r in store.con.execute("SELECT value_json FROM settings_history WHERE scope='trading'")] == ["7", "8"]
-    with pytest.raises(KeyError):
-        store.set("trading", "leverage", 10)
+    assert len(store.ledger.events("trading")) == 1
 
 
 def test_work_claims_stop_a_second_owner(tmp_path):
@@ -216,7 +170,7 @@ class _Suggestion:
 def _save(con, when):
     closes = pd.DataFrame({"AAA": [1.0, 2.0], "CASH": [1.0, 1.0]}, index=pd.bdate_range("2026-10-15", periods=2))
     plan = _Plan([_Row("AAA", 0.4, 40.0)], _Row("CASH", 0.6, 60.0))
-    return recommendations.save(con, account_id="rh-roth-ira", sleeve="investing", plan=plan, suggestion=_Suggestion(),
+    return recommendations.save(con, account_id="rh-roth-ira", sleeve="trading", plan=plan, suggestion=_Suggestion(),
                                 settings={"loss_limit": 0.025}, closes=closes, universe=["AAA"],
                                 info_cutoff="2026-10-16", market_data_at="2026-10-16T21:00:00Z",
                                 published=NY.localize(when))
@@ -230,7 +184,7 @@ def test_recommendations_are_immutable_and_superseded_not_edited(ledger):
     second = _save(ledger.con, datetime(2026, 10, 19, 10, 0))
     assert first["session"] == second["session"] == MON and second["supersedes"] == first["id"]
     assert recommendations.status(ledger.con, first["id"]) == "superseded"
-    assert recommendations.official(ledger.con, "rh-roth-ira", "investing", MON)["id"] == second["id"]
+    assert recommendations.official(ledger.con, "rh-roth-ira", "trading", MON)["id"] == second["id"]
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         ledger.con.execute("UPDATE recommendations SET targets_json = '{}' WHERE id = ?", (first["id"],))
     rec = recommendations.load(ledger.con, first["id"])
@@ -265,7 +219,7 @@ def test_csv_import_previews_dedupes_and_reconciles(ledger):
     assert rows[-1].reason and "XYZ" in rows[-1].reason
     result = imports.commit(ledger, rows)
     assert result["written"] == 4
-    s = ledger.state("investing", WED)
+    s = ledger.state("trading", WED)
     assert s.positions == {"AAA": 1.0} and s.cash.total == pytest.approx(200 - 100 + 54.98 + 0.40)
     again = imports.preview(ledger, CSV)
     assert all(r.duplicate for r in again if r.action != "skip")
@@ -330,13 +284,3 @@ def test_a_running_job_is_not_paid_for_twice_and_reservations_count(ledger, monk
     gw.run(task="brief", provider="openai", model="test-model", schema_version="v1", info_cutoff="2026-10-16",
            inputs={"x": 1}, work=work, est_usd=0.04, est_requests=1, allow_paid=True)
     assert gw.reserved() == (0.0, 0)
-
-
-def test_funding_trading_twice_proposes_only_what_is_missing(tmp_path):
-    (tmp_path / "my_portfolio.json").write_text(json.dumps({"positions": [{"ticker": "SGOV", "quantity": 30}]}))
-    store = Store(tmp_path)
-    first = store.trading_assignment_preview(1000.0, {"SGOV": 100.0}, "2100-01-01")
-    step = first["steps"][0]
-    store.ledger.transfer("investing", "trading", "2100-01-01", ticker="SGOV", quantity=step["quantity"], price=100.0)
-    again = store.trading_assignment_preview(1000.0, {"SGOV": 100.0}, "2100-01-01")
-    assert again["steps"] == [] and again["trading_already"] == 1000.0 and again["amount"] == 0.0

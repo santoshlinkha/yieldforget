@@ -135,9 +135,10 @@ PM_INSTRUCTION = (
 # --- the account ---
 
 def account_view(store, ticker: str, as_of, cache_dir=None) -> dict:
-    """What the plan is checked against: the Trading sleeve's settled cash after reservations, its value,
-    what it holds, today's fills of this stock, the whole IRA's exposure to it, and the settings version."""
-    from tradingagents.ledger import capital
+    """What the plan is checked against: the trading budget (SGOV's interest and the match, less what is in
+    stocks) after reservations, its value, what it holds, today's fills of this stock, the whole IRA's
+    exposure to it, and the settings version."""
+    from tradingagents.ledger import capital, income
     from tradingagents.optimizer.data import latest_prices
     from tradingagents.stocks.daily import rules
 
@@ -153,16 +154,18 @@ def account_view(store, ticker: str, as_of, cache_dir=None) -> dict:
 
     fills = [e for e in store.ledger.events(None, as_of) if e["kind"] == "fill" and e["ticker"] == ticker.upper()]
     snap = capital.snapshot(store)
-    return {"sleeve": sleeve, "available": max(0.0, state.cash.available), "reserved": state.cash.reserved,
-            "sleeve_value": state.cash.total + worth(state.positions), "held": float(state.positions.get(ticker.upper(), 0.0)),
-            "names_held": sum(1 for q in state.positions.values() if q),
+    budget = income.budget(store, cache_dir, as_of)["available"] if cache_dir else 0.0
+    stocks = {t: q for t, q in state.positions.items() if t != income.RESERVE}
+    return {"sleeve": sleeve, "available": max(0.0, budget - state.cash.reserved), "reserved": state.cash.reserved,
+            "sleeve_value": budget + worth(stocks), "held": float(state.positions.get(ticker.upper(), 0.0)),
+            "names_held": sum(1 for q in stocks.values() if q),
             "ira_total": combined.cash.total + worth(combined.positions),
             "ira_in_ticker": float(combined.positions.get(ticker.upper(), 0.0)) * float(prices.get(ticker.upper()) or 0.0),
             "sold_on": sorted({e["trade_date"] for e in fills if e["quantity"] < 0}),
             "bought_on": sorted({e["trade_date"] for e in fills if e["quantity"] > 0}),
             "rules": {k: r[k] for k in ("max_position_share", "max_names", "min_order", "combined_name_cap") if k in r},
             "settings": {"version": snap["version"], "hash": snap["hash"],
-                         "trading_capital_usd": snap.get("trading_capital_usd")}}
+                         "daily_sgov_usd": snap.get("daily_sgov_usd")}}
 
 
 # --- validation ---

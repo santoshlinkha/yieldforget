@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from .db import now_utc, transaction
 from .sessions import as_date, next_session
 
-SLEEVES = ("investing", "trading")
+SLEEVES = ("trading",)   # one account; the Investing sleeve of earlier versions is retired (Store.retire_investing)
 DEFAULT_ACCOUNT = "rh-roth-ira"
 EPS = 1e-9
 
@@ -57,7 +57,7 @@ class Cash:
 
 @dataclass
 class SleeveState:
-    sleeve: str                     # 'investing', 'trading' or 'combined'
+    sleeve: str                     # 'trading' or 'combined' (the whole account)
     as_of: str
     positions: dict[str, float]
     cash: Cash
@@ -119,7 +119,7 @@ class Ledger:
         with transaction(self.con):
             self.con.execute("INSERT INTO event_voids VALUES (?, ?, ?, ?)", (event_id, now_utc(), reason, replaced_by))
 
-    def contribute(self, amount: float, trade_date, sleeve="investing", settle_date=None, source="manual",
+    def contribute(self, amount: float, trade_date, sleeve="trading", settle_date=None, source="manual",
                    source_ref=None, note=None) -> int:
         """New money from outside the IRA: an external flow, never profit."""
         if amount <= 0:
@@ -127,7 +127,7 @@ class Ledger:
         return self.record("contribution", sleeve, trade_date, settle_date=settle_date, cash=amount,
                            source=source, source_ref=source_ref, note=note)[0]
 
-    def withdraw(self, amount: float, trade_date, sleeve="investing", source="manual", note=None) -> int:
+    def withdraw(self, amount: float, trade_date, sleeve="trading", source="manual", note=None) -> int:
         if amount <= 0:
             raise LedgerError("a withdrawal must be positive")
         if self.state(sleeve, trade_date).cash.available < amount - EPS:

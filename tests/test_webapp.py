@@ -1,4 +1,4 @@
-"""The web app's API on synthetic prices: previews are not stored, saves are, page loads never pay for AI.
+"""The web app's API on synthetic prices: the trade view, the books, and page loads that never pay for AI.
 
 Prices and holdings are labelled synthetic fixtures; no network and no model is used.
 """
@@ -72,47 +72,39 @@ def _ai_rows(tmp_path):
 
 def test_page_loads_and_polling_never_call_a_model(server):
     base, tmp_path, _ = server
-    for path in ("/api/state", "/api/ledger", "/api/ai", "/api/recommendations", "/api/tracker", "/api/ratings",
-                 "/api/backtest", "/api/market/explain"):
+    for path in ("/api/state", "/api/ledger", "/api/ai", "/api/recommendations", "/api/ratings", "/api/capital",
+                 "/api/market/explain", "/api/trade", "/api/income", "/api/model-record", "/api/decisions"):
         status, _ = _call(base, path)
         assert status == 200, path
-    status, _ = _call(base, "/api/plan", {"sleeve": "investing", "scan": False})
-    assert status == 200
+    for gone in ("/api/tracker", "/api/backtest"):
+        assert _call(base, gone)[0] == 404
+    assert _call(base, "/api/plan", {"scan": False})[0] == 404
     assert _ai_rows(tmp_path) == 0
 
 
-def test_a_preview_is_not_stored_and_a_save_is_official(server):
+def test_the_trade_view_shows_the_budget_and_waits_for_a_decision(server, monkeypatch):
+    from datetime import date
+
+    from tradingagents.ledger import income
+
     base, tmp_path, _ = server
-    status, preview = _call(base, "/api/plan", {"scan": False})
-    assert status == 200 and preview["preview"] and "saved" not in preview
-    assert _call(base, "/api/recommendations")[1] == []
-    assert not (tmp_path / "results" / "optimizer").exists()
-    status, saved = _call(base, "/api/recommendations/save", {"scan": False})
-    assert status == 200 and saved["saved"]["id"]
-    recs = _call(base, "/api/recommendations")[1]
-    assert len(recs) == 1 and recs[0]["status"] == "official"
-    status, rec = _call(base, "/api/recommendation?id=" + saved["saved"]["id"])
-    assert status == 200 and rec["artifact"]["price_tickers"]
-
-
-def test_settings_are_per_sleeve(server):
-    base, _, _ = server
-    _call(base, "/api/risk", {"sleeve": "trading", "level": 8})
-    assert _call(base, "/api/state?sleeve=trading")[1]["risk"]["level"] == 8
-    assert _call(base, "/api/state?sleeve=investing")[1]["risk"]["level"] == 2
+    monkeypatch.setattr(income, "_dividends", lambda cache, t: [(date(2026, 10, 1), 0.30), (date(2100, 1, 1), 0.30)])
+    status, t = _call(base, "/api/trade")
+    assert status == 200 and not t["ready"] and "decision" in t["note"]
+    b = t["income"]["budget"]
+    assert b["started"] and b["interest"]["basis"] == "estimated" and b["available"] >= 0
+    assert t["income"]["projection"]["match_per_month"] == round(5.0 * 21 * 0.03, 2)   # my_buys.json: $5 a day
+    status, c = _call(base, "/api/capital", {"values": {"daily_sgov_usd": 30, "match_rate": 0.01}})
+    assert status == 200 and c["settings"]["daily_sgov_usd"] == 30.0
+    assert _call(base, "/api/capital", {"values": {"trading_capital_usd": 1}})[0] == 400
 
 
 def test_ledger_writes_go_through_the_books_and_keep_the_old_file_in_step(server):
     base, tmp_path, _ = server
-    status, out = _call(base, "/api/ledger/transfer",
-                        {"from": "investing", "to": "trading", "ticker": "SGOV", "quantity": 5, "price": 100})
-    assert status == 200, out
     books = _call(base, "/api/ledger")[1]["sleeves"]
-    assert books["trading"]["positions"]["SGOV"]["quantity"] == 5
-    assert books["combined"]["positions"]["SGOV"]["quantity"] == 20
-    status, out = _call(base, "/api/ledger/transfer",
-                        {"from": "investing", "to": "trading", "ticker": "SGOV", "quantity": 50, "price": 100})
-    assert status == 400 and "holds" in out["error"]
+    assert set(books) == {"trading", "combined"} and books["combined"]["positions"]["SGOV"]["quantity"] == 20
+    status, out = _call(base, "/api/ledger/contribution", {"amount": 29})
+    assert status == 200, out
     _call(base, "/api/portfolio", {"positions": [{"ticker": "AAA", "quantity": 12}, {"ticker": "BBB", "quantity": 5},
                                                  {"ticker": "SGOV", "quantity": 20}]})
     exported = json.loads((tmp_path / "my_portfolio.json").read_text())
@@ -137,28 +129,9 @@ def test_a_ticker_page_answers_even_when_its_sources_fail(server):
     assert status == 200 and out["symbol"] == "AAA"
     # Prices come from the stubbed feed; Yahoo's other sources are unreachable in tests.
     assert "error" in out["news"] and "error" in out["analysts"]
-    assert out["mine"]["quantity"]["investing"] == 10
+    assert out["mine"]["quantity"]["trading"] == 10
     assert _call(base, "/api/ticker?symbol=../etc")[0] == 400
     assert _call(base, "/api/report?path=C:/Windows/win.ini")[0] == 400
-
-
-def test_the_same_plan_is_not_computed_twice(server):
-    base, _, handler = server
-    t0 = time.time()
-    _call(base, "/api/plan", {"scan": False})
-    first = time.time() - t0
-    t0 = time.time()
-    _call(base, "/api/plan", {"scan": False})
-    assert time.time() - t0 < max(first / 2, 0.05)
-
-
-def test_an_existing_paper_record_is_never_started_over_by_accident(server):
-    base, tmp_path, _ = server
-    (tmp_path / "paper_tracker.json").write_text(json.dumps({"start": "2026-10-22", "history": [], "books": {},
-                                                             "last_day": None, "loss_limit": 0.05}))
-    status, out = _call(base, "/api/tracker/start", {})
-    assert status == 400 and "already exists" in out["error"]
-    assert json.loads((tmp_path / "paper_tracker.json").read_text())["start"] == "2026-10-22"
 
 
 def test_a_pasted_answer_is_kept_with_its_prompt_and_a_second_one_archives_the_first(server, monkeypatch):

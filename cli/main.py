@@ -161,107 +161,25 @@ def backtest(
 
 
 @app.command()
-def suggest(
-    portfolio: str = typer.Option("my_portfolio.json", "--portfolio",
-                                  help="Holdings file; its folder holds portfolio.sqlite3, the records"),
-    schedule: str = typer.Option("my_buys.json", "--schedule", help="JSON file with recurring buys"),
-    sleeve: str = typer.Option("investing", "--sleeve", help="investing or trading"),
-    risk: int | None = typer.Option(None, "--risk", min=1, max=10,
-                                    help="Risk level 1-10 for the sleeve, saved for next time; the saved level if omitted"),
-    max_loss: float | None = typer.Option(None, "--max-loss",
-                                          help="Stress-loss limit in percent for this run only; 0 for none"),
-    model: str | None = typer.Option(None, "--model",
-                                     help="How the stress loss is measured, saved for the sleeve: worst_case "
-                                          "(every holding at its worst drop at once) or scenarios (the worst past "
-                                          "crash replayed on the mix; broke its limit in backtests)"),
-    target_growth: float | None = typer.Option(None, "--target-growth",
-                                               help="Expected growth to aim for, percent a year (8 for 8%), saved "
-                                                    "for the sleeve; the least risky mix that reaches it, within the "
-                                                    "risk level. 0 clears it"),
-    scan: bool = typer.Option(True, "--scan/--no-scan", help="Also consider the funds in the scan list"),
-    universe: str = typer.Option("my_universe.json", "--universe", help="Scan list file; the built-in list if absent"),
-    ai: bool = typer.Option(False, "--ai", help="Pay for AI ratings of the holdings (budgeted, cached) and tilt toward them"),
-    analysts: str | None = typer.Option(None, "--analysts", help="Analysts for --ai, comma-separated; one by default"),
-    save: bool = typer.Option(False, "--save", help="Save the plan as the official recommendation for its session"),
-):
-    """Print today's orders and the optimized mix behind them. A preview unless --save."""
+def trade(portfolio: str = typer.Option("my_portfolio.json", "--portfolio",
+                                        help="Holdings file; its folder holds portfolio.sqlite3")):
+    """Today's trades from the internal model: the best stock to buy with the budget, its buy price, what to sell."""
+    import json
     from datetime import date
     from pathlib import Path
 
-    from rich.markdown import Markdown
+    from tradingagents.ledger import income
+    from tradingagents.ledger.store import Store
+    from tradingagents.stocks import daily
+    from tradingagents.stocks import trade as T
 
-    from tradingagents.optimizer.ai_views import collect_ratings
-    from tradingagents.optimizer.plan import render_plan, render_suggestion
-    from tradingagents.optimizer.risk import RISK_MODELS, risk_level
-    from tradingagents.webapp.server import App
-
-    try:
-        portfolio_path = Path(portfolio).resolve()
-        app_ = App(portfolio_path, Path(schedule).resolve(), Path(universe).resolve(), DEFAULT_CONFIG)
-        store = app_.store
-        if risk:
-            store.set(sleeve, "risk_level", risk)
-        if model:
-            if model not in RISK_MODELS:
-                raise ValueError(f"--model must be one of {', '.join(RISK_MODELS)}")
-            store.set(sleeve, "risk_model", model)
-        if target_growth is not None:
-            store.set(sleeve, "target_growth", target_growth / 100 if target_growth else None)
-        s = store.settings(sleeve)
-        level = risk_level(s["risk_level"])
-        body = {"sleeve": sleeve, "scan": scan}
-        ratings = None
-        if ai:
-            g = store.settings("global")
-            context, _ = store.portfolio(sleeve, date.today())
-            tickers = [p.ticker.upper() for p in context.positions if p.ticker.upper() != "SGOV"][:int(g["ai_shortlist"])]
-            ratings, failures = collect_ratings(
-                tickers, DEFAULT_CONFIG,
-                [a.strip() for a in analysts.split(",") if a.strip()] if analysts else g["ai_analysts"],
-                gateway=app_.gateway(), allow_paid=True, est_usd=g["ai_estimates"]["rating"],
-                progress=lambda t, msg: console.print(f"[dim]{t}: {msg}[/dim]"))
-            for ticker, reason in failures:
-                console.print(f"[yellow]no rating:[/yellow] {ticker}: {reason}")
-        if max_loss is not None:
-            body["loss_limit"] = max_loss / 100 if max_loss > 0 else None
-        c = app_.compute(body, ratings=ratings or {})
-        goal = "" if s["target_growth"] is None else f", growth target {s['target_growth']:.1%}"
-        limit = c["plan"].settings.loss_limit
-        console.print(f"[dim]{sleeve.capitalize()} sleeve, risk level {level.level} ({level.name}), stress-loss limit "
-                      f"{'none' if limit is None else f'{limit:.1%}'} ({s['risk_model'].replace('_', ' ')}){goal}. "
-                      f"Settled cash ${c['cash'].available:,.2f}, unsettled ${c['cash'].unsettled:,.2f}.[/dim]")
-        console.print(Markdown(render_suggestion(c["suggestion"], date.today().isoformat())))
-        console.print(Markdown(render_plan(c["plan"])))
-        if save:
-            rec = app_.save_official(c)
-            console.print(f"[green]Saved official recommendation {rec['id']}[/green] for session {rec['session']}, "
-                          f"earliest execution {rec['earliest_execution']}"
-                          + (f", superseding {rec['supersedes']}" if rec["supersedes"] else "") + ".")
-        else:
-            console.print("[dim]Preview only: nothing was saved. Add --save to make it the official recommendation.[/dim]")
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1) from None
-
-
-@app.command()
-def track(
-    portfolio: str = typer.Option("my_portfolio.json", "--portfolio", help="JSON file with holdings and settled cash"),
-    schedule: str = typer.Option("my_buys.json", "--schedule", help="JSON file with recurring buys"),
-):
-    """Record the paper portfolios for every closed trading day not yet recorded (run daily after 4:30 pm ET)."""
-    from pathlib import Path
-
-    from tradingagents.webapp.server import App
-
-    portfolio_path = Path(portfolio).resolve()
-    app_ = App(portfolio_path, Path(schedule).resolve(), portfolio_path.parent / "my_universe.json", DEFAULT_CONFIG)
-    try:
-        result = app_.track_now()
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1) from None
-    console.print(f"Paper tracker: {result['days']} days recorded, last {result['last_day']}.")
+    store = Store(Path(portfolio).resolve().parent)
+    cache = Path(DEFAULT_CONFIG["data_cache_dir"]) / "optimizer"
+    pot = income.budget(store, cache, date.today())
+    out = T.plan(daily.load(store.con), pot["available"])
+    out["budget_detail"] = pot
+    out["income_health"] = income.health(store, cache, date.today())
+    console.print(json.dumps(out, indent=1, default=str))
 
 
 @app.command()
@@ -289,7 +207,7 @@ def web(
         server.server_close()
 
 
-book_app = typer.Typer(help="Your records: sleeves, cash, fills, transfers, imports and recommendations.",
+book_app = typer.Typer(help="Your records: holdings, cash, fills, imports, the money settings and the budget.",
                        no_args_is_help=True)
 app.add_typer(book_app, name="book")
 PORTFOLIO_OPT = typer.Option("my_portfolio.json", "--portfolio", help="Holdings file; its folder holds portfolio.sqlite3")
@@ -335,16 +253,16 @@ def _book_errors(fn):
 @book_app.command("status")
 @_book_errors
 def book_status(portfolio: str = PORTFOLIO_OPT):
-    """Holdings, settled and unsettled cash, and value of each sleeve and the whole account."""
+    """Holdings, settled and unsettled cash, and the value of the account."""
     from datetime import date
 
     from rich.table import Table
 
     store = _book_store(portfolio)
     prices = _prices(store)
-    for sleeve in ("investing", "trading", "combined"):
+    for sleeve in ("combined",):   # one account
         s = store.ledger.state(sleeve, date.today(), prices)
-        table = Table(title=f"{sleeve.capitalize()}: ${s.equity:,.2f}")
+        table = Table(title=f"Account: ${s.equity:,.2f}")
         for col in ("Ticker", "Quantity", "Value"):
             table.add_column(col, justify="left" if col == "Ticker" else "right")
         for t, q in s.positions.items():
@@ -354,12 +272,12 @@ def book_status(portfolio: str = PORTFOLIO_OPT):
         if s.cash.reserved:
             table.add_row("cash reserved", "", f"${s.cash.reserved:,.2f}")
         console.print(table)
-    console.print("[dim]Sleeves are bookkeeping inside one IRA; the broker's rules apply to the whole account.[/dim]")
+
 
 
 @book_app.command("contribute")
 @_book_errors
-def book_contribute(amount: float, sleeve: str = "investing", day: str = typer.Option(None, "--date"),
+def book_contribute(amount: float, sleeve: str = "trading", day: str = typer.Option(None, "--date"),
                     settle_date: str = typer.Option(None, "--settle-date"), portfolio: str = PORTFOLIO_OPT):
     """Record new money deposited into the IRA (an external flow, not profit)."""
     from datetime import date
@@ -372,7 +290,7 @@ def book_contribute(amount: float, sleeve: str = "investing", day: str = typer.O
 
 @book_app.command("fill")
 @_book_errors
-def book_fill(side: str, ticker: str, quantity: float, price: float, sleeve: str = "investing",
+def book_fill(side: str, ticker: str, quantity: float, price: float, sleeve: str = "trading",
               day: str = typer.Option(None, "--date"), fee: float = 0.0,
               broker_record: bool = typer.Option(False, "--broker-record",
                                                  help="Keep it even if the books say it could not be paid for"),
@@ -389,64 +307,30 @@ def book_fill(side: str, ticker: str, quantity: float, price: float, sleeve: str
         console.print(f"[yellow]{w}[/yellow]")
 
 
-@book_app.command("transfer")
+@book_app.command("retire-investing")
 @_book_errors
-def book_transfer(from_sleeve: str, to_sleeve: str, ticker: str = None, quantity: float = 0.0,
-                  price: float = None, cash: float = 0.0, day: str = typer.Option(None, "--date"),
-                  portfolio: str = PORTFOLIO_OPT):
-    """Move shares or settled cash between sleeves. The account total does not change."""
+def book_retire_investing(confirm: bool = typer.Option(False, "--confirm", help="Delete the Investing records"),
+                          portfolio: str = PORTFOLIO_OPT):
+    """Fold the old Investing sleeve into the one account: back up the database, delete its records, restate holdings."""
+    import json
     from datetime import date
 
     store = _book_store(portfolio)
-    if ticker and price is None:
-        price = _prices(store).get(ticker.upper())
-        if price is None:
-            raise ValueError(f"no cached price for {ticker}; pass --price")
-    store.ledger.transfer(from_sleeve, to_sleeve, day or date.today(), ticker=ticker, quantity=quantity,
-                          cash=cash, price=price)
-    _export(store, portfolio)
-    what = f"{quantity:g} {ticker.upper()} (${quantity * price:,.2f})" if ticker else f"${cash:,.2f} cash"
-    console.print(f"Moved {what} from {from_sleeve} to {to_sleeve}.")
-
-
-@book_app.command("fund-trading")
-@_book_errors
-def book_fund_trading(amount: float = typer.Option(None, help="Dollars to assign; the Trading setting if omitted"),
-                      confirm: bool = typer.Option(False, "--confirm", help="Make the transfers shown"),
-                      portfolio: str = PORTFOLIO_OPT):
-    """Preview, then with --confirm make, the transfers that fund the Trading sleeve from Investing."""
-    from datetime import date
-
-    store = _book_store(portfolio)
-    from tradingagents.ledger import capital
-
-    amount = amount or capital.load(store).trading_capital_usd
-    preview = store.trading_assignment_preview(amount, _prices(store), date.today())
-    for step in preview["steps"]:
-        if "cash" in step:
-            console.print(f"- ${step['cash']:,.2f} of settled cash")
-        else:
-            console.print(f"- {step['quantity']:g} {step['ticker']} (${step['value']:,.2f})")
-    if preview["short_by"] > 0:
-        console.print(f"[yellow]Short by ${preview['short_by']:,.2f}: Investing has no more settled cash or SGOV. "
-                      f"Move other holdings with `book transfer`, or fund less.[/yellow]")
-    console.print(f"[dim]{preview['note']}[/dim]")
-    if not confirm:
-        console.print("[dim]Preview only. Add --confirm to make these transfers.[/dim]")
+    if not store.con.execute("SELECT 1 FROM sleeves WHERE name = 'investing'").fetchone():
+        console.print("There is no Investing sleeve: nothing to do.")
         return
-    for step in preview["steps"]:
-        if "cash" in step:
-            store.ledger.transfer("investing", "trading", date.today(), cash=step["cash"])
-        else:
-            store.ledger.transfer("investing", "trading", date.today(), ticker=step["ticker"],
-                                  quantity=step["quantity"], price=step["price"])
+    if not confirm:
+        console.print("This deletes every Investing record (after a backup) and restates today's holdings in the one "
+                      "account. Run again with --confirm.")
+        return
+    out = store.retire_investing(date.today())
     _export(store, portfolio)
-    console.print("[green]Done.[/green] Trading's value now moves only with its own results and transfers.")
+    console.print(json.dumps(out, indent=1, default=str))
 
 
 @book_app.command("import-csv")
 @_book_errors
-def book_import_csv(path: str, sleeve: str = "investing", commit: bool = typer.Option(False, "--commit"),
+def book_import_csv(path: str, sleeve: str = "trading", commit: bool = typer.Option(False, "--commit"),
                     portfolio: str = PORTFOLIO_OPT):
     """Preview Robinhood's activity CSV, then with --commit write the new rows."""
     from pathlib import Path
@@ -484,40 +368,27 @@ def book_recommendations(sleeve: str = None, portfolio: str = PORTFOLIO_OPT):
                       f"{r['status']:10} growth {m['expected_target']:.1%} stress {m['target_stress']:.1%}")
 
 
-@book_app.command("decide")
-@_book_errors
-def book_decide(rec_id: str, decision: str, note: str = None, portfolio: str = PORTFOLIO_OPT):
-    """Record accepted / rejected / deferred / partial for a recommendation. Nothing is traded."""
-    from tradingagents.ledger import recommendations
-
-    store = _book_store(portfolio)
-    matches = [r["id"] for r in recommendations.history(store.con, store.ledger.account_id)
-               if r["id"].startswith(rec_id)]
-    if len(matches) != 1:
-        raise ValueError(f"{rec_id} matches {len(matches)} recommendations")
-    recommendations.decide(store.con, matches[0], decision, note)
-    console.print(f"Recorded {decision}. Holdings change only when you record the fills.")
-
-
 @book_app.command("capital")
 @_book_errors
-def book_capital(trading: float = typer.Option(None, help="Trading capital, dollars (not a daily budget)"),
-                 investing: float = typer.Option(None, help="Investing capital, dollars"),
-                 daily: float = typer.Option(None, help="Planned Investing purchase per market session"),
+def book_capital(daily: float = typer.Option(None, help="Dollars bought into SGOV each market session"),
+                 match: float = typer.Option(None, help="The broker's match on deposits, e.g. 0.03 for 3%"),
+                 dry_yield: float = typer.Option(None, "--dry-yield",
+                                                 help="SGOV yield under which its interest has dried up, e.g. 0.02"),
                  portfolio: str = PORTFOLIO_OPT):
-    """Show or change the three capital amounts; shows the reallocation proposal and today's purchase plan."""
+    """Show or change the money settings, and show the trading budget they give."""
     import json
     from datetime import date
+    from pathlib import Path
 
-    from tradingagents.ledger import capital
+    from tradingagents.ledger import capital, income
 
     store = _book_store(portfolio)
-    values = {k: v for k, v in (("trading_capital_usd", trading), ("investing_capital_usd", investing),
-                                ("daily_investment_usd", daily)) if v is not None}
+    values = {k: v for k, v in (("daily_sgov_usd", daily), ("match_rate", match), ("dry_yield", dry_yield))
+              if v is not None}
     snap = capital.update(store, values, source="cli") if values else capital.snapshot(store)
-    console.print(json.dumps({"settings": snap, "proposal": capital.reallocation(store, date.today(), _prices(store)),
-                              "daily_plan": capital.daily_plan(store, date.today())}, indent=1, default=str))
-    console.print("[dim]Nothing moves until you record a transfer (book transfer ... --cash N).[/dim]")
+    cache = Path(DEFAULT_CONFIG["data_cache_dir"]) / "optimizer"
+    console.print(json.dumps({"settings": snap, "budget": income.budget(store, cache, date.today())},
+                             indent=1, default=str))
 
 
 @book_app.command("ai")

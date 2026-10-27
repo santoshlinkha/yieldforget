@@ -5,10 +5,12 @@ It runs on this machine because it needs the price feed and the LLM keys in
 LLM credit, so nothing else on the network should reach it.
 
 Records live in ``portfolio.sqlite3`` next to the holdings file (see
-``tradingagents.ledger``): sleeves, every recorded fill and transfer, official
-recommendations and AI usage. A plan computed for the page is a **preview** and
-is not stored; **saving** makes it the official recommendation for its session.
-Paid AI runs only on an explicit POST, through the budgeted gateway.
+``tradingagents.ledger``): one trading account (SGOV as its base, stocks bought
+with SGOV's interest and the broker's match), every recorded fill, the daily
+stock decisions and AI usage. The overview is the trade view (``trade``): the
+budget, the best stock to buy and at what price, what to sell, whether SGOV's
+interest is drying up, and the sector rotation alerts. Paid AI runs only on an
+explicit POST, through the budgeted gateway.
 
 Prices are downloaded once per day into the cache directory and reused. AI
 ratings and backtests run in background threads, since they take minutes, and
@@ -35,25 +37,14 @@ from urllib.parse import parse_qs, urlparse
 from tradingagents.dataflows import local_store
 from tradingagents.dataflows.vendors.index_members import get_sp500_members
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.ledger import imports as csv_import
-from tradingagents.ledger import capital, recommendations
+from tradingagents.ledger import capital, imports as csv_import, recommendations
 from tradingagents.ledger.accounting import SLEEVES
 from tradingagents.ledger.ai_gateway import Budget, Gateway, Policy, Price
 from tradingagents.ledger.store import Store
 from tradingagents.optimizer.ai_views import collect_ratings
-from tradingagents.optimizer.backtest import render_backtest, run_backtest
 from tradingagents.optimizer.data import fetch_closes, latest_prices
 from tradingagents.optimizer.market import market_brief, market_overview, market_tickers, save_json
-from tradingagents.optimizer.plan import (
-    OptimizerSettings,
-    build_plan,
-    daily_orders,
-    load_schedule,
-    render_plan,
-    render_suggestion,
-)
-from tradingagents.optimizer.risk import RISK_MODELS, levels_json, risk_level
-from tradingagents.optimizer.tracker import archive_ledger, read_ledger, start_ledger, update_ledger, write_ledger
+from tradingagents.optimizer.plan import OptimizerSettings
 from tradingagents.optimizer.universe import (
     ETFS,
     GROUPS,
@@ -62,7 +53,6 @@ from tradingagents.optimizer.universe import (
     read_config,
     tickers_for,
 )
-from tradingagents.portfolio import load_portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -149,58 +139,12 @@ class App:
     def universe(self) -> list[str]:
         return tickers_for(read_config(self.universe_path), self.cache_dir)
 
-    @staticmethod
-    def sleeve(body: dict) -> str:
-        sleeve = body.get("sleeve") or "investing"
-        if sleeve not in SLEEVES:
-            raise ValueError(f"a plan is made for one sleeve ({', '.join(SLEEVES)}), not {sleeve}")
-        return sleeve
-
-    # --- settings ---
-
-    def risk(self, sleeve: str = "investing", level: int | None = None) -> dict:
-        """The sleeve's risk level (or the given one), model and growth target, and every level."""
-        s = self.store.settings(sleeve)
-        return {**levels_json()[risk_level(level or s["risk_level"]).level - 1], "levels": levels_json(),
-                "sleeve": sleeve, "model": s["risk_model"], "models": list(RISK_MODELS),
-                "target_growth": s["target_growth"]}
-
-    def settings(self, body: dict) -> OptimizerSettings:
-        s = self.store.settings(self.sleeve(body))
-        level = risk_level(body["risk_level"] if body.get("risk_level") else s["risk_level"])
-        settings = OptimizerSettings(loss_limit=level.loss_limit, risk_model=s["risk_model"],
-                                     target_growth=s["target_growth"])
-        if body.get("max_budget_share"):
-            settings.max_budget_share = float(body["max_budget_share"])
-        if "loss_limit" in body:   # a one-off override from the command line, never saved
-            settings.loss_limit = None if body["loss_limit"] is None else float(body["loss_limit"])
-        if s["return_model"] == "forecast":
-            from tradingagents.research.engine import expected_returns, latest_run
-
-            # The model chosen for the sleeve, not whichever forecast happened to run last.
-            run = latest_run(self.store.con, horizon=s["forecast_horizon"], model=s["forecast_model"])
-            if run is None:
-                raise ValueError(f"The {self.sleeve(body)} sleeve is set to use {s['forecast_model']} forecasts over "
-                                 f"{s['forecast_horizon']} sessions, but there is no such run. Run one under Forecasts, "
-                                 f"or switch the plan back to the standard rule.")
-            run["calibration"] = json.loads(run["calibration_json"])
-            settings.return_model, settings.forecast_horizon, settings.forecast_run = "forecast", run["horizon"], run["id"]
-            settings.forecast_mu = expected_returns(run, [f["ticker"] for f in run["forecasts"]])
-        return settings
-
     def gateway(self) -> Gateway:
         g = self.store.settings("global")
         prices = {k: Price(**v) for k, v in g["ai_prices"].items()}
         return Gateway(self.store.con, Policy(Budget(**g["ai_budget"]), prices, list(g["ai_fallbacks"])), self.owner)
 
     # --- planning ---
-
-    def _closes(self, context, schedule, universe, settings):
-        owned = list(dict.fromkeys([*(p.ticker.upper() for p in context.positions), *schedule,
-                                    settings.cash_ticker]))
-        proxies = [p for t, p in settings.proxies.items() if t in owned or t in universe]
-        return fetch_closes([*owned, *universe, *proxies, settings.cash_proxy, *settings.scenario_references],
-                            required=owned, cache_dir=self.cache_dir)
 
     def _inputs(self, *parts) -> str:
         """A fingerprint of everything a computed page section depends on: the stored prices,
@@ -209,7 +153,7 @@ class App:
         last_event = self.store.con.execute("SELECT MAX(id) FROM events").fetchone()[0]
         voids = self.store.con.execute("SELECT COUNT(*) FROM event_voids").fetchone()[0]
         files = [f.stat().st_mtime if f.exists() else 0 for f in (self.schedule_path, self.universe_path)]
-        settings = {sl: self.store.settings(sl) for sl in SLEEVES}
+        settings = [self.store.settings(sl) for sl in SLEEVES] + [capital.snapshot(self.store)]
         return json.dumps([market_store.bars_checked_at() if market_store else None, last_event, voids, files,
                            settings, self.ratings_date, _today(), *parts], sort_keys=True, default=str)
 
@@ -221,110 +165,55 @@ class App:
         self._memo[name] = (inputs, value)
         return value
 
-    def compute(self, body: dict, ratings: dict | None = None) -> dict:
-        """The sleeve's plan and orders, and everything needed to save them; nothing is stored.
-        Computed again only when an input changed (see ``_inputs``)."""
-        key = self._inputs(body, ratings, self.ratings if body.get("use_ai") else None)
-        return self._remember(f"plan:{json.dumps(body, sort_keys=True, default=str)}", key,
-                              lambda: self._compute(body, ratings))
+    # --- the trade view ---
 
-    def _compute(self, body: dict, ratings: dict | None = None) -> dict:
-        sleeve = self.sleeve(body)
-        context, cash = self.store.portfolio(sleeve, _today())
-        if not context.positions and cash.total <= 0:
-            raise ValueError(f"The {sleeve} sleeve holds nothing yet, so there is nothing to plan. Fund it from "
-                             f"Investing first (Overview > Fund the Trading sleeve).")
-        # Recurring contributions go to Investing unless configured otherwise.
-        schedule = (load_schedule(self.schedule_path) if self.schedule_path.exists() else {}) \
-            if sleeve == "investing" else {}
-        settings = self.settings(body)
-        if ratings is None:
-            ratings = self.ratings if body.get("use_ai") and self.ratings_date == _today() else None
-        universe = self.universe() if body.get("scan", True) else []
-        closes = self._closes(context, schedule, universe, settings)
-        plan = build_plan(context, schedule, settings, ratings=ratings, universe=universe, closes=closes)
-        self.last_targets = [r.ticker for r in plan.rows if r.target > 1e-4]
-        self.last_rows = {r.ticker: asdict(r) for r in [*plan.rows, plan.cash]}
-        # Buys may spend only settled cash not already reserved (T+1, cash account).
-        suggestion = daily_orders(plan, settled_cash=max(cash.available, 0.0))
-        return {"sleeve": sleeve, "plan": plan, "suggestion": suggestion, "settings": settings, "closes": closes,
-                "universe": universe, "ratings": ratings, "cash": cash, "body": body}
+    def income(self) -> dict:
+        """The trading budget and whether SGOV's interest is drying up (alternatives when it is)."""
+        from tradingagents.ledger import income
 
-    def save_official(self, c: dict) -> dict:
-        """Store a computed plan as the official recommendation for its session, and its report."""
-        plan, suggestion, settings, sleeve = c["plan"], c["suggestion"], c["settings"], c["sleeve"]
+        today = date.today()
+        pot = income.budget(self.store, self.cache_dir, today)
+        health = self._remember("income-health", self._inputs("income-health"),
+                                lambda: income.health(self.store, self.cache_dir, today))
+        books = self.books()["sleeves"]["combined"]
+        sgov = (books["positions"].get(income.RESERVE) or {}).get("value") or 0.0
+        return {"budget": pot, "health": health, "sgov_value": sgov,
+                "projection": income.projection(capital.load(self.store), health, sgov)}
+
+    def rotation(self) -> dict:
+        from tradingagents.research.rotation import rotation
+
+        return self._remember("rotation", self._inputs("rotation"), lambda: rotation(self.cache_dir, self.store.con))
+
+    def trade(self) -> dict:
+        """The overview: what to buy with the budget, at what price, and what to sell; from the internal model."""
+        from tradingagents.stocks import daily, signals, trade
+
+        inc = self.income()
+        decision = daily.load(self.store.con)
+        patient = {}
+        if decision:
+            sig = signals.latest(self.store.con, 20)
+            for e in decision.get("entries", [])[:8]:
+                s = sig.get(e["ticker"])
+                if s and s.get("forecast"):
+                    plan = self._entry_plan(e["ticker"], s)
+                    dip = next((r for r in (plan or {}).get("rows", []) if r["name"] == "Median dip"), None)
+                    if dip:
+                        patient[e["ticker"]] = {"price": round(dip["price"], 2), "chance": dip["chance"],
+                                                "stop": round(dip["stop"], 2), "target": round(dip["profit"], 2)}
+        out = trade.plan(decision, inc["budget"]["available"], patient)
+        books = self.books()
         market_store = local_store.store(self.cache_dir)
-        fetched = (market_store.bars_checked_at() if market_store else None) or datetime.now().astimezone().isoformat()
-        optimized = [r.ticker for r in plan.rows if not r.screened]
-        tickers = [*optimized, plan.cash.ticker, settings.cash_proxy, *settings.scenario_references,
-                   *settings.proxies.values()]
-        with self.lock:
-            rec = recommendations.save(
-                self.store.con, account_id=self.store.ledger.account_id, sleeve=sleeve, plan=plan,
-                # The capital amounts in force are frozen with the record: later edits never change it.
-                suggestion=suggestion, settings={**asdict(settings), "capital": capital.snapshot(self.store)},
-                closes=c["closes"], universe=c["universe"],
-                info_cutoff=c["closes"].index[-1].date().isoformat(), market_data_at=fetched,
-                ai={"ratings": c["ratings"] or {}, "ratings_date": self.ratings_date}, price_tickers=tickers)
-        # Next to the records it belongs to, so a second set of books never mixes its reports in.
-        folder = self.store.folder / "recommendations"
-        folder.mkdir(parents=True, exist_ok=True)
-        report = folder / f"{rec['session']}_{sleeve}_{rec['id'][:8]}.md"
-        report.write_text(f"Official recommendation {rec['id']} for {rec['session']} ({sleeve}); "
-                          f"earliest execution {rec['earliest_execution']}.\n\n"
-                          + render_suggestion(suggestion, _today()) + "\n" + render_plan(plan), encoding="utf-8")
-        return {**rec, "report": str(report)}
-
-    def plan(self, body: dict, save: bool = False) -> dict:
-        """A preview of the sleeve's plan for the page, or with ``save`` its official recommendation."""
-        c = self.compute(body)
-        data = asdict(c["plan"])
-        data["settings"]["frontier"] = list(c["settings"].frontier)
-        cash = c["cash"]
-        out = {"date": _today(), "sleeve": c["sleeve"], "plan": data,
-               "risk": self.risk(c["sleeve"], body.get("risk_level")), "suggestion": asdict(c["suggestion"]),
-               "ai_used": bool(c["ratings"]), "preview": not save,
-               "cash": {**asdict(cash), "available": cash.available},
-               "info_cutoff": c["closes"].index[-1].date().isoformat()}
-        if save:
-            out["saved"] = self.save_official(c)
-        out.update(self.overview_extras(c))
+        out.update({"income": inc, "account": books["sleeves"]["combined"], "job": self.decisions.state(),
+                    "freshness": {"prices_checked": market_store.bars_checked_at() if market_store else None,
+                                  "last_event": books["events"][0]["recorded_at"] if books["events"] else None}})
         return out
 
-    def overview_extras(self, c: dict) -> dict:
-        """What the overview shows beside the plan: the session its orders are for, recurring
-        investments, the account by sleeve, and how fresh each input is."""
-        import pytz
+    def model_record(self) -> dict:
+        from tradingagents.stocks import feedback
 
-        from tradingagents.optimizer.auto_invest import recommend
-
-        now = datetime.now(pytz.utc)
-        session = recommendations.session_for(now)
-        extras = {"orders_session": session, "orders_session_is_today": session == _today(),
-                  "returns_from": ({"model": "forecast", "run": c["settings"].forecast_run,
-                                    "forecast_model": self.store.get(c["sleeve"], "forecast_model"),
-                                    "horizon": c["settings"].forecast_horizon}
-                                   if c["settings"].return_model == "forecast" else {"model": "vol_prior"})}
-        if c["sleeve"] == "investing":
-            current = load_schedule(self.schedule_path) if self.schedule_path.exists() else {}
-            # The planned Investing purchase per session (Settings > Capital), not a deposit.
-            budget = capital.load(self.store).daily_investment_usd
-            extras["auto_invest"] = asdict(recommend(c["plan"], budget, current))
-        books = self.books()
-        extras["sleeves"] = {k: {"equity": v["equity"], "cash": v["cash"], "positions": len(v["positions"])}
-                             for k, v in books["sleeves"].items()}
-        last_rec = next(iter(recommendations.history(self.store.con, self.store.ledger.account_id, limit=1)), None)
-        run = self.store.con.execute("SELECT created_at, model, horizon, info_cutoff FROM forecast_runs"
-                                     " WHERE universe = 'etf' ORDER BY created_at DESC LIMIT 1").fetchone()
-        market_store = local_store.store(self.cache_dir)
-        extras["freshness"] = {
-            "prices_through": c["closes"].index[-1].date().isoformat(),
-            "prices_checked": market_store.bars_checked_at() if market_store else None,
-            "last_official": {k: last_rec[k] for k in ("id", "session", "published_at", "status")} if last_rec else None,
-            "last_forecast": dict(run) if run else None,
-            "last_event": books["events"][0]["recorded_at"] if books["events"] else None,
-        }
-        return extras
+        return feedback.scorecard(self.store.con)
 
     # --- the books ---
 
@@ -952,11 +841,8 @@ class App:
         reports_root = Path(self.config["results_dir"])
         rows, seen = [], set()
         # Stocks the agents analyzed in the last 30 days stay listed whatever their other signals say.
-        from tradingagents.stocks.verdict import RATING_DAYS
-
         from tradingagents.memory import TradingMemoryLog
-
-        from tradingagents.stocks.verdict import rating_on_record
+        from tradingagents.stocks.verdict import RATING_DAYS, rating_on_record
 
         cutoff = (date.today() - timedelta(days=RATING_DAYS)).isoformat()
         last_rated = {}
@@ -1098,9 +984,12 @@ class App:
         tickers = {e["ticker"] for e in self.store.ledger.events() if e["ticker"]}
         prices = latest_prices(self.cache_dir, tickers) if tickers else {}
         today = _today()
+        from tradingagents.ledger import income
+
         return {"settings": capital.snapshot(self.store), "history": capital.history(self.store, 20),
-                "proposal": capital.reallocation(self.store, today, prices),
-                "daily_plan": capital.daily_plan(self.store, date.today())}
+                "started": self.store.get("global", "income_start"),
+                "budget": income.budget(self.store, self.cache_dir, date.today()),
+                "value": round(self.store.ledger.state(None, today, prices).equity, 2)}
 
     def live_records(self) -> list[dict]:
         """Every ETF model and horizon with saved runs, scored on what happened after each run."""
@@ -1287,9 +1176,7 @@ class App:
                                 {"name": " / ".join(f.relative_to(rep).with_suffix("").parts).replace("_", " "),
                                  "path": str(f.resolve())} for f in sorted(rep.rglob("*.md"))]})
             from tradingagents.memory import TradingMemoryLog
-            from tradingagents.stocks.verdict import ai_decision
-
-            from tradingagents.stocks.verdict import rating_on_record
+            from tradingagents.stocks.verdict import ai_decision, rating_on_record
 
             ratings = [rating_on_record(e) for e in TradingMemoryLog(self.config).load_entries()
                        if e.get("ticker", "").upper() == symbol]
@@ -1413,114 +1300,6 @@ class App:
 
     # --- research ---
 
-    def start_backtest(self, body: dict) -> bool:
-        settings = self.settings(body)
-        start = body.get("start") or "2012-01-03"
-        context, _ = self.store.portfolio(self.sleeve(body), _today())
-
-        def work(job):
-            job.progress = "downloading prices"
-            held = [p.ticker.upper() for p in context.positions]
-            # ETFs and your holdings only: today's S&P 500 list replayed into the past
-            # would only contain the companies that went on to win (survivorship).
-            extra = read_config(self.universe_path)["extra"]
-            candidates = list(dict.fromkeys([*ETFS, *extra, *held]))
-            proxies = [p for t, p in settings.proxies.items() if t in candidates]
-            closes = fetch_closes([*candidates, *proxies, settings.cash_proxy, settings.cash_ticker, "VTI", "SPY",
-                                   *settings.scenario_references],
-                                  required=[settings.cash_proxy], cache_dir=self.cache_dir)
-            prices = {t: float(closes[t].dropna().iloc[-1]) for t in held if t in closes}
-            values = {p.ticker.upper(): p.quantity * prices.get(p.ticker.upper(), 0.0) for p in context.positions}
-            total = sum(values.values()) + float(context.cash or 0.0)
-
-            def progress(n, of):
-                job.progress = f"rebalance {n} of {of}"
-
-            # Shown against VTI, SPY and SGOV only, each starting from the sleeve's value today.
-            result = run_backtest(closes, [t for t in candidates if t in closes], settings, start=start,
-                                  progress=progress)
-            data = asdict(result)
-            data["capital"] = total
-            data["sgov_start"] = str(closes["SGOV"].first_valid_index().date()) if "SGOV" in closes else None
-            data["report"] = render_backtest(result)
-            return data
-
-        return self.backtest.start(work)
-
-    # --- paper tracker (replaced by the Day 1 record in phase 6) ---
-
-    def _tracker_closes(self, ledger: dict | None, universe: list[str], settings: OptimizerSettings):
-        held = [p.ticker.upper() for p in load_portfolio(self.portfolio_path).positions]
-        books = [t for b in (ledger or {}).get("books", {}).values() for t in b["shares"]]
-        schedule = list(load_schedule(self.schedule_path)) if self.schedule_path.exists() else []
-        proxies = list(settings.proxies.values())
-        return fetch_closes([*held, *books, *schedule, *universe, *proxies, settings.cash_proxy, settings.cash_ticker,
-                             *settings.scenario_references],
-                            required=[settings.cash_ticker], cache_dir=self.cache_dir)
-
-    def _start_work(self, body: dict):
-        settings = self.settings(body)
-
-        def work(job):
-            job.progress = "downloading prices"
-            universe = self.universe()
-            closes = self._tracker_closes(None, universe, settings)
-            ledger = start_ledger(load_portfolio(self.portfolio_path), settings, closes, body.get("start") or None)
-            archive_ledger(self.tracker_path)  # a restart keeps the old record beside the new one
-            return self._run_tracker(job, ledger, universe, settings, closes)
-
-        return work
-
-    def _update_work(self, ledger: dict):
-        def work(job):
-            job.progress = "downloading prices"
-            settings = self.settings({})
-            universe = self.universe()
-            closes = self._tracker_closes(ledger, universe, settings)
-            return self._run_tracker(job, ledger, universe, settings, closes)
-
-        return work
-
-    def start_tracker(self, body: dict) -> bool:
-        return self.tracker.start(self._start_work(body))
-
-    def update_tracker(self) -> bool:
-        ledger = read_ledger(self.tracker_path)
-        return ledger is not None and self.tracker.start(self._update_work(ledger))
-
-    def track_now(self) -> dict:
-        """Record every final day not yet in the ledger, starting it today if there is none."""
-        ledger = read_ledger(self.tracker_path)
-        return (self._update_work(ledger) if ledger else self._start_work({}))(Job())
-
-    def _run_tracker(self, job, ledger, universe, settings, closes):
-        # Another process (a second tab's server, the CLI) may be on the same days.
-        if not self.store.claim("paper-tracker", self.owner):
-            raise ValueError("the paper tracker is being updated by another process; try again in a minute")
-        try:
-            schedule = load_schedule(self.schedule_path) if self.schedule_path.exists() else {}
-
-            def progress(n, of):
-                job.progress = f"day {n} of {of}"
-
-            ledger = update_ledger(ledger, schedule, settings, closes, universe, progress=progress)
-            ledger["risk_level"] = self.store.get("investing", "risk_level")
-            write_ledger(self.tracker_path, ledger)
-            return {"days": len(ledger["history"]), "last_day": ledger["last_day"]}
-        finally:
-            self.store.release("paper-tracker", self.owner)
-
-    def tracker_state(self) -> dict:
-        ledger = read_ledger(self.tracker_path)
-        if ledger:
-            names = {t for b in ledger["books"].values() for t in b["shares"]}
-            prices = latest_prices(self.cache_dir, names)
-            ledger = {**ledger, "holdings": {
-                name: sorted(([t, round(q, 6), round(q * prices.get(t, 0.0), 2), describe(t)]
-                              for t, q in book["shares"].items()), key=lambda x: -x[2])
-                for name, book in ledger["books"].items()}}
-        return {**self.tracker.state(), "ledger": ledger}
-
     def market(self) -> dict:
         """Recent moves from closing prices, and today's saved explanation if there is one."""
         def build():
@@ -1542,7 +1321,7 @@ class App:
         led, day = self.store.ledger, body.get("date") or _today()
         with self.lock:
             if path == "/api/ledger/contribution":
-                out = {"event": led.contribute(float(body["amount"]), day, sleeve=body.get("sleeve", "investing"),
+                out = {"event": led.contribute(float(body["amount"]), day, sleeve=body.get("sleeve", "trading"),
                                                settle_date=body.get("settle_date"), note=body.get("note"))}
             elif path == "/api/ledger/fill":
                 event, warnings = led.fill(body["sleeve"], body["side"], body["ticker"], float(body["quantity"]),
@@ -1556,10 +1335,10 @@ class App:
                                                 price=float(body["price"]) if body.get("price") else None,
                                                 note=body.get("note"))}
             elif path == "/api/ledger/import":
-                rows = csv_import.preview(led, body["csv"], body.get("sleeve", "investing"))
+                rows = csv_import.preview(led, body["csv"], body.get("sleeve", "trading"))
                 out = {"rows": [asdict(r) for r in rows]}
                 if body.get("commit"):
-                    out["result"] = csv_import.commit(led, rows, body.get("sleeve", "investing"))
+                    out["result"] = csv_import.commit(led, rows, body.get("sleeve", "trading"))
             else:
                 raise ValueError(f"unknown ledger action {path}")
             if path != "/api/ledger/import" or body.get("commit"):
@@ -1611,10 +1390,16 @@ def make_handler(app: App):
                 elif url.path == "/api/state":
                     context, _ = app.store.portfolio("combined", _today())
                     config = read_config(app.universe_path)
-                    self._json({"portfolio": context.model_dump(exclude_none=True),
-                                "schedule": app.read_json(app.schedule_path, {"daily": {}, "weekly": {}}),
-                                "universe": config, "groups": GROUPS,
-                                "risk": app.risk(query.get("sleeve", "investing"))})
+                    self._json({"portfolio": context.model_dump(exclude_none=True), "universe": config,
+                                "groups": GROUPS})
+                elif url.path == "/api/trade":
+                    self._json(_finite(app.trade()))
+                elif url.path == "/api/income":
+                    self._json(_finite(app.income()))
+                elif url.path == "/api/rotation":
+                    self._json(_finite(app.rotation()))
+                elif url.path == "/api/model-record":
+                    self._json(_finite(app.model_record()))
                 elif url.path == "/api/ledger":
                     self._json(app.books())
                 elif url.path == "/api/recommendations":
@@ -1659,10 +1444,6 @@ def make_handler(app: App):
                     self._json(hardware())
                 elif url.path == "/api/ratings":
                     self._json({**app.ai.state(), "ratings": app.ratings, "date": app.ratings_date})
-                elif url.path == "/api/backtest":
-                    self._json(app.backtest.state())
-                elif url.path == "/api/tracker":
-                    self._json(app.tracker_state())
                 elif url.path == "/api/market":
                     self._json(app.market())
                 elif url.path == "/api/market/explain":
@@ -1680,29 +1461,10 @@ def make_handler(app: App):
         def do_POST(self):
             try:
                 body = self._body()
-                if self.path == "/api/plan":
-                    self._json(app.plan(body))
-                elif self.path == "/api/recommendations/save":
-                    self._json(app.plan(body, save=True))
-                elif self.path == "/api/decision":
-                    if body.get("decision") not in ("accepted", "rejected", "deferred", "partial"):
-                        raise ValueError("decision must be accepted, rejected, deferred or partial")
-                    with app.lock:
-                        decision = recommendations.decide(app.store.con, body["id"], body["decision"], body.get("note"))
-                    self._json({"decision": decision, "note": "Recorded. Nothing is bought or sold until you "
-                                                              "record the fills."})
-                elif self.path.startswith("/api/ledger/"):
-                    if self.path == "/api/ledger/trading-preview":
-                        tickers = {e["ticker"] for e in app.store.ledger.events() if e["ticker"]}
-                        self._json(app.store.trading_assignment_preview(
-                            float(body.get("amount") or capital.load(app.store).trading_capital_usd),
-                            latest_prices(app.cache_dir, tickers), _today()))
-                    else:
-                        self._json(app.ledger_write(self.path, body))
+                if self.path.startswith("/api/ledger/"):
+                    self._json(app.ledger_write(self.path, body))
                 elif self.path == "/api/ratings":
                     self._started(app.start_ai(body.get("analysts")), "Rating")
-                elif self.path == "/api/backtest":
-                    self._started(app.start_backtest(body), "A backtest")
                 elif self.path == "/api/forecasts/run":
                     self._started(app.start_forecast(body), "A forecast run")
                 elif self.path == "/api/portfolio":
@@ -1711,39 +1473,6 @@ def make_handler(app: App):
                         events = app.store.adjust_holdings(wanted, _today(), note=body.get("note"))
                         app.after_ledger_change()
                     self._json({"ok": True, "adjustments": events})
-                elif self.path == "/api/schedule":
-                    for period in ("daily", "weekly"):
-                        for amount in (body.get(period) or {}).values():
-                            float(amount)
-                    app.schedule_path.write_text(json.dumps(body, indent=2), encoding="utf-8")
-                    self._json({"ok": True})
-                elif self.path == "/api/risk":
-                    sleeve = app.sleeve(body)
-                    with app.lock:
-                        if body.get("level"):
-                            app.store.set(sleeve, "risk_level", risk_level(int(body["level"])).level)
-                        if body.get("model"):
-                            if body["model"] not in RISK_MODELS:
-                                raise ValueError(f"risk model must be one of {', '.join(RISK_MODELS)}")
-                            app.store.set(sleeve, "risk_model", body["model"])
-                        if body.get("return_model"):
-                            if body["return_model"] not in ("vol_prior", "forecast"):
-                                raise ValueError("return model must be vol_prior or forecast")
-                            app.store.set(sleeve, "return_model", body["return_model"])
-                        if body.get("forecast_model"):
-                            from tradingagents.research.engine import factory
-                            factory(body["forecast_model"])   # refuses an unknown model
-                            app.store.set(sleeve, "forecast_model", body["forecast_model"])
-                        if body.get("forecast_horizon"):
-                            if int(body["forecast_horizon"]) not in (5, 20, 60):
-                                raise ValueError("the forecast horizon is 5, 20 or 60 sessions")
-                            app.store.set(sleeve, "forecast_horizon", int(body["forecast_horizon"]))
-                        if "target_growth" in body:
-                            target = body["target_growth"]
-                            if target is not None and not -0.5 < float(target) < 1.0:
-                                raise ValueError("growth target must be a yearly rate such as 0.08")
-                            app.store.set(sleeve, "target_growth", None if target is None else float(target))
-                    self._json(app.risk(sleeve))
                 elif self.path == "/api/settings":
                     with app.lock:
                         for key, value in (body.get("values") or {}).items():
@@ -1774,12 +1503,6 @@ def make_handler(app: App):
                     with app.lock:
                         capital.update(app.store, body.get("values") or {}, source="user")
                     self._json(app.capital_state())
-                elif self.path == "/api/capital/transfer":
-                    # An accepted reallocation: recorded as an ordinary settled-cash transfer.
-                    with app.lock:
-                        app.store.ledger.transfer(body["from"], body["to"], _today(), cash=float(body["cash"]),
-                                                  note="capital reallocation (accepted proposal)")
-                    self._json(app.capital_state())
                 elif self.path == "/api/stocks/run":
                     self._started(app.start_stocks(body), "A stock batch")
                 elif self.path == "/api/stocks/ideas":
@@ -1800,21 +1523,6 @@ def make_handler(app: App):
                     self._json(app.stock_news_ai(body))
                 elif self.path == "/api/moat/sources":
                     self._started(app.start_moat_sources(body["symbol"]), "The moat reading")
-                elif self.path == "/api/tracker/start":
-                    # Starting archives nothing by itself, but a page that failed to read the record
-                    # must not replace it: an existing record is only replaced after "Start over".
-                    if read_ledger(app.tracker_path) is not None:
-                        raise ValueError("a paper record already exists; use Start over to begin a new one")
-                    self._started(app.start_tracker(body), "The tracker")
-                elif self.path == "/api/tracker/update":
-                    if read_ledger(app.tracker_path) is None:
-                        raise ValueError("there is no paper record to update yet")
-                    self._started(app.update_tracker(), "The tracker")
-                elif self.path == "/api/tracker/reset":
-                    if app.tracker.running:
-                        raise ValueError("the tracker is updating; try again when it finishes")
-                    archived = archive_ledger(app.tracker_path)
-                    self._json({"ok": True, "archived_to": str(archived) if archived else None})
                 else:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except (ValueError, TypeError, KeyError) as exc:

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<title>Portfolio Optimizer</title>
+<title>SGOV Trading Desk</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -128,6 +128,11 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .split > .card, .split > div > .card:last-child { margin-bottom: 16px; }
 .split.wide { grid-template-columns: 3fr 2fr; }
+.split > * { min-width: 0; }
+#buyBox table, #sellBox table, #budgetBox table, #incBox table { width: 100%; }
+#buyBox th.l { white-space: nowrap; width: 1%; padding-right: 14px; }
+#buyBox td, #budgetBox td, #incBox td, #sellBox td.l, #rotTable td.l { white-space: normal; }
+#buyBox td { text-align: left; }
 @media (max-width: 900px) { .split, .split.wide { grid-template-columns: 1fr; } }
 
 .table-wrap { overflow-x: visible; }
@@ -254,13 +259,11 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     <div class="wrap">
       <div class="brand">
         <div class="mark"><svg viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12l4-4 3 3 5-6"/></svg></div>
-        <div><h1>Portfolio Optimizer</h1></div>
+        <div><h1>SGOV Trading Desk</h1></div>
         <span class="acct">Roth IRA</span>
       </div>
       <nav role="tablist">
-        <button role="tab" data-tab="today" aria-selected="true">Overview</button>
-        <button role="tab" data-tab="tracker">Performance</button>
-        <button role="tab" data-tab="plan">Allocation</button>
+        <button role="tab" data-tab="today" aria-selected="true">Trade</button>
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
         <button role="tab" data-tab="decisions">Decisions</button>
@@ -269,73 +272,56 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
       <div class="status" id="subtitle">Loading…</div>
     </div>
   </div>
-  <div class="controls">
-    <div class="wrap">
-      <div class="risk-summary">
-        <span class="lbl">Risk</span>
-        <span class="lvl" id="riskNum">2</span><span class="name" id="riskName">…</span>
-        <span class="limit" id="riskLimit"></span><span class="limit" id="riskExtra"></span>
-        <button class="ghost small-btn" id="riskEdit" title="Risk level, stress measure and growth target are set in Settings">Change</button>
-      </div>
-      <div class="toggles">
-        <div class="acct-tabs" role="tablist" aria-label="Account" id="acctTabs">
-          <button role="tab" data-s="investing" title="The long-term portfolio; recurring contributions go here">Investing <span class="v"></span></button>
-          <button role="tab" data-s="trading" title="The experimental allocation; its value moves only with its own results and transfers">Trading <span class="v"></span></button>
-        </div>
-        <select id="sleeve" aria-label="Account" hidden><option value="investing">Investing</option><option value="trading">Trading</option></select>
-        <label class="check"><input type="checkbox" id="scan" checked> Scan <span id="scanCount">funds</span></label>
-        <label class="check"><input type="checkbox" id="useAi"> AI ratings</label>
-      </div>
-    </div>
-  </div>
 </header>
 
 <div class="wrap">
   <div id="error" class="note"></div>
   <main>
     <section class="tab active" id="today">
-      <div class="page-head"><div><h2>Overview</h2><p id="ovSub">Today's orders at your risk level, and where the market stands.</p></div>
-        <div class="row"><button id="saveRec" title="Store this plan, unchanged, as the official recommendation for its trading session">Save as official recommendation</button></div></div>
-      <div id="saveMsg"></div>
+      <div class="page-head"><div><h2>Trade</h2><p id="ovSub">SGOV is the base and is never traded. Its monthly interest and the broker's match are the trading budget; the internal model picks what to buy, at what price, and when to sell.</p></div>
+        <div class="row"><button id="tdRun" title="The internal model's decision for the next session, from the latest close (free, on this machine)">Make today's decision</button>
+          <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="tdTrain"> fit models if needed</label>
+          <span class="muted small" id="tdStatus"></span></div></div>
       <div class="kpis" id="kpis"></div>
       <div class="split wide">
-        <div class="card">
-          <div class="card-head"><h3 id="ordersTitle">Today's orders</h3></div>
-          <ul class="orders" id="orders"></ul>
-          <div id="tomorrowBox" hidden>
-            <h4>The session after, once these sales settle</h4>
-            <ul class="orders" id="tomorrow"></ul>
+        <div>
+          <div class="card">
+            <div class="card-head"><h3>Best stock to buy</h3><span class="muted small" id="buyMeta"></span></div>
+            <div id="buyBox"><p class="muted">Loading…</p></div>
           </div>
-          <p class="muted" id="settle"></p>
-          <div id="orderNotes"></div>
+          <div class="card">
+            <h3>Sell</h3>
+            <div id="sellBox"></div>
+          </div>
+          <div class="card">
+            <h3>Runners-up</h3>
+            <p class="muted small" id="runnersNote">The next stocks that pass the model's gates, in its order, in case the first is not wanted.</p>
+            <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
+          </div>
         </div>
         <div>
           <div class="card">
-            <div class="card-head"><h3>Since day one <span class="muted small">whole IRA, paper record</span></h3><button class="ghost" data-goto="tracker">Performance →</button></div>
-            <div id="ovPerf"><p class="muted">Loading the paper record…</p></div>
+            <div class="card-head"><h3>SGOV interest</h3><span id="incBadge"></span></div>
+            <div id="incBox"></div>
           </div>
           <div class="card">
-            <h3>Growth vs. risk level</h3>
-            <p class="muted">The best mix at each level, 1 to 10. Ring: your level. Cross: your portfolio now.</p>
-            <div id="chart"></div>
+            <div class="card-head"><h3>Trading budget</h3><button class="ghost" data-goto="settings">Settings →</button></div>
+            <div id="budgetBox"></div>
           </div>
           <div class="card">
-            <div class="card-head"><h3>Auto-invest</h3><span class="muted" id="aiBudget"></span></div>
-            <p class="muted">Recurring investments to set in the Robinhood app so new money follows this plan's mix. Nothing here changes your account.</p>
-            <div class="table-wrap"><table id="autoTable"></table></div>
-            <div id="autoChanges"></div>
-            <div id="autoNotes" class="muted small"></div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h3>Account</h3><button class="ghost" data-goto="settings">Holdings →</button></div>
-            <div class="table-wrap"><table id="sleeveTable"></table></div>
-            <p class="muted small">Sleeves are bookkeeping inside one IRA; the broker's rules apply to the whole account.</p>
-          </div>
-          <div class="card">
-            <h3>Data freshness</h3>
-            <div id="freshness" class="muted"></div>
+            <h3>The model's live record</h3>
+            <div id="recordBox" class="small"></div>
           </div>
         </div>
+      </div>
+
+      <div class="section-title"><h2>Sector rotation</h2><span class="muted" id="rotAsOf">Loading…</span></div>
+      <div class="card">
+        <p class="muted">Sectors move through four stages against the market: Improving → Leading → Weakening → Lagging. The alerts are the early stages, ahead of the turn, with what moved them.</p>
+        <div id="rotAlerts"></div>
+        <details class="small" style="margin-top:10px"><summary><b>Every sector</b></summary>
+          <div class="table-wrap"><table id="rotTable" class="compact"></table></div></details>
+        <p class="muted small" id="rotMethod"></p>
       </div>
 
       <div class="section-title"><h2>Market</h2><span class="muted" id="mkAsOf">Loading market data…</span></div>
@@ -368,60 +354,8 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
       </div>
     </section>
 
-    <section class="tab" id="tracker">
-      <div class="page-head">
-        <div><h2>Performance</h2><p>Two paper portfolios recorded after every close since day one: <b>Followed the plan</b> trades each day's suggested orders under T+1; <b>Kept as is</b> keeps your holdings and usual buys.</p></div>
-      </div>
-      <div class="card" id="trackerIntro">
-        <h3>Start the record</h3>
-        <p class="muted">The record starts from your real holdings and is kept for as long as you use the app. Changing the risk level later does not restart it; each day is traded at the level in force that day.</p>
-        <div class="row">
-          <div style="width:180px"><label for="trStart">Start from</label><input type="date" id="trStart"></div>
-          <button id="trStartBtn">Start the record</button>
-        </div>
-        <p class="muted small">Leave the date at today to record from now on. An earlier date replays from that day using today's holdings.</p>
-      </div>
-      <div id="trackerBody" hidden>
-        <div class="kpis" id="trKpis"></div>
-        <div class="card">
-          <div class="card-head">
-            <div class="seg" id="trRange" role="group" aria-label="Chart range">
-              <button data-range="1M">1M</button><button data-range="3M">3M</button><button data-range="YTD">YTD</button><button data-range="1Y">1Y</button><button data-range="ALL" aria-pressed="true">All</button>
-            </div>
-            <span><span class="muted" id="trStatus"></span> <button class="ghost" id="trUpdate">Update now</button> <button class="ghost" id="trReset">Start over</button></span>
-          </div>
-          <div id="trChart"></div>
-        </div>
-        <div class="split wide">
-          <div class="card">
-            <h3>Day by day</h3>
-            <div class="days-wrap"><table id="trDays"></table></div>
-            <div class="row" id="trDaysMore" style="display:none"><button class="ghost" id="trDaysToggle"></button></div>
-          </div>
-          <div class="card">
-            <h3>Paper holdings, followed the plan</h3>
-            <div class="table-wrap"><table id="trHoldings"></table></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="tab" id="plan">
-      <div class="page-head"><div><h2>Allocation</h2><p>Funds you hold and funds the plan buys. The reason under each names the numbers that decided its weight.</p></div></div>
-      <div class="card">
-        <div class="table-wrap"><table id="mix"></table></div>
-        <p class="muted" id="mixNotes"></p>
-      </div>
-    </section>
-
     <section class="tab" id="scanTab">
-      <div class="page-head"><div><h2>Screener</h2><p id="scrIntro"></p></div>
-        <div class="seg" role="group" aria-label="What to screen"><button data-scr="stocks">Stocks: quality, Wall Street, signals</button><button data-scr="funds">Funds for the plan</button></div></div>
-      <div class="card" id="fundsCard">
-        <div class="row" style="margin:0 0 12px"><input type="text" id="scanFilter" placeholder="Filter by ticker, name or sector, e.g. MSFT, quantum, Technology" style="max-width:420px"></div>
-        <div class="table-wrap"><table id="scanTable"></table></div>
-        <div class="row" id="scanMore" style="display:none"><button class="ghost" id="scanToggle"></button></div>
-      </div>
+      <div class="page-head"><div><h2>Screener</h2><p>S&amp;P 500 stocks ranked on the quality checklist and Wall Street, with the stock models' trend, breakout and crash signals and the daily decision's action.</p></div></div>
       <div class="card" id="qsCard">
         <h3>Stocks: quality checklist, Wall Street and signals</h3>
         <p class="muted">For each S&amp;P 500 stock (and your watchlist): the ticker page's quality checklist (moat, financial strength, profitability) as one score, valuation kept apart, and Wall Street's consensus and price-target upside, combined into one rank. <b>Signals and action</b> shows the stock models' trend, breakout and crash warnings and the daily decision's ENTER / WAIT / HOLD / EXIT. Click a column to sort; click a ticker for its full page.</p>
@@ -451,7 +385,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     </section>
 
     <section class="tab" id="decisions">
-      <div class="page-head"><div><h2>Decisions</h2><p>Two kinds of decision, side by side. <b>AI decisions</b>: the TradingAgents team (technical, fundamentals, news and sentiment analysts, a bull/bear debate, a trader, a risk debate and a portfolio manager) reads each stock as of the last close, with the economy in view, and says BUY, HOLD or SELL; shown next to the app's rule verdict. <b>Quant model decision</b>: the fitted models' daily ENTER / WAIT / HOLD / EXIT for the Trading sleeve, sized to settled cash. Nothing is sent to the broker; you place the orders. Opening this page reads only what is saved.</p></div></div>
+      <div class="page-head"><div><h2>Decisions</h2><p>Two kinds of decision, side by side. <b>AI decisions</b>: the TradingAgents team (technical, fundamentals, news and sentiment analysts, a bull/bear debate, a trader, a risk debate and a portfolio manager) reads each stock as of the last close, with the economy in view, and says BUY, HOLD or SELL; shown next to the app's rule verdict. <b>Quant model decision</b>: the fitted models' daily ENTER / WAIT / HOLD / EXIT, sized to the trading budget (SGOV's interest and the match). Nothing is sent to the broker; you place the orders. Opening this page reads only what is saved.</p></div></div>
       <div class="card" id="aiCard">
         <div class="card-head"><h3>AI decisions</h3><span class="muted small" id="aiProv"></span></div>
         <div class="econ" id="aiEcon"></div>
@@ -472,7 +406,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
         <p class="muted small"><b>Model verdict</b> decides: the app's own 20-session model, which ranks every S&amp;P 500 stock on how a trade should do after costs (BUY = top fifth with an expected gain, P(profit) 50%+ and P(large loss) 15% or less; AVOID = bottom fifth or an expected loss; HOLD / SELL for what you hold). <b>Agents' view</b> is the agents' rating as an action (Buy or Overweight → BUY, Hold → HOLD or WATCH, Underweight or Sell → SELL or AVOID), shown for comparison only: it decides nothing. Open a ticker for both in full and the agents' reports. The model is experimental: its ranking showed a small edge in testing, but trading on it did not beat holding SPY.</p>
       </div>
       <div class="card">
-        <h3>Quant model decision (Trading sleeve)</h3>
+        <h3>Quant model decision</h3>
         <div class="row" style="margin-top:0">
           <button id="dcRun">Make today's decision</button>
           <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="dcTrain"> fit models if needed</label>
@@ -496,7 +430,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
       <div class="page-head"><div><h2>Forecast models</h2><p>Return forecasts made on this machine from Yahoo prices: no paid AI. A forecast is a log return <b>above cash</b> over its horizon in trading sessions, not a yearly rate, with a 5-95% range and the chance of a gain. These are model estimates, not outcomes; the evidence for each model is its walk-forward record below.</p></div></div>
       <div class="card">
         <div class="row fc-controls" style="margin-top:0">
-          <div style="width:170px"><label for="fcUniverse">Trained on</label><select id="fcUniverse"><option value="etf" selected>ETFs (the plan's)</option><option value="stock">S&amp;P 500 stocks</option></select></div>
+          <div style="width:170px"><label for="fcUniverse">Trained on</label><select id="fcUniverse"><option value="etf" selected>Major ETFs</option><option value="stock">S&amp;P 500 stocks</option></select></div>
           <fieldset><legend>Horizons</legend><label class="check"><input type="checkbox" name="fcH" value="5"> 5 sessions</label><label class="check"><input type="checkbox" name="fcH" value="20" checked> 20 sessions</label><label class="check"><input type="checkbox" name="fcH" value="60"> 60 sessions</label></fieldset>
           <fieldset><legend>Models</legend><label class="check"><input type="checkbox" name="fcM" value="elastic_net" checked> Elastic Net</label><label class="check"><input type="checkbox" name="fcM" value="momentum"> Momentum</label><label class="check"><input type="checkbox" name="fcM" value="xgb"> XGBoost</label><label class="check"><input type="checkbox" name="fcM" value="xgb_rank"> XGBoost ranking</label><label class="check"><input type="checkbox" name="fcM" value="xgb_quantile"> XGBoost quantiles</label><label class="check" title="Amazon's pretrained time-series model, run on this machine; nothing is fitted"><input type="checkbox" name="fcM" value="chronos2"> Chronos-2 (pretrained)</label></fieldset>
           <label class="check" title="Also run each ticked model with Chronos-2's forecast as two extra inputs (ETFs only; about a minute more on the GPU)"><input type="checkbox" id="fcStack"> + Chronos inputs</label>
@@ -508,7 +442,6 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <p class="muted small">Evidence columns come from each model's walk-forward trial at that horizon. <b>Agrees</b>: mean rank correlation of its forecasts with the other models' at the same horizon (1 = same order). Click a row to see its forecasts below.</p>
           <div class="table-wrap"><table id="fcBatch" class="compact"></table></div>
         </div>
-        <div class="row" style="margin:12px 0 0"><label class="check" title="Feed the Investing plan from the run shown below instead of the volatility rule"><input type="checkbox" id="fcUse"> Use the run shown below in the Investing plan</label></div>
         <div class="row" style="margin:12px 0 4px"><div class="seg" id="fcModeBar"><button data-m="run">This run</button><button data-m="combined">All models, combined</button></div></div>
         <div id="fcRunInfo"></div>
         <div class="table-wrap"><table id="fcTable"></table></div>
@@ -532,19 +465,17 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
     </section>
 
     <section class="tab" id="settings">
-      <div class="page-head"><div><h2>Settings</h2><p>Your holdings, recurring buys, risk and goals, and what to scan. Holdings and risk settings are kept in portfolio.sqlite3; recurring buys and the scan list in their files next to the app.</p></div></div>
+      <div class="page-head"><div><h2>Settings</h2><p>The money settings, your holdings, the agents' models, and the ETFs to forecast. Kept in portfolio.sqlite3; the ETF list in its file next to the app.</p></div></div>
       <div class="card" id="capitalCard">
-        <h3>Capital</h3>
-        <p class="muted">Targets for how much each sleeve is funded with, and the planned Investing purchase per market session. The books stay the truth: changing a target moves no money; it proposes transfers you can record. Trading capital is the money assigned to Trading, <b>not a daily trading budget</b>.</p>
+        <h3>Money</h3>
+        <p class="muted">The daily deposit goes into SGOV, the base, which is never traded. Its monthly interest and the broker's match on the deposits are the trading budget. Changing these moves no money; set the same recurring buy at Robinhood.</p>
         <div class="row">
-          <div style="width:190px"><label for="capTrading">Trading capital ($)</label><input type="number" id="capTrading" step="0.01" min="0"></div>
-          <div style="width:190px"><label for="capInvesting">Investing capital ($)</label><input type="number" id="capInvesting" step="0.01" min="0"></div>
-          <div style="width:220px"><label for="capDaily">Daily investment ($ per session)</label><input type="number" id="capDaily" step="0.01" min="0"></div>
-          <button id="capSave">Save amounts</button>
+          <div style="width:200px"><label for="capDaily">SGOV buy ($ per market day)</label><input type="number" id="capDaily" step="0.01" min="0"></div>
+          <div style="width:170px"><label for="capMatch">Match on deposits (%)</label><input type="number" id="capMatch" step="0.1" min="0" max="10"></div>
+          <div style="width:220px"><label for="capDry">Interest has dried up under (% a year)</label><input type="number" id="capDry" step="0.1" min="0" max="10"></div>
+          <button id="capSave">Save</button>
           <span class="muted small" id="capStatus"></span>
         </div>
-        <div class="table-wrap" style="margin-top:10px"><table id="capTable" class="compact"></table></div>
-        <div id="capProposal"></div>
         <p class="muted small" id="capPlan"></p>
       </div>
       <div class="grid">
@@ -553,37 +484,6 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <div class="table-wrap"><table class="editor" id="holdings"></table></div>
           <div class="row"><div style="flex:1"><label for="cash">Settled cash (spendable today)</label><input type="number" id="cash" step="0.01" min="0"></div></div>
           <div class="row"><button class="ghost" id="addHolding">Add ticker</button><button id="saveHoldings">Save holdings</button></div>
-        </div>
-        <div class="card">
-          <h3>Recurring buys</h3>
-          <div class="table-wrap"><table class="editor" id="schedule"></table></div>
-          <div class="row"><button class="ghost" id="addBuy">Add ticker</button><button id="saveSchedule">Save buys</button></div>
-          <p class="muted">Buys happen on market days only: never on weekends or market holidays. A weekly buy counts as a fifth of its amount each market day. The optimizer keeps your market-day total but moves it to the funds that are under target.</p>
-        </div>
-        <div class="card" id="riskCard">
-          <h3>Risk and goals</h3>
-          <p class="muted">Each sleeve keeps its own settings. The bar at the top shows them for the sleeve in view; change them here.</p>
-          <div class="settings-grid">
-            <label>Sleeve<select id="setSleeve"><option value="investing">Investing</option><option value="trading">Trading</option></select></label>
-            <label>Risk level<select id="setLevel"></select></label>
-            <label>How stress loss is measured<select id="setModel"><option value="worst_case">Worst case: every holding at its worst drop</option><option value="scenarios">Past crashes replayed (less safe)</option></select></label>
-            <label>Growth target, % a year<input type="number" id="setTarget" min="0" max="50" step="0.5" placeholder="none"></label>
-          </div>
-          <div class="row"><button id="saveRiskSettings">Save</button><span class="muted" id="setSaved"></span></div>
-          <p class="muted small" id="setExplain"></p>
-        </div>
-        <div class="card">
-          <h3>Risk levels</h3>
-          <div class="table-wrap"><table id="riskTable"></table></div>
-          <p class="muted">Each level caps the <b>stress loss</b>, measured one of two ways. <b>Worst case</b>: what the whole portfolio would lose if every holding repeated its worst historical drop at once. <b>Past crashes</b>: the worst of the real crashes since 1998 (stocks, long bonds, gold, commodities) replayed on the mix, so holdings that did not fall together are not assumed to. In the 2008–2026 backtest it went past its limit by up to 1.5 times (docs/BACKTEST_RISK_MODELS.md), so worst case stays the default. Either way no single fund may use more than a quarter of the cap at its own worst drop. Level 10 has no cap; only the per-fund limits apply. A future crash can be deeper than any past one.</p>
-          <p class="muted">With a <b>growth target</b> the plan takes the least stress loss that is expected to reach it, never more than your level allows.</p>
-        </div>
-        <div class="card">
-          <h3>AI ratings</h3>
-          <p class="muted">Rates your holdings and the funds the plan wants to buy, then tilts expected growth. It never changes the risk level. Costs about one full analysis per fund.</p>
-          <button class="ghost" id="runAi">Run AI ratings</button>
-          <div class="muted" id="aiStatus" style="margin-top:8px"></div>
-          <div class="log" id="aiLog"></div>
         </div>
         <div class="card" id="agentsCard" style="grid-column:1 / -1">
           <h3>Agent models</h3>
@@ -601,16 +501,16 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
           <div class="row"><button id="agSave">Save agent models and prices</button><span class="muted small" id="agStatus"></span></div>
         </div>
         <div class="card">
-          <h3>What to scan</h3>
+          <h3>ETFs to forecast</h3>
           <div id="groups"></div>
           <label for="universe" style="margin-top:10px">Extra tickers (commas or spaces)</label>
           <textarea id="universe" aria-label="Extra tickers" placeholder="e.g. PLTR, HIMS, SPCX"></textarea>
-          <p class="muted">Your holdings are always included. Tickers with under 3 years of prices are skipped, since their crash risk cannot be measured. The best 60 scores go on to the optimizer.</p>
+          <p class="muted">The funds the Forecasts tab trains on and forecasts (the major ETFs and sectors), plus any extra tickers.</p>
           <div class="row"><button id="saveUniverse">Save</button></div>
         </div>
       </div>
     </section>
-    <footer>Estimates from price history, not forecasts. A future crash can be deeper than any past one. Nothing here places an order.</footer>
+    <footer>Model estimates from price history, not promises. A stop can gap: a sale at the next close can lose more than the stop. Nothing here places an order.</footer>
   </main>
 </div>
 
@@ -626,7 +526,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
-let state = null, lastPlan = null, timer = null, pending = 0;
+let state = null, timer = null, pending = 0;
 
 function busy(on) { pending += on ? 1 : -1; $("loading").classList.toggle("on", pending > 0); }
 function showError(msg) { const e = $("error"); e.textContent = msg || ""; e.classList.toggle("show", !!msg); }
@@ -646,227 +546,119 @@ function showTab(id) {
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 
-// --- risk level: 1 to 10 ---
-let levels = [], riskLevel = 2;
-const levelInfo = n => levels[n - 1] || {level: n, name: "", loss_limit: null};
-const capText = l => l == null ? "no cap" : (l * 100).toFixed(1).replace(/\.0$/, "") + "%";
-function showRisk(n) {
-  const r = levelInfo(n);
-  $("riskNum").textContent = n; $("riskName").textContent = r.name;
-  $("riskLimit").textContent = r.loss_limit == null ? "no stress-loss cap" : `max stress loss ${capText(r.loss_limit)}`;
-  if (levels.length) drawRiskTable();
-}
-
-function showRiskOptions(r) {
-  $("riskExtra").textContent = `· ${r.model === "scenarios" ? "past crashes replayed" : "worst case"} · ` +
-    (r.target_growth == null ? "no growth target" : `growth target ${(r.target_growth * 100).toFixed(1)}%`);
-}
-$("riskEdit").onclick = () => {
-  $("setSleeve").value = $("sleeve").value; loadRiskSettings();
-  showTab("settings"); $("riskCard").scrollIntoView({behavior: "smooth", block: "start"});
-};
-function drawRiskTable() {
-  $("riskTable").innerHTML = "<tr><th>Level</th><th class='name'>Name</th><th>Stress-loss cap</th></tr>" +
-    levels.map(r => `<tr class="${r.level === riskLevel ? "chosen" : ""}"><td><strong>${r.level}</strong></td><td class="name">${esc(r.name)}</td><td>${capText(r.loss_limit)}</td></tr>`).join("");
-}
 document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => showTab(b.dataset.goto));
 
 const kpi = (label, value, from, cls = "") => `<div class="kpi ${cls}"><div class="label">${label}</div><div class="value">${value}</div><div class="from">${from}</div></div>`;
 const spct = (x, d = 2) => x == null ? "–" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(d)}%`;
 const susd = x => `${x >= 0 ? "+" : "−"}${usd(Math.abs(x))}`;
 
-let planSeq = 0;
-async function refresh() {
-  const seq = ++planSeq;
-  showError(""); busy(true);
-  $("subtitle").textContent = "Optimizing from saved prices…";
-  try {
-    const r = await api("/api/plan", {sleeve: $("sleeve").value, risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
-    if (seq !== planSeq) return;   // a newer request is on its way; this answer is stale
-    lastPlan = r; render(r); loadAcctTabs();
-  } catch (e) { if (seq === planSeq) { showError(e.message); $("subtitle").textContent = "Could not optimize."; showNoPlan(e.message); } }
-  finally { if (seq === planSeq) busy(false); }
-}
+let fcAll = false;
 
-// No plan could be made: the orders card says why, instead of staying blank or showing an old plan.
-async function showNoPlan(message) {
-  const sleeve = $("sleeve").value;
-  $("ordersTitle").textContent = "No orders";
-  $("tomorrowBox").hidden = true; $("tomorrow").innerHTML = "";
-  $("settle").textContent = ""; $("orderNotes").innerHTML = "";
-  $("orders").innerHTML = `<li><div class="note">${esc(message)}</div></li>`;
-  if (sleeve !== "trading" || !/holds nothing/.test(message)) return;
-  try {
-    const pv = await api("/api/ledger/trading-preview", {});
-    const steps = pv.steps.map(s => s.cash ? `${usd(s.cash)} of settled cash` : `${s.quantity} ${esc(s.ticker)} (${usd(s.value)})`);
-    $("orders").innerHTML += `<li><h4>Fund the Trading sleeve</h4>
-      <p>To give Trading about ${usd(pv.amount)}, move from Investing: <b>${steps.join(", ") || "nothing available"}</b>.` +
-      (pv.short_by > 0 ? ` That is ${usd(pv.short_by)} short: Investing has no more settled cash or SGOV; move other holdings from Settings, or fund less.` : "") +
-      `</p><p class="muted">${esc(pv.note)} The whole IRA does not change: this is bookkeeping between sleeves, and nothing is sold or bought at Robinhood.</p>` +
-      (pv.steps.length ? `<div class="row"><button id="fundTrading">Move these to Trading</button></div>` : "") + `</li>`;
-    const btn = $("fundTrading");
-    if (btn) btn.onclick = async () => {
-      btn.disabled = true;
-      try {
-        for (const s of pv.steps) {
-          await api("/api/ledger/transfer", s.cash ? {from: "investing", to: "trading", cash: s.cash}
-                                                   : {from: "investing", to: "trading", ticker: s.ticker, quantity: s.quantity, price: s.price});
-        }
-        refresh(); loadAcctTabs();
-      } catch (e) { showError(e.message); btn.disabled = false; }
-    };
-  } catch (e) { /* the message above already says what is wrong */ }
-}
-
-function goalShort(g) {
-  if (!g.reachable) return ": out of reach";
-  const need = g.needed == null ? "no cap" : capText(g.needed) + " stress loss";
-  const capped = g.level_limit != null && (g.needed == null || g.needed > g.level_limit + 1e-9);
-  return capped ? `: needs ${need}, above your level` : `: needs ${need}`;
-}
-function render(r) {
-  const p = r.plan, s = r.suggestion, limit = p.settings.loss_limit;
-  const acct = r.sleeve === "trading" ? "Trading account" : "Investing account";
-  $("ovSub").textContent = `${acct}: today's orders at its risk level, and where the market stands.`;
-  $("subtitle").textContent = `${r.date} · ${usd(p.total)} · ${p.scanned} funds scanned${r.ai_used ? " · AI applied" : ""}`;
-  $("subtitle").textContent += " · preview, not saved";
-  $("subtitle").title = "A preview is computed, not stored. Save it to make it the official recommendation.";
-
+// --- the trade view: budget, best buy and its price, sells, SGOV interest, the model's record ---
+const money = v => v == null ? "–" : usd(v);
+const STATUS = {ok: ["ok", "Healthy"], falling: ["note", "Falling"], dried: ["note", "Dried up"], unknown: ["muted", "Unknown"]};
+async function loadTrade() {
+  let t;
+  try { t = await api("/api/trade"); } catch (e) { $("buyBox").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+  const inc = t.income, b = inc.budget, h = inc.health || {}, pr = inc.projection || {}, a = t.account || {};
+  const j = t.job || {};
+  $("tdStatus").textContent = j.running ? j.progress + "…" : j.error ? "Failed: " + j.error : "";
+  $("tdRun").disabled = !!j.running;
+  if (j.running) setTimeout(loadTrade, 3000);
+  const stocks = Object.entries(a.positions || {}).filter(([k]) => k !== "SGOV").reduce((s, [, p]) => s + (p.value || 0), 0);
+  $("subtitle").textContent = `${t.data_to ? "data to " + t.data_to : "no decision yet"} · ${usd(a.equity || 0)}`;
   $("kpis").innerHTML =
-    kpi("Portfolio value", usd(p.total), `level ${r.risk.level} · ${esc(r.risk.name)}`, "hero") +
-    kpi("Stress loss", usd(p.target_stress * p.total), `${pct(p.target_stress)} · now ${pct(p.current_stress)} (${usd(p.current_stress * p.total)})`) +
-    kpi("Expected growth", pct(p.expected_target) + "/yr", `≈ ${usd(p.expected_target * p.total)}/yr · now ${pct(p.expected_current)}` +
-      (p.goal ? ` · target ${pct(p.goal.target)}${goalShort(p.goal)}` : "")) +
-    kpi("Invested", pct(1 - p.cash.target), `rest in ${esc(p.cash.ticker)} · now ${pct(1 - p.cash.current)}`) +
-    kpi("Daily buys", usd(p.daily_budget), p.daily_budget <= 0 ? "no recurring contributions to this account"
-      : p.days_to_target == null ? "paused: nothing under target" : `${Math.ceil(p.days_to_target)} trading days to target`);
+    kpi("Trading budget", usd(b.available || 0), b.started ? `interest + match since ${b.started}, less what is in stocks` : esc(b.note || ""), "hero") +
+    kpi("SGOV (the base)", usd(inc.sgov_value || 0), h.latest_yield != null ? `yielding ${pct(h.latest_yield, 2)} a year · ${usd(pr.interest_per_month || 0)}/month` : "") +
+    kpi("Interest earned", usd((b.interest || {}).earned || 0), `${esc((b.interest || {}).basis || "")} · last dividend ${h.last_dividend ? esc(h.last_dividend.date) : "–"}`) +
+    kpi("Match earned", usd((b.match || {}).earned || 0), `${pct((b.settings || {}).match_rate, 0)} of ${usd((b.match || {}).deposits || 0)} deposited (${esc((b.match || {}).basis || "")})`) +
+    kpi("In stocks", usd(stocks), `${Object.keys(a.positions || {}).filter(k => k !== "SGOV").length} names · ${usd(((b.traded || {}).spent) || 0)} bought, ${usd(((b.traded || {}).returned) || 0)} back`);
 
-  const sessionDay = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric"});
-  $("ordersTitle").textContent = r.orders_session
-    ? `Orders for ${sessionDay(r.orders_session)}${r.orders_session_is_today ? " (today)" : " (next trading session)"}`
-    : `Orders for ${r.date}`;
-  const orderItem = o => `<li><div class="order-head"><span class="side ${o.side}">${o.side.toUpperCase()}</span><span class="amt">${usd(o.amount)}</span><strong>${tk(o.ticker)}</strong></div><div class="why">${esc(o.why)}</div></li>`;
-  const orders = [...s.orders].sort((a, b) => (a.side === "sell" ? 0 : 1) - (b.side === "sell" ? 0 : 1));
-  $("orders").innerHTML = orders.length ? orders.map(orderItem).join("") : "<li>No orders today.</li>";
-  $("tomorrowBox").hidden = !s.tomorrow.length;
-  $("tomorrow").innerHTML = s.tomorrow.map(orderItem).join("");
-  $("settle").textContent = `Settled cash ${usd(s.settled_cash)} · left after buys ${usd(s.cash_left)} · ${usd(s.settling_tomorrow)} settles next trading day`;
-  $("orderNotes").innerHTML = s.notes.map(n => `<div class="note">${esc(n)}</div>`).join("");
-
-  renderChart(p);
-
-  // What the orders really do, per ticker, across this session and the next.
-  const placed = {};
-  [...s.orders, ...s.tomorrow].forEach(o => { placed[o.ticker] = (placed[o.ticker] || 0) + (o.side === "buy" ? o.amount : -o.amount); });
-  const band = Math.max(1, p.settings.rebalance_band * p.total);
-  const tradeCell = x => {
-    if (x.ticker in placed) { const v = placed[x.ticker]; return `<td class="${v > 0 ? "pos" : "neg"}">${(v > 0 ? "+" : "−") + usd(Math.abs(v))}</td>`; }
-    if (Math.abs(x.trade) < 0.01) return "<td>–</td>";
-    return `<td class="muted" title="Under the ${usd(band)} rebalance band, so no order is placed">skip (${(x.trade > 0 ? "+" : "−") + usd(Math.abs(x.trade))})</td>`;
-  };
-  const maxT = Math.max(...p.rows.map(x => x.target), p.cash.target, 1e-9);
-  const weightBar = w => `<span class="bar-cell">${pct(w)}<i style="width:${Math.round(48 * w / maxT)}px"></i></span>`;
-  const shown = [...p.rows].filter(x => x.value > 0 || x.target > 1e-4).sort((a, b) => b.target - a.target || b.value - a.value);
-  const mixRow = x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td><strong>${x.ticker === p.cash.ticker && x.name === "cash" ? esc(x.ticker) : tk(x.ticker)}</strong>${x.held ? "" : '<span class="tag">NEW</span>'}</td><td class="name">${esc(x.name)}</td>
-      <td>${pct(x.current)}</td><td>${weightBar(x.target)}</td>
-      ${tradeCell(x)}
-      <td>${x.daily_buy ? usd(x.daily_buy) : "–"}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.expected == null ? "–" : pct(x.expected)}</td>
-      <td class="reason">${esc(x.reason)}${x.rating ? ` <span class="tag">AI ${esc(x.rating)}</span>` : ""}</td></tr>`;
-  $("mix").innerHTML = "<tr><th>Ticker</th><th class='name'>Fund</th><th>Now</th><th>Target</th><th>Trade</th><th>Daily</th><th>Worst drop</th><th>Growth</th><th class='name'>Why</th></tr>" +
-    shown.map(mixRow).join("") + mixRow({...p.cash, name: "cash", held: true, worst_loss: 0});
-  $("mixNotes").textContent = `Trade: the orders placed (this session and the next). Trades under ${usd(band)} (${pct(p.settings.rebalance_band)} of the portfolio) are skipped, so those funds stay slightly off target. ` +
-    p.notes.join(" ") + (p.rows.some(x => x.floored) ? " * assumed, not observed." : "");
-  renderOverviewExtras(r);
-
-  scanRows = [...p.rows].sort((a, b) => b.target - a.target || b.score - a.score);
-  renderScan();
-}
-
-function renderOverviewExtras(r) {
-  const a = r.auto_invest;
-  if (a) {
-    $("aiBudget").textContent = `${usd(a.budget_per_day)} per trading day`;
-    $("autoTable").innerHTML = "<tr><th>Ticker</th><th>Amount</th><th>How often</th><th>Share</th></tr>" +
-      a.schedule.map(x => `<tr><td>${tk(x.ticker)} <span class="muted">${esc(x.name || "")}</span></td><td>${usd(x.amount)}</td><td>${esc(x.frequency)}</td><td>${pct(x.weight, 0)}</td></tr>`).join("");
-    const verb = {cancel: "Cancel", add: "Add", change: "Change"};
-    $("autoChanges").innerHTML = a.changes.length ? `<h4>Changes from your current recurring buys</h4><ul class="change-list">` +
-      a.changes.map(c => `<li><b>${verb[c.action]}</b> ${esc(c.ticker)}` + (c.action === "cancel" ? ` (now ${usd(c.now_per_day)} a market day)` :
-        `: ${usd(c.amount)} ${esc(c.frequency)}` + (c.now_per_day ? ` (now ${usd(c.now_per_day)} a market day)` : "")) + `</li>`).join("") + "</ul>" : "<p class='muted'>Your recurring buys already match.</p>";
-    $("autoNotes").innerHTML = a.notes.map(n => `<p>${esc(n)}</p>`).join("");
-  } else {
-    $("aiBudget").textContent = "";
-    $("autoTable").innerHTML = ""; $("autoChanges").innerHTML = "<p class='muted'>Recurring contributions go to the Investing sleeve.</p>"; $("autoNotes").innerHTML = "";
+  if (!t.ready) { $("buyBox").innerHTML = `<p class="muted">${esc(t.note)}</p>`; $("sellBox").innerHTML = ""; $("runnersTable").innerHTML = ""; }
+  else {
+    $("buyMeta").textContent = `${(t.mode || "").toUpperCase()} · data to ${t.data_to} · for the close of ${t.executes}`;
+    const x = t.best;
+    $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side buy">BUY</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
+        <span class="amt">${x.shares ? x.shares.toFixed(4) + " sh" : ""} · ${usd(x.dollars)}</span></div>
+      <table class="compact" style="margin-top:10px"><tr><th class="l">Buy price</th><td><b>limit ${usd(x.buy_limit)}</b> <span class="muted">(the last close; the model enters at the next close)</span></td></tr>` +
+      (x.patient ? `<tr><th class="l">Or, patient</th><td>limit ${usd(x.patient.price)} <span class="muted">(its median expected dip: about an even chance to fill within ${x.horizon} sessions; stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)})</span></td></tr>` : "") +
+      `<tr><th class="l">Sell at target</th><td class="pos">${usd(x.target)} (${spct(x.target_pct, 1)})</td></tr>
+       <tr><th class="l">Sell at stop</th><td class="neg">${usd(x.stop)} (${spct(x.stop_pct, 1)})</td></tr>
+       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (on a close)</td></tr>
+       <tr><th class="l">The model</th><td>expected net ${spct(x.expected_net)} · P(profit after costs) ${pct(x.p_win, 0)} · P(large loss) ${pct(x.p_risk, 0)} · vs SPY ${spct(x.expected_vs_spy)}</td></tr></table>`
+      : "") + (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
+    $("sellBox").innerHTML = t.sells.length ? `<table class="compact"><tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Bought</th><th>Unrealized</th><th>Sell at target</th><th>Sell at stop</th><th>Deadline</th></tr>` +
+      t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
+        <td>${money(s.last_close)}</td><td>${money(s.entry)}</td><td>${s.unrealized == null ? "–" : spct(s.unrealized)}</td><td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
+        <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
+      : "<p class='muted'>No stocks held: nothing to sell. SGOV is never sold except to fund a buy within the budget.</p>";
+    $("runnersTable").innerHTML = t.runners_up.length ? "<tr><th class='l'>Ticker</th><th>Buy limit</th><th>Target</th><th>Stop</th><th>Expected net</th><th>P(profit)</th><th>P(large loss)</th></tr>" +
+      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td>${usd(x.buy_limit)}</td><td class="pos">${usd(x.target)}</td><td class="neg">${usd(x.stop)}</td><td>${spct(x.expected_net)}</td><td>${pct(x.p_win, 0)}</td><td>${pct(x.p_risk, 0)}</td></tr>`).join("")
+      : "<tr><td class='muted'>None today.</td></tr>";
+    const tied = [t.best, ...t.runners_up].filter(x => x && x.tied_with);
+    $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted." +
+      (tied.length ? " Stocks the model scores alike share one estimate of the expected gain and its chances, so those numbers repeat; the order comes from the ranking itself." : "");
   }
-  const sl = r.sleeves || {};
-  $("sleeveTable").innerHTML = "<tr><th>Sleeve</th><th>Value</th><th>Settled cash</th><th>Unsettled</th><th>Funds</th></tr>" +
-    ["investing", "trading", "combined"].filter(k => sl[k]).map(k => `<tr class="${k === r.sleeve ? "chosen" : ""}"><td>${k === "combined" ? "<b>Whole IRA</b>" : k[0].toUpperCase() + k.slice(1)}</td><td>${usd(sl[k].equity)}</td><td>${usd(sl[k].cash.settled)}</td><td>${usd(sl[k].cash.unsettled)}</td><td>${sl[k].positions}</td></tr>`).join("");
-  const f = r.freshness || {};
-  const when = t => t ? new Date(t).toLocaleString(undefined, {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : "never";
-  const rf = r.returns_from || {};
-  const returnsLine = rf.model === "forecast"
-    ? `<p class="note">Expected returns come from <b>forecasts</b> (${esc(rf.forecast_model)}, ${rf.horizon} sessions, run ${esc((rf.run || "").slice(0, 8))}), not the standard rule. In backtests no forecast beat the standard rule after costs. Turn it off under Forecasts.</p>`
-    : `<p>Expected returns: the standard rule (volatility × shrunk Sharpe).</p>`;
-  $("freshness").innerHTML = returnsLine + `<p>Prices: closes through <b>${esc(f.prices_through || "–")}</b> (checked ${when(f.prices_checked)}). Only completed sessions are used.</p>` +
-    `<p>This plan: <b>preview</b>, not saved. Last official recommendation: ${f.last_official ? `${esc(f.last_official.id.slice(0, 8))} for ${esc(f.last_official.session)} (${esc(f.last_official.status)})` : "none yet"}.</p>` +
-    `<p>Last forecast run: ${f.last_forecast ? `${esc(f.last_forecast.model)}, ${f.last_forecast.horizon} sessions, data to ${esc(f.last_forecast.info_cutoff)}` : "none"}. Last recorded trade or transfer: ${when(f.last_event)}.</p>`;
-}
 
-let scanRows = [], scanAll = false, fcAll = false;
-// Sorted by a clicked column, like the forecast table; no key keeps the plan's order. Missing values sort last.
-let scanSort = {key: null, dir: -1};
-const SCAN_COLS = [["expected", "Growth"], ["worst_loss", "Worst drop"], ["score", "Score"], ["target", "Target"]];
-function renderScan() {
-  const q = $("scanFilter").value.trim().toLowerCase();
-  let rows = q ? scanRows.filter(x => (x.ticker + " " + x.name).toLowerCase().includes(q)) : scanRows;
-  if (scanSort.key) {
-    const k = scanSort.key;
-    rows = [...rows].sort((a, b) => (a[k] == null) - (b[k] == null) || scanSort.dir * ((a[k] ?? 0) - (b[k] ?? 0)));
-  }
-  const SCAN_SHOWN = 30;
-  const shown = q || scanAll ? rows.slice(0, 600) : rows.slice(0, SCAN_SHOWN);
-  $("scanMore").style.display = !q && rows.length > SCAN_SHOWN ? "" : "none";
-  $("scanToggle").textContent = scanAll ? `Show the first ${SCAN_SHOWN}` : `Show all ${rows.length} funds`;
-  $("scanToggle").onclick = () => { scanAll = !scanAll; renderScan(); };
-  const arrow = k => scanSort.key === k ? (scanSort.dir < 0 ? " ▾" : " ▴") : "";
-  $("scanTable").innerHTML = `<tr><th title="Rank in the plan's order; click to restore it" data-k="" style="cursor:pointer">#${scanSort.key ? "" : " ▾"}</th><th>Ticker</th><th class='name'>Name</th>` +
-    SCAN_COLS.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer" title="Sort by ${label.toLowerCase()}">${label}${arrow(k)}</th>`).join("") + `<th class='name'>Why</th></tr>` +
-    shown.map(x => `<tr class="${x.target > 1e-4 ? "chosen" : ""}"><td class="muted">${scanRows.indexOf(x) + 1}</td><td><strong>${tk(x.ticker)}</strong>${x.held ? '<span class="tag">HELD</span>' : ""}</td><td class="name">${esc(x.name)}</td>
-      <td>${x.expected == null ? "–" : pct(x.expected)}</td><td>${(x.worst_loss * 100).toFixed(0)}%${x.floored ? "*" : ""}</td><td>${x.score.toFixed(2)}</td>
-      <td>${x.target > 1e-4 ? pct(x.target) : "–"}</td><td class="reason">${esc(x.reason)}</td></tr>`).join("") +
-    (q && rows.length > shown.length ? `<tr><td colspan="8" class="muted">${rows.length - shown.length} more match; narrow the filter.</td></tr>` : "");
-  $("scanTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
-    const k = th.dataset.k || null;
-    scanSort = {key: k, dir: k && scanSort.key === k ? -scanSort.dir : -1};
-    renderScan();
-  });
+  const [cls, label] = STATUS[h.status] || STATUS.unknown;
+  $("incBadge").innerHTML = `<span class="tag">${label}</span>`;
+  const alt = h.alternatives;
+  $("incBox").innerHTML = h.status === "unknown" ? `<p class="muted">${esc(h.message || "")}</p>` :
+    `<p>Latest dividend ${h.last_dividend ? usd(h.last_dividend.per_share) + " a share on " + esc(h.last_dividend.date) : "–"}: <b>${pct(h.latest_yield, 2)}</b> a year` +
+    `${h.trailing_yield != null ? ` (last twelve months ${pct(h.trailing_yield, 2)})` : ""}. The 13-week bill rate, what SGOV earns next: ${pct(h.bill_rate, 2)}` +
+    `${h.bill_rate_6m_ago != null ? `, ${pct(h.bill_rate_6m_ago, 2)} six months ago` : ""}. Your line for "dried up": ${pct(h.dry_yield, 1)}.</p>` +
+    (h.reasons || []).map(r => `<div class="${cls}">${esc(r)}</div>`).join("") +
+    (alt ? `<h4 style="margin:12px 0 4px">Where the daily ${usd((b.settings || {}).daily_sgov_usd || 0)} could go instead</h4>
+      ${alt.pick ? `<p><b>Suggested: ${tk(alt.pick)}</b>. ${esc(alt.why)}</p>` : `<p>${esc(alt.why)}</p>`}
+      <table class="compact"><tr><th class="l">Fund</th><th class="l">What</th><th>Yield</th><th>1 year</th><th>Worst fall, 5y</th></tr>` +
+      alt.rows.map(r => `<tr class="${r.ticker === alt.pick ? "chosen" : ""}"><td class="l"><b>${tk(r.ticker)}</b></td><td class="l small">${esc(r.what)}<div class="muted">${esc(r.fits)}</div></td><td>${r.yield == null ? "–" : pct(r.yield, 2)}</td><td>${r.one_year == null ? "–" : spct(r.one_year, 1)}</td><td>${r.worst_fall_5y == null ? "–" : spct(r.worst_fall_5y, 0)}</td></tr>`).join("") +
+      `</table><p class="muted small">${esc(alt.note)}</p>` : `<p class="muted small">While SGOV's interest holds up, the daily ${usd((b.settings || {}).daily_sgov_usd || 0)} keeps going into SGOV. If it falls under your line, or bill rates fall fast, other places for it are listed here.</p>`);
+
+  const i = b.interest || {}, m = b.match || {}, tr = b.traded || {};
+  $("budgetBox").innerHTML = b.started ? `<table class="compact">
+      <tr><td class="l">SGOV interest since ${esc(b.started)}</td><td>${usd(i.earned || 0)}</td><td class="muted l small">${esc(i.basis)}${(i.items || []).length ? ": " + i.items.map(x => `${esc(x.date)} ${usd(x.amount)}`).join(", ") : ": no dividend yet"}</td></tr>
+      <tr><td class="l">Match (${pct((b.settings || {}).match_rate, 0)} of deposits)</td><td>${usd(m.earned || 0)}</td><td class="muted l small">${esc(m.basis)}: ${usd(m.deposits || 0)} deposited${m.sessions != null ? ` over ${m.sessions} sessions at ${usd((b.settings || {}).daily_sgov_usd || 0)}` : ""}</td></tr>
+      <tr><td class="l">Into stocks</td><td class="neg">−${usd(tr.spent || 0)}</td><td></td></tr>
+      <tr><td class="l">Back from sales</td><td class="pos">+${usd(tr.returned || 0)}</td><td></td></tr>
+      <tr><td class="l"><b>Available to trade</b></td><td><b>${usd(b.available || 0)}</b></td><td></td></tr></table>
+      <p class="muted small">Next month at today's rates: about ${usd(pr.interest_per_month || 0)} of interest and ${usd(pr.match_per_month || 0)} of match. ${esc(pr.limit_note || "")}</p>` +
+      (b.notes || []).map(n => `<p class="muted small">${esc(n)}</p>`).join("")
+    : `<p class="muted">${esc(b.note || "")}</p>`;
+  loadRecord();
 }
-$("scanFilter").oninput = renderScan;
+async function loadRecord() {
+  let r;
+  try { r = await api("/api/model-record"); } catch (e) { $("recordBox").textContent = e.message; return; }
+  const c = r.calibration_state || {};
+  $("recordBox").innerHTML = !r.matured
+    ? `<p>${(r.saved || 0).toLocaleString()} predictions saved over ${r.saved_days || 0} decision day${r.saved_days === 1 ? "" : "s"}. ${esc(r.note || "")}</p><p class="muted">Each one is scored once it matures, and the scores recalibrate the model's P(profit) and expected net once ${c.min_rows || 300} have matured over ${c.min_dates || 10} days. All of it is written to results/model_history/model_predictions.csv for retraining.</p>`
+    : `<p>${r.matured.toLocaleString()} predictions matured over ${r.days} days. Live rank correlation (IC) ${r.ic_mean == null ? "–" : r.ic_mean.toFixed(3)}${r.ic_t == null ? "" : ` (t ${r.ic_t.toFixed(1)})`}; the model's top fifth beat the rest by ${r.top_fifth_edge == null ? "–" : spct(r.top_fifth_edge)} over its horizon.</p>
+       <p class="${c.active ? "pos" : "muted"}">${c.active ? `Live calibration on: P(profit) and expected net are corrected from ${c.rows} matured predictions.` : esc(c.note || "")}</p>
+       <table class="compact"><tr><th class="l">P(profit) said</th><th>Times</th><th>Average said</th><th>Happened</th></tr>${(r.calibration || []).map(x => `<tr><td class="l">${esc(x.bin)}</td><td>${x.n}</td><td>${pct(x.predicted, 0)}</td><td>${pct(x.realized, 0)}</td></tr>`).join("")}</table>`;
+}
+$("tdRun").onclick = async () => {
+  try { await api("/api/decisions/run", {train: $("tdTrain").checked}); loadTrade(); } catch (e) { showError(e.message); }
+};
+async function loadRotation() {
+  let r;
+  try { r = await api("/api/rotation"); } catch (e) { $("rotAsOf").textContent = ""; $("rotAlerts").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
+  $("rotAsOf").textContent = `closes to ${r.as_of}; causes over the last ${r.window} sessions`;
+  const fc = f => f ? ` The ETF forecast (${esc(f.model)}, ${f.horizon} sessions): ${spct(f.mean)}, rank ${f.rank} of ${f.of} sectors.` : "";
+  $("rotAlerts").innerHTML = r.alerts.length ? r.alerts.map(a => `<div class="${a.direction === "in" ? "ok" : "note"}" style="margin-top:8px">
+      <b>${a.direction === "in" ? "Rotating in" : "Rotating out"}${a.stage === "early" ? " (early)" : " (confirmed)"}: ${tk(a.ticker)} ${esc(a.name)}</b> · ${spct(a.vs_spy_1m, 1)} vs SPY over a month.
+      ${esc(a.text)}.<div style="margin-top:4px"><b>Why:</b> ${esc(a.cause)}.${a.r2 != null ? ` <span class="muted small">(the six drivers explain ${pct(a.r2, 0)} of its daily moves)</span>` : ""}</div>
+      <div class="small" style="margin-top:2px">${fc(a.forecast)}${a.forecast_agrees === false ? " <b>It disagrees with this alert.</b>" : a.forecast_agrees ? " It agrees." : ""}</div></div>`).join("")
+    : "<p class='muted'>No sector is turning: every sector is steady in its stage.</p>";
+  $("rotTable").innerHTML = "<tr><th class='l'>Sector</th><th>Stage</th><th>Sessions in it</th><th>vs SPY, 1 month</th><th class='l'>What moved it</th></tr>" +
+    r.sectors.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b> ${esc(s.name)}</td><td>${esc(s.stage)}</td><td>${s.sessions_in_stage}</td><td class="${s.vs_spy_1m >= 0 ? "pos" : "neg"}">${spct(s.vs_spy_1m, 1)}</td><td class="l small">${esc(s.cause)}</td></tr>`).join("");
+  $("rotMethod").textContent = r.method;
+}
 
 function axes(W, H, L, R, T, B, sx, sy, xTicks, yTicks, xFmt, yFmt) {
   let g = "";
   for (const y of yTicks) g += `<line x1="${L}" x2="${W - R}" y1="${sy(y)}" y2="${sy(y)}" stroke="var(--chart-grid)"/><text x="${L - 6}" y="${sy(y) + 4}" text-anchor="end">${yFmt(y)}</text>`;
   for (const x of xTicks) g += `<text x="${sx(x)}" y="${H - B + 16}" text-anchor="middle">${xFmt(x)}</text>`;
   return g;
-}
-
-function renderChart(p) {
-  const pts = p.frontier.map((f, i) => ({x: f.stress_loss, y: f.expected_return, level: i + 1}));
-  const cur = {x: p.current_stress, y: p.expected_current}, sel = {x: p.target_stress, y: p.expected_target};
-  const all = [...pts, cur, sel];
-  const W = 520, H = 250, L = 44, R = 12, T = 12, B = 34;
-  const xMax = Math.max(...all.map(a => a.x)) * 1.05 || 0.01;
-  const yMin = Math.min(...all.map(a => a.y)) * 0.95, yMax = Math.max(...all.map(a => a.y)) * 1.05;
-  const sx = x => L + (x / xMax) * (W - L - R), sy = y => H - B - ((y - yMin) / (yMax - yMin || 1)) * (H - T - B);
-  const t = [0, 1, 2, 3, 4];
-  const grid = axes(W, H, L, R, T, B, sx, sy, t.map(i => xMax * i / 4), t.map(i => yMin + (yMax - yMin) * i / 4), x => pct(x, 0), y => pct(y, 1));
-  const path = pts.map((a, i) => `${i ? "L" : "M"}${sx(a.x)},${sy(a.y)}`).join("");
-  const dots = pts.map(a => `<circle cx="${sx(a.x)}" cy="${sy(a.y)}" r="3.5" fill="var(--s1)"><title>level ${a.level}: stress loss ${pct(a.x)}, growth ${pct(a.y)}</title></circle>`).join("");
-  $("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Expected growth against stress loss">
-    ${grid}<text x="${(W + L) / 2}" y="${H - 2}" text-anchor="middle">stress loss (${p.settings.risk_model === "scenarios" ? "past crashes" : "worst case"})</text>
-    <path d="${path}" fill="none" stroke="var(--s1)" stroke-width="2"/>${dots}
-    <circle cx="${sx(sel.x)}" cy="${sy(sel.y)}" r="8" fill="none" stroke="var(--s4)" stroke-width="2.5"><title>your level: ${pct(sel.x)} loss, ${pct(sel.y)} growth</title></circle>
-    <path d="M${sx(cur.x) - 6},${sy(cur.y) - 6}l12,12M${sx(cur.x) + 6},${sy(cur.y) - 6}l-12,12" stroke="var(--s2)" stroke-width="2.5"><title>your portfolio now: ${pct(cur.x)} loss, ${pct(cur.y)} growth</title></path>
-  </svg>`;
 }
 
 // --- forecasts ---
@@ -971,13 +763,7 @@ function renderBatch(res) {
 function renderForecasts(d) {
   lastFc = d;
   const r = d.run;
-  const inv = d.settings.investing;
-  // The plan holds funds, so only ETF runs can feed it; stock runs serve the ticker page.
-  $("fcUse").disabled = !r || r.universe !== "etf";
-  $("fcUse").checked = !!r && inv.return_model === "forecast" && inv.forecast_model === r.model && inv.forecast_horizon === r.horizon;
   renderBatch(d.job.result);
-  $("fcUse").parentElement.title = inv.return_model === "forecast"
-    ? `The Investing plan uses the latest ${inv.forecast_model} run at ${inv.forecast_horizon} sessions` : "The Investing plan uses the standard rule";
   if (!r) { setHTML("fcRunInfo", '<p class="muted">No forecast run yet.</p>'); setHTML("fcTable", ""); }
   else if (fcMode === "combined") {
     // A finished job may have added a model: fetch the combination again once it is done.
@@ -1045,15 +831,6 @@ $("fcRun").onclick = async () => {
 };
 document.querySelectorAll("input[name=fcH], input[name=fcM], #fcStack").forEach(i => i.onchange = fcRunLabel);
 $("fcUniverse").onchange = () => { fcView = null; loadForecasts(); };
-$("fcUse").onchange = async () => {
-  try {
-    await api("/api/risk", {sleeve: "investing", return_model: $("fcUse").checked ? "forecast" : "vol_prior",
-                            forecast_horizon: lastFc.run.horizon, forecast_model: lastFc.run.model});
-    refresh(); loadForecasts();
-  }
-  catch (e) { showError(e.message); $("fcUse").checked = !$("fcUse").checked; }
-};
-
 // --- the quality and Wall Street screen ---
 // ?qv=signals opens the stock screen on that column view (and is remembered like a click).
 if (["quality", "signals"].includes(new URLSearchParams(location.search).get("qv"))) store.set("qsView", new URLSearchParams(location.search).get("qv"));
@@ -1169,16 +946,6 @@ async function pollSignalRun() {
 }
 $("sgBuild").onclick = async () => { try { await api("/api/stocks/run", {sp500: true, watchlist: true, horizons: [20], news: false}); pollSignalRun(); } catch (e) { showError(e.message); } };
 document.querySelectorAll("[data-qv]").forEach(b => b.onclick = () => { qsView = b.dataset.qv; store.set("qsView", qsView); qsSort = {key: "rank", dir: 1}; renderScreen(); });
-function showScreener(which) {
-  store.set("scr", which);
-  document.querySelectorAll("[data-scr]").forEach(b => b.setAttribute("aria-pressed", b.dataset.scr === which));
-  $("fundsCard").style.display = which === "funds" ? "" : "none";
-  $("qsCard").style.display = which === "stocks" ? "" : "none";
-  $("scrIntro").innerHTML = which === "funds" ? "<b>Score</b> is expected growth above cash for each unit of worst-case drop: what the risk budget is spent on. Chosen funds are marked on the left."
-    : "S&amp;P 500 stocks ranked on the quality checklist and Wall Street, with the stock models' trend, breakout and crash signals and the daily decision's action.";
-}
-document.querySelectorAll("[data-scr]").forEach(b => b.onclick = () => showScreener(b.dataset.scr));
-showScreener(store.get("scr", "stocks"));
 async function loadScreen() {
   try { qsData = await api("/api/screen/quality"); } catch (e) { $("qsStatus").textContent = e.message; return; }
   const j = qsData.job, l = qsData.latest;
@@ -1279,8 +1046,8 @@ async function loadDecisions() {
   $("dcStatus").textContent = j.running ? j.progress + "…" : j.error ? "Failed: " + j.error : "";
   $("dcRun").disabled = j.running;
   if (j.running) setTimeout(loadDecisions, 3000);
-  const c = d.capital, st = c.settings, tr = c.proposal.sleeves.trading;
-  $("dcCapital").innerHTML = `<p class="muted small">Configured: Trading capital ${usd(st.trading_capital_usd)}, Investing capital ${usd(st.investing_capital_usd)}, daily investment ${usd(st.daily_investment_usd)} (settings v${st.version}). Actual Trading: equity ${tr.equity == null ? "–" : usd(tr.equity)}, settled ${usd(tr.settled_cash)}, reserved ${usd(tr.reserved)}, unsettled ${usd(tr.unsettled)}.</p>`;
+  const c = d.capital, st = c.settings;
+  $("dcCapital").innerHTML = `<p class="muted small">Daily SGOV buy ${usd(st.daily_sgov_usd)}, match ${pct(st.match_rate, 1)} (settings v${st.version}). Trading budget available ${usd(c.budget.available || 0)}; account value ${usd(c.value || 0)}.</p>`;
   const r = d.latest;
   if (!r) { $("dcHead").innerHTML = "<p class='muted'>No decision yet. Make one (fit models the first time).</p>"; $("dcLots").innerHTML = $("dcEntries").innerHTML = ""; }
   else {
@@ -1289,7 +1056,7 @@ async function loadDecisions() {
       `<p class="muted small">Summary: ${Object.entries(r.summary).filter(([, n]) => n).map(([a, n]) => `${a} ${n}`).join(", ") || "nothing"}; paper enters ${r.paper_enters}. Settings v${r.settings.capital.version} (${esc(r.settings.capital.hash)}).</p>`;
     $("dcLots").innerHTML = "<tr><th class='l'>Ticker</th><th>Action</th><th>Shares</th><th>Entered</th><th>Entry</th><th>Now</th><th>Unrealized</th><th>Levels (risk / profit)</th><th>Deadline</th><th class='l'>Reason</th></tr>" +
       (r.lots.length ? r.lots.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"><b>${x.action}</b>${x.fraction ? ` ${pct(x.fraction, 0)}` : ""}</td><td>${(+x.shares).toFixed(4)}</td><td>${esc(x.entry_date)}</td><td>${x.entry_px ? usd(x.entry_px) : "–"}</td><td>${isFinite(x.price) ? usd(x.price) : "–"}</td><td>${x.unrealized == null ? "–" : spct(x.unrealized)}</td><td>${spct(x.risk_level)} / ${spct(x.profit_level)}</td><td>${esc(x.deadline)}</td><td class="l small">${esc(x.reasons.join("; "))}${x.execute ? ` (at the close of ${esc(x.execute)})` : ""}</td></tr>`).join("")
-        : "<tr><td colspan='10' class='l muted'>No Trading positions.</td></tr>");
+        : "<tr><td colspan='10' class='l muted'>No stock positions.</td></tr>");
     $("dcEntries").innerHTML = "<tr><th class='l'>Ticker</th><th>Action</th><th>Paper</th><th>Size</th><th>Expected net (± sd)</th><th>vs SPY</th><th>P(profit)</th><th>P(large loss)</th><th>Cost</th><th class='l'>Blocked by</th></tr>" +
       r.entries.slice(0, 15).map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"><b>${x.action}</b></td><td>${x.paper_action ? "PAPER ENTER" : "–"}</td><td>${x.dollars ? usd(x.dollars) : "–"}</td><td>${spct(x.expected_net)} <span class="muted">± ${pct(x.net_sd, 1)}</span></td><td>${spct(x.expected_excess_vs_spy)}</td><td>${pct(x.p_win, 0)}</td><td>${isFinite(x.p_risk) ? pct(x.p_risk, 0) : "missing"}</td><td>${pct(x.cost_rt, 2)}</td><td class="l small">${esc((x.blocked || []).join("; "))}</td></tr>`).join("");
     $("dcNotes").innerHTML = r.limitations.map(n => `<p class="muted small">${esc(n)}</p>`).join("");
@@ -1303,32 +1070,20 @@ $("dcRun").onclick = async () => {
   try { await api("/api/decisions/run", {train: $("dcTrain").checked}); loadDecisions(); } catch (e) { showError(e.message); }
 };
 
-// --- capital: the three amounts and the books ---
+// --- money: the daily SGOV buy, the match and the dry-yield line ---
 async function loadCapital() {
   let c;
   try { c = await api("/api/capital"); } catch (e) { $("capStatus").textContent = e.message; return; }
-  const st = c.settings, p = c.proposal, money = v => v == null ? "–" : usd(v);
-  $("capTrading").value = st.trading_capital_usd; $("capInvesting").value = st.investing_capital_usd; $("capDaily").value = st.daily_investment_usd;
+  const st = c.settings, b = c.budget;
+  $("capDaily").value = st.daily_sgov_usd; $("capMatch").value = +(st.match_rate * 100).toFixed(2); $("capDry").value = +(st.dry_yield * 100).toFixed(2);
   $("capStatus").textContent = `settings version ${st.version} (${st.hash})`;
-  $("capTable").innerHTML = "<tr><th class='l'>Sleeve</th><th>Target</th><th>Funded so far</th><th>Equity now</th><th>Settled cash</th><th>Unsettled</th><th>Reserved</th></tr>" +
-    Object.entries(p.sleeves).map(([k, v]) => `<tr><td class="l">${k[0].toUpperCase() + k.slice(1)}</td><td>${money(v.target)}</td><td>${money(v.funded)}</td><td>${money(v.equity)}</td><td>${money(v.settled_cash)}</td><td>${money(v.unsettled)}</td><td>${money(v.reserved)}</td></tr>`).join("");
-  $("capProposal").innerHTML = (p.transfers.length ? "<p><b>Proposed:</b> " + p.transfers.map((t, i) =>
-      `move ${usd(t.cash)} of settled cash from ${t.from} to ${t.to} <button class="ghost" data-i="${i}">Record this transfer</button>`).join("; ") + "</p>"
-      : "<p class='muted'>No transfer needed: each sleeve's funding matches its target.</p>") +
-    p.notes.map(n => `<p class="muted small">${esc(n)}</p>`).join("");
-  $("capProposal").querySelectorAll("button[data-i]").forEach(b => b.onclick = async () => {
-    const t = p.transfers[+b.dataset.i];
-    if (!confirm(`Record a transfer of ${usd(t.cash)} from ${t.from} to ${t.to}? It changes the books (not Robinhood).`)) return;
-    try { await api("/api/capital/transfer", t); loadCapital(); refresh(); } catch (e) { showError(e.message); }
-  });
-  const d = c.daily_plan;
-  $("capPlan").textContent = `Next session ${d.session}: planned ${usd(d.planned)}, settled cash ${usd(d.settled_available)}, buy ${usd(d.buy)}. ` + d.notes.join(" ");
+  $("capPlan").textContent = `The strategy started ${c.started || "–"}. Account value ${usd(c.value || 0)}; trading budget available ${usd(b.available || 0)}.`;
 }
 $("capSave").onclick = async () => {
   try {
-    await api("/api/capital", {values: {trading_capital_usd: +$("capTrading").value, investing_capital_usd: +$("capInvesting").value,
-                                        daily_investment_usd: +$("capDaily").value}});
-    loadCapital(); refresh();
+    await api("/api/capital", {values: {daily_sgov_usd: +$("capDaily").value, match_rate: +$("capMatch").value / 100,
+                                        dry_yield: +$("capDry").value / 100}});
+    loadCapital(); loadTrade();
   } catch (e) { showError(e.message); }
 };
 
@@ -1351,49 +1106,31 @@ function readRows(table) {
   return rows;
 }
 const HOLD_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "quantity", label: "Shares", type: "number"}];
-// Recurring buys happen on market days only (as Robinhood's "every market day"): never on weekends or
-// market holidays. The file keeps its "daily" / "weekly" keys; "daily" means every market day.
-const BUY_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "amount", label: "Amount", type: "number"},
-  {key: "period", label: "How often", type: "select", options: [["daily", "Every market day"], ["weekly", "Every week"]]}];
-function toSchedule(rows) {
-  const s = {daily: {}, weekly: {}};
-  rows.forEach(r => { const p = (r.period || "daily").toLowerCase() === "weekly" ? "weekly" : "daily"; if (r.amount) s[p][r.ticker] = r.amount; });
-  return s;
-}
 function drawEditors() {
   editorRows($("holdings"), state.portfolio.positions, HOLD_COLS);
   $("cash").value = state.portfolio.cash ?? 0;
-  const buys = [];
-  for (const period of ["daily", "weekly"]) for (const [t, a] of Object.entries(state.schedule[period] || {})) buys.push({ticker: t, amount: a, period});
-  editorRows($("schedule"), buys, BUY_COLS);
   $("groups").innerHTML = Object.entries(state.groups).map(([key, label]) =>
     `<label class="check" style="margin:6px 0"><input type="checkbox" data-group="${key}" ${state.universe.groups.includes(key) ? "checked" : ""}> ${esc(label)}</label>`).join("");
   $("universe").value = state.universe.extra.join(", ");
-  $("scanCount").textContent = state.universe.groups.length ? "market" : "extra list";
 }
 document.addEventListener("click", e => {
   const del = e.target.dataset?.del; if (del === undefined) return;
   const table = e.target.closest("table");
-  if (table.id === "holdings") { state.portfolio.positions = readRows(table); state.portfolio.positions.splice(+del, 1); }
-  else { const rows = readRows(table); rows.splice(+del, 1); state.schedule = toSchedule(rows); }
+  if (table.id !== "holdings") return;
+  state.portfolio.positions = readRows(table); state.portfolio.positions.splice(+del, 1);
   drawEditors();
 });
 $("addHolding").onclick = () => { state.portfolio.positions = readRows($("holdings")); state.portfolio.positions.push({ticker: "", quantity: 0}); drawEditors(); };
-$("addBuy").onclick = () => { const rows = readRows($("schedule")); rows.push({ticker: "", amount: 0, period: "daily"}); editorRows($("schedule"), rows, BUY_COLS); };
 $("saveHoldings").onclick = async () => {
   try {
     state.portfolio = {...state.portfolio, positions: readRows($("holdings")).filter(r => r.quantity), cash: +$("cash").value || 0};
-    await api("/api/portfolio", state.portfolio); drawEditors(); refresh();
+    await api("/api/portfolio", state.portfolio); drawEditors(); loadTrade();
   } catch (e) { showError(e.message); }
-};
-$("saveSchedule").onclick = async () => {
-  try { state.schedule = toSchedule(readRows($("schedule"))); await api("/api/schedule", state.schedule); drawEditors(); refresh(); }
-  catch (e) { showError(e.message); }
 };
 $("saveUniverse").onclick = async () => {
   const groups = [...document.querySelectorAll("[data-group]")].filter(c => c.checked).map(c => c.dataset.group);
   const extra = $("universe").value.split(/[\s,;]+/).filter(Boolean);
-  try { await api("/api/universe", {groups, extra}); state = await api("/api/state"); drawEditors(); refresh(); }
+  try { await api("/api/universe", {groups, extra}); state = await api("/api/state"); drawEditors(); }
   catch (e) { showError(e.message); }
 };
 
@@ -1503,188 +1240,6 @@ $("mkExplain").onclick = async () => {
   try { await api("/api/market/explain", {}); pollExplain(); } catch (e) { showError(e.message); }
 };
 
-// --- performance: the paper record since day one ---
-let trRange = store.get("trRange", "ALL"), lastTracker = null, trAllDays = false;
-const RANGE_LABEL = {"1M": "1 month", "3M": "3 months", "YTD": "year to date", "1Y": "1 year", "ALL": "since day one"};
-function rangeFrom(H, range) {
-  if (range === "ALL" || H.length < 2) return 0;
-  const end = new Date(H[H.length - 1].date + "T12:00:00"), from = new Date(end);
-  if (range === "1M") from.setMonth(from.getMonth() - 1);
-  else if (range === "3M") from.setMonth(from.getMonth() - 3);
-  else if (range === "1Y") from.setFullYear(from.getFullYear() - 1);
-  else from.setMonth(0, 1);
-  const iso = from.toISOString().slice(0, 10), i = H.findIndex(h => h.date >= iso);
-  return i <= 0 ? 0 : i - 1;   // the close before the range is its base
-}
-function perf(V, key) {
-  const a = V[0][key], b = V[V.length - 1][key], ret = a ? b / a - 1 : 0;
-  const days = (new Date(V[V.length - 1].date) - new Date(V[0].date)) / 864e5;
-  let peak = -Infinity, dd = 0;
-  for (const h of V) { peak = Math.max(peak, h[key]); dd = Math.min(dd, h[key] / peak - 1); }
-  return {ret, ann: days >= 365 ? Math.pow(1 + ret, 365 / days) - 1 : null, dd};
-}
-const capOf = (h, L) => ("loss_limit" in h ? h.loss_limit : L.loss_limit);
-function renderOvPerf(L) {
-  const el = $("ovPerf");
-  if (!L || !L.history.length) {
-    el.innerHTML = "<p class='muted'>The record starts with the next close. From then on the suggested portfolio's value is stored every trading day.</p>";
-    return;
-  }
-  const H = L.history, first = H[0], last = H[H.length - 1], s = perf(H, "plan"), diff = last.plan - last.hold;
-  el.innerHTML = `<div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap">
-      <div><div class="muted small">Followed the plan</div><div style="font-size:22px;font-weight:650" class="num">${usd(last.plan)}</div>
-        <div class="small ${s.ret >= 0 ? "pos" : "neg"}">${susd(last.plan - first.plan)} (${spct(s.ret)})</div></div>
-      <div style="text-align:right"><div class="muted small">vs. kept as is</div><div style="font-size:22px;font-weight:650" class="num ${diff >= 0 ? "pos" : "neg"}">${susd(diff)}</div>
-        <div class="muted small">${H.length} day${H.length > 1 ? "s" : ""} since ${L.start}</div></div></div>
-    ${H.length > 1 ? spark(H.map(h => h.plan), last.plan >= first.plan) : ""}`;
-}
-function renderTracker(t) {
-  lastTracker = t;
-  const L = t.ledger;
-  renderOvPerf(L);
-  $("trackerIntro").hidden = !!L; $("trackerBody").hidden = !L;
-  $("trStatus").textContent = t.running ? `Updating: ${t.progress}…` : t.error ? "Update failed: " + t.error : "";
-  $("trUpdate").disabled = $("trReset").disabled = t.running;
-  document.querySelectorAll("#trRange button").forEach(b => b.setAttribute("aria-pressed", b.dataset.range === trRange));
-  if (!L || !L.history.length) { if (L) $("trKpis").innerHTML = kpi("Starting", "…", "first day being recorded"); return; }
-  const H = L.history, V = H.slice(rangeFrom(H, trRange)), last = H[H.length - 1];
-  const all = perf(H, "plan"), p = perf(V, "plan"), k = perf(V, "hold"), diff = last.plan - last.hold;
-  const lvl = L.risk_level ? `level ${L.risk_level}` : `cap ${capText(L.loss_limit)}`;
-  $("trKpis").innerHTML =
-    kpi("Plan portfolio", usd(last.plan), `${susd(last.plan - H[0].plan)} (${spct(all.ret)}) since ${L.start}`, "hero") +
-    kpi(`Return, ${RANGE_LABEL[trRange]}`, `<span class="${p.ret >= 0 ? "pos" : "neg"}">${spct(p.ret)}</span>`, `kept as is ${spct(k.ret)}`) +
-    kpi("Annualized", p.ann == null ? "–" : spct(p.ann), p.ann == null ? "shown once the range spans a year" : `kept as is ${spct(k.ann)}`) +
-    kpi("Max drawdown", spct(p.dd), `kept as is ${spct(k.dd)}`) +
-    kpi("Plan vs. kept", `<span class="${diff >= 0 ? "pos" : "neg"}">${susd(diff)}</span>`, diff >= 0 ? "following the plan is ahead" : "keeping as is is ahead") +
-    kpi("Record", `${H.length} day${H.length > 1 ? "s" : ""}`, `${lvl} · last ${last.date}${L.backfilled ? " · replayed start" : ""}`);
-  renderTrackerChart(V, L);
-  const fmtOrders = os => os.length ? os.map(o => `<span style="white-space:nowrap">${o[0] === "buy" ? "+" : "−"}${esc(o[1])} ${usd(o[2])}</span>`).join(", ") : "–";
-  const DAYS_SHOWN = 20;
-  const newestFirst = [...H].reverse();
-  $("trDaysMore").style.display = newestFirst.length <= DAYS_SHOWN ? "none" : "";
-  $("trDaysToggle").textContent = trAllDays ? "Show the latest 20 days" : `Show all ${newestFirst.length} days`;
-  $("trDaysToggle").onclick = () => { trAllDays = !trAllDays; renderTracker(lastTracker); };
-  $("trDays").innerHTML = "<tr><th>Date</th><th>Plan</th><th>Kept</th><th>Diff</th><th>Cap</th><th>Invested</th><th class='name'>Plan's orders</th></tr>" +
-    newestFirst.slice(0, trAllDays ? undefined : DAYS_SHOWN).map(h => `<tr><td>${h.date}</td><td>${usd(h.plan)}</td><td>${usd(h.hold)}</td>
-      <td class="${h.plan >= h.hold ? "pos" : "neg"}">${susd(h.plan - h.hold)}</td>
-      <td>${capText(capOf(h, L))}</td><td>${h.invested == null ? "–" : pct(h.invested, 0)}</td>
-      <td class="reason">${fmtOrders(h.orders.plan)}</td></tr>`).join("");
-  const rows = (L.holdings?.plan || []);
-  const settledCash = L.books.plan.settled + L.books.plan.unsettled;
-  $("trHoldings").innerHTML = "<tr><th>Ticker</th><th class='name'>Name</th><th>Shares</th><th>Value</th></tr>" +
-    rows.map(r => `<tr><td><strong>${tk(r[0])}</strong></td><td class="name">${esc(r[3])}</td><td>${r[1].toFixed(4)}</td><td>${usd(r[2])}</td></tr>`).join("") +
-    (settledCash >= 0.01 ? `<tr><td>Cash</td><td class="name">settled and settling</td><td></td><td>${usd(settledCash)}</td></tr>` : "");
-}
-function renderTrackerChart(H, L) {
-  const W = 760, H2 = 280, Lm = 70, R = 16, T = 14, B = 32;
-  const vals = H.flatMap(h => [h.plan, h.hold]);
-  let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.12 || hi * 0.005; lo -= pad; hi += pad;
-  const n = H.length, sx = i => Lm + (n > 1 ? i / (n - 1) : 0.5) * (W - Lm - R), sy = v => H2 - B - ((v - lo) / (hi - lo)) * (H2 - T - B);
-  const yt = [0, 1, 2, 3].map(i => lo + (hi - lo) * i / 3);
-  const step = Math.max(1, Math.ceil(n / 7)); const xt = H.map((_, i) => i).filter(i => i % step === 0);
-  const fmtX = i => n > 300 ? H[i].date.slice(0, 7) : H[i].date.slice(5);
-  const grid = axes(W, H2, Lm, R, T, B, sx, sy, xt, yt, fmtX, v => "$" + Math.round(v).toLocaleString());
-  const pts = key => H.map((h, i) => `${sx(i).toFixed(1)},${sy(h[key]).toFixed(1)}`);
-  const area = n > 1 ? `<path d="M${pts("plan").join("L")}L${sx(n - 1)},${H2 - B}L${sx(0)},${H2 - B}Z" fill="var(--s1)" fill-opacity=".07"/>` : "";
-  const line = (key, color, w) => `<path d="M${pts(key).join("L")}" fill="none" stroke="var(${color})" stroke-width="${w}" stroke-linejoin="round"/>` +
-    (n < 60 ? H.map((h, i) => `<circle cx="${sx(i)}" cy="${sy(h[key])}" r="2.5" fill="var(${color})"><title>${h.date}: ${usd(h[key])}</title></circle>`).join("") : "");
-  const marks = H.map((h, i) => i && capOf(h, L) !== capOf(H[i - 1], L) ?
-    `<line x1="${sx(i)}" x2="${sx(i)}" y1="${T}" y2="${H2 - B}" stroke="var(--s3)" stroke-dasharray="3 3"><title>${h.date}: risk cap changed to ${capText(capOf(h, L))}</title></line>` : "").join("");
-  $("trChart").innerHTML = `<svg viewBox="0 0 ${W} ${H2}" width="100%" role="img" aria-label="Paper portfolio values">${grid}${area}${marks}${line("hold", "--s2", 1.75)}${line("plan", "--s1", 2.5)}</svg>
-    <div class="legend"><span style="--c: var(--s1)">Followed the plan</span><span style="--c: var(--s2)">Kept as is</span>${marks ? '<span style="--c: var(--s3)">Risk level changed</span>' : ""}</div>`;
-}
-async function pollTracker() {
-  let t;
-  try { t = await api("/api/tracker"); }
-  catch (e) {   // keep what is shown, say why, and try again shortly
-    $("trStatus").textContent = "Could not read the record: " + e.message + " Retrying…";
-    setTimeout(pollTracker, 3000);
-    return null;   // unknown, which is not the same as "no record"
-  }
-  renderTracker(t);
-  if (t.running) setTimeout(pollTracker, 1500);
-  return t;
-}
-document.querySelectorAll("#trRange button").forEach(b => b.onclick = () => {
-  trRange = b.dataset.range; store.set("trRange", trRange); if (lastTracker) renderTracker(lastTracker);
-});
-$("trStartBtn").onclick = async () => {
-  try { await api("/api/tracker/start", {start: $("trStart").value}); pollTracker(); }
-  catch (e) { showError(e.message); }
-};
-$("saveRec").onclick = async () => {
-  showError(""); $("saveRec").disabled = true; $("saveMsg").innerHTML = '<p class="muted">Saving…</p>';
-  try {
-    const r = await api("/api/recommendations/save", {sleeve: $("sleeve").value, risk_level: riskLevel, use_ai: $("useAi").checked, scan: $("scan").checked});
-    const s = r.saved;
-    $("saveMsg").innerHTML = `<div class="ok"><b>Saved</b> official recommendation ${esc(s.id.slice(0, 8))} for the ${esc(s.session)} session; orders may fill from ${esc(s.earliest_execution)}.` +
-      (s.supersedes ? ` It replaces ${esc(s.supersedes.slice(0, 8))}.` : "") + ` Saving is not trading: record fills when you place them.</div>`;
-    lastPlan = r; render(r); $("subtitle").textContent = $("subtitle").textContent.replace("preview, not saved", "saved as official");
-  } catch (e) { showError(e.message); $("saveMsg").innerHTML = ""; }
-  finally { $("saveRec").disabled = false; }
-};
-$("trUpdate").onclick = async () => { try { await api("/api/tracker/update", {}); pollTracker(); } catch (e) { showError(e.message); } };
-$("trReset").onclick = async () => {
-  if (!confirm("Start a new record? The current one is archived next to your holdings file, not deleted.")) return;
-  try { await api("/api/tracker/reset", {}); pollTracker(); } catch (e) { showError(e.message); }
-};
-
-async function loadRiskSettings() {
-  try {
-    const st = await api("/api/state?sleeve=" + $("setSleeve").value);
-    const r = st.risk;
-    $("setLevel").innerHTML = r.levels.map(l => `<option value="${l.level}">${l.level}: ${esc(l.name)} (${capText(l.loss_limit)})</option>`).join("");
-    $("setLevel").value = r.level;
-    $("setModel").value = r.model || "worst_case";
-    $("setTarget").value = r.target_growth == null ? "" : +(r.target_growth * 100).toFixed(2);
-    explainRiskSettings();
-  } catch (e) { showError(e.message); }
-}
-function explainRiskSettings() {
-  const l = levelInfo(+$("setLevel").value), t = $("setTarget").value.trim();
-  $("setExplain").textContent = (l.loss_limit == null ? "No stress-loss cap: only the per-fund limits apply. "
-    : `The plan may lose at most ${capText(l.loss_limit)} of the sleeve in the stress test. `) +
-    (t && +t > 0 ? `It aims for ${(+t).toFixed(1)}% a year expected growth at the least risk that reaches it, never past that cap; expected growth is an estimate, and backtests realized less.`
-      : "With no growth target it takes the most expected growth the cap allows.");
-}
-$("setSleeve").onchange = loadRiskSettings;
-$("setLevel").onchange = explainRiskSettings;
-$("setTarget").oninput = explainRiskSettings;
-$("saveRiskSettings").onclick = async () => {
-  const sleeve = $("setSleeve").value, t = $("setTarget").value.trim();
-  try {
-    await api("/api/risk", {sleeve, level: +$("setLevel").value, model: $("setModel").value,
-                            target_growth: t === "" || +t === 0 ? null : +t / 100});
-    $("setSaved").textContent = "Saved for " + sleeve + ".";
-    if (sleeve === $("sleeve").value) {   // the bar at the top shows this sleeve: bring it in line
-      const st = await api("/api/state?sleeve=" + sleeve); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk); refresh();
-      pollTracker();
-    }
-  } catch (e) { showError(e.message); }
-};
-
-async function loadAcctTabs() {
-  document.querySelectorAll("#acctTabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.s === $("sleeve").value));
-  try {
-    const d = await api("/api/ledger");
-    document.querySelectorAll("#acctTabs button").forEach(b => { b.querySelector(".v").textContent = usd(d.sleeves[b.dataset.s].equity); });
-  } catch (e) { /* values are a convenience; the tabs work without them */ }
-}
-document.querySelectorAll("#acctTabs button").forEach(b => b.onclick = () => {
-  if ($("sleeve").value === b.dataset.s) return;
-  $("sleeve").value = b.dataset.s; $("sleeve").onchange();
-});
-
-$("sleeve").onchange = async () => {
-  loadAcctTabs();
-  store.set("sleeve", $("sleeve").value);
-  try { const st = await api("/api/state?sleeve=" + $("sleeve").value); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk); } catch (e) { showError(e.message); }
-  $("setSleeve").value = $("sleeve").value; loadRiskSettings();
-  refresh();
-};
-$("useAi").onchange = () => { store.set("useAi", $("useAi").checked); refresh(); };
-$("scan").onchange = () => { store.set("scan", $("scan").checked); refresh(); };
-
 // --- agent models: a provider and model per role, and the prices the budget needs ---
 let agData = null, agMap = {};
 function agResolved() {
@@ -1766,28 +1321,7 @@ $("agSave").onclick = async () => {
   } catch (e) { $("agStatus").textContent = e.message; }
 };
 
-async function pollAi() {
-  const a = await api("/api/ratings");
-  $("runAi").disabled = a.running;
-  const n = Object.keys(a.ratings || {}).length;
-  $("aiStatus").textContent = a.running ? "Agents running… each fund takes a few minutes." :
-    a.error ? "AI ratings failed: " + a.error : a.date ? `${n} ratings from ${a.date}.` : "Not run today.";
-  $("aiLog").textContent = (a.log || []).join("\n");
-  if (a.running) setTimeout(pollAi, 5000);
-  else if (n && $("useAi").checked && lastPlan && !lastPlan.ai_used) refresh();
-}
-$("runAi").onclick = async () => {
-  if (!confirm("Run the AI agents on your holdings and the funds the plan wants to buy? This uses your OpenAI credit and takes a while.")) return;
-  try { await api("/api/ratings", {}); $("useAi").checked = true; store.set("useAi", true); pollAi(); } catch (e) { showError(e.message); }
-};
-
 (async () => {
-  $("useAi").checked = store.get("useAi", false);
-  $("scan").checked = store.get("scan", true);
-  // ?sleeve=trading opens a sleeve directly (and is remembered like a choice in the bar).
-  const linkedSleeve = new URLSearchParams(location.search).get("sleeve");
-  if (["investing", "trading"].includes(linkedSleeve)) store.set("sleeve", linkedSleeve);
-  $("sleeve").value = store.get("sleeve", "investing");
   const linked = location.hash.slice(1);
   const isTab = id => document.getElementById(id)?.classList.contains("tab");
   showTab(isTab(linked) ? linked : isTab(store.get("tab", "today")) ? store.get("tab", "today") : "today");
@@ -1795,18 +1329,10 @@ $("runAi").onclick = async () => {
   window.scrollTo(0, 0);
   try {
     state = await api("/api/state");
-    levels = state.risk.levels; riskLevel = state.risk.level; showRisk(riskLevel); showRiskOptions(state.risk); drawEditors();
-    if ($("sleeve").value !== "investing") {   // the remembered sleeve has its own risk settings
-      const st = await api("/api/state?sleeve=" + $("sleeve").value); riskLevel = st.risk.level; showRisk(riskLevel); showRiskOptions(st.risk);
-    }
+    drawEditors();
   } catch (e) { showError(e.message); }
-  $("trStart").value = new Date().toISOString().slice(0, 10);
-  pollAi(); loadCapital(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents(); refresh(); loadMarket(); loadForecasts(); loadLive(); loadHardware(); loadRiskSettings(); loadAcctTabs();
-  // The record runs from day one: catch it up on every visit, or start it if there is none.
-  pollTracker().then(t => {
-    if (!t || t.running) return;   // a record that could not be read is never started over
-    api(t.ledger ? "/api/tracker/update" : "/api/tracker/start", {}).then(pollTracker).catch(() => {});
-  });
+  loadTrade(); loadRotation(); loadCapital(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
+  loadMarket(); loadForecasts(); loadLive(); loadHardware();
 })();
 </script>
 </body>

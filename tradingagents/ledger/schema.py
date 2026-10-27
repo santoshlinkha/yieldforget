@@ -408,4 +408,40 @@ CREATE TABLE entry_plans (
 );
 CREATE INDEX entry_plans_ticker ON entry_plans (ticker, created_at);
 """ + _guards("entry_plans"),
+    7: """
+-- The internal stock model's every prediction, saved with each daily decision before any outcome is
+-- known, and what happened once its horizon passed (a separate record, never an edit). They are the
+-- live record the model is scored on and recalibrated from (stocks.feedback).
+CREATE TABLE model_predictions (
+    decision_id TEXT NOT NULL REFERENCES stock_decisions(id),
+    ticker TEXT NOT NULL,
+    info_cutoff TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    rank INTEGER,
+    of_n INTEGER,
+    score_pct REAL,
+    expected_net REAL,
+    p_win REAL,
+    p_risk REAL,
+    cost_rt REAL,
+    close REAL,                            -- the as-traded close at the cutoff
+    action TEXT,                           -- ENTER / WAIT / PAPER ENTER for candidates, HOLD / EXIT ... for lots
+    model_key TEXT,                        -- the fitted bundle the scores came from
+    PRIMARY KEY (decision_id, ticker)
+);
+CREATE INDEX model_predictions_cutoff ON model_predictions (info_cutoff);
+CREATE TABLE model_outcomes (
+    decision_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    matured_on TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    entry_close REAL NOT NULL,             -- the close of the session after the cutoff (when it could trade)
+    exit_close REAL NOT NULL,              -- ``horizon`` sessions later
+    realized_return REAL NOT NULL,         -- total return, dividends included
+    spy_return REAL,
+    won INTEGER NOT NULL,                  -- realized return above the round-trip cost
+    PRIMARY KEY (decision_id, ticker),
+    FOREIGN KEY (decision_id, ticker) REFERENCES model_predictions(decision_id, ticker)
+);
+""" + _guards("model_predictions") + _guards("model_outcomes"),
 }

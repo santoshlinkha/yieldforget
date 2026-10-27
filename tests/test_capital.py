@@ -1,11 +1,12 @@
-"""The three capital amounts: persisted, migrated, validated; they never move money or rewrite history."""
+"""The money settings and the trading budget: persisted, validated; they never move money or rewrite history."""
 
 import json
 from datetime import date
 
+import pandas as pd
 import pytest
 
-from tradingagents.ledger import capital
+from tradingagents.ledger import capital, income
 from tradingagents.ledger.store import Store
 
 pytestmark = pytest.mark.unit
@@ -15,82 +16,99 @@ DAY = date(2026, 10, 1)
 
 def test_defaults_persist_across_restarts_and_validate(tmp_path):
     store = Store(tmp_path)
-    assert capital.load(store) == capital.Capital(1000.0, 4800.0, 27.61)
-    capital.update(store, {"trading_capital_usd": 1500, "daily_investment_usd": "30.005"})
-    again = Store(tmp_path)                                   # a restart
-    assert capital.load(again) == capital.Capital(1500.0, 4800.0, 30.0)
-    for bad in ({"trading_capital_usd": -1}, {"daily_investment_usd": "lots"}, {"investing_capital_usd": float("nan")},
-                {"weekly_usd": 5}):
+    assert capital.load(store) == capital.Capital(29.0, 0.03, 0.02)
+    capital.update(store, {"daily_sgov_usd": "30.005", "match_rate": 0.01})
+    again = Store(tmp_path)
+    assert capital.load(again) == capital.Capital(30.0, 0.01, 0.02)
+    for bad in ({"daily_sgov_usd": -1}, {"match_rate": 0.5}, {"daily_sgov_usd": "lots"}, {"nope": 1}):
         with pytest.raises(ValueError):
             capital.update(again, bad)
-    with pytest.raises(ValueError):
-        again.set("capital", "trading_capital_usd", -5)       # any writer is checked, not only the API
-
-
-def test_earlier_saved_values_are_kept_not_overwritten(tmp_path):
-    store = Store(tmp_path)
-    # As saved by an earlier version, before the capital settings existed.
-    store.con.execute("INSERT INTO settings VALUES ('trading', 'initial_allocation', '1250.0', 'x')")
-    store.con.execute("INSERT INTO settings VALUES ('investing', 'daily_contribution', '12.5', 'x')")
-    cap = capital.load(store)
-    assert cap.trading_capital_usd == 1250.0 and cap.daily_investment_usd == 12.5 and cap.investing_capital_usd == 4800.0
-    assert store.get("trading", "initial_allocation") == 1250.0          # the old key reads the new setting
-    store.set("investing", "daily_contribution", 20.0)                    # and writes it
-    assert capital.load(store).daily_investment_usd == 20.0
 
 
 def test_every_change_is_in_the_history_and_snapshots_are_frozen(tmp_path):
     store = Store(tmp_path)
     before = capital.snapshot(store)
-    record = json.dumps(before)                    # what a recommendation or experiment stores
-    after = capital.update(store, {"trading_capital_usd": 2000})
+    record = json.dumps(before)                    # what a decision or experiment stores
+    after = capital.update(store, {"daily_sgov_usd": 50})
     assert after["version"] > before["version"] and after["hash"] != before["hash"]
-    assert json.loads(record)["trading_capital_usd"] == 1000.0      # the old record still says 1,000
-    assert capital.history(store)[0]["key"] == "trading_capital_usd"
+    assert json.loads(record)["daily_sgov_usd"] == 29.0      # the old record still says 29
+    assert capital.history(store)[0]["key"] == "daily_sgov_usd"
 
 
-def test_changing_a_target_moves_no_money_and_keeps_trading_pnl(tmp_path):
+def test_a_setting_change_moves_no_money(tmp_path):
     store = Store(tmp_path)
-    store.ledger.contribute(5000.0, DAY, sleeve="investing", settle_date=DAY)
-    store.ledger.transfer("investing", "trading", DAY, cash=1000.0)
-    store.ledger.fill("trading", "buy", "AAA", 10.0, 50.0, DAY, settle_date=DAY)
-    prices = {"AAA": 70.0}                                   # Trading is up $200
-    before = {s: store.ledger.state(s, DAY, prices).equity for s in ("trading", "investing")}
-    capital.update(store, {"trading_capital_usd": 1500})
-    after = {s: store.ledger.state(s, DAY, prices).equity for s in ("trading", "investing")}
-    assert before == after                                   # a setting change is not a transfer
-    p = capital.reallocation(store, DAY, prices)
-    assert p["sleeves"]["trading"]["funded"] == 1000.0 and p["sleeves"]["trading"]["equity"] == 1200.0
-    assert p["transfers"] == [{"from": "investing", "to": "trading", "cash": 500.0}]   # target - funded, not - equity
+    store.ledger.contribute(500.0, DAY, settle_date=DAY)
+    capital.update(store, {"daily_sgov_usd": 100})
+    assert store.ledger.state(None, DAY).cash.total == 500.0
 
 
-def test_a_proposal_never_creates_money(tmp_path):
+def test_the_budget_is_interest_and_match_less_what_went_into_stocks(tmp_path, monkeypatch):
     store = Store(tmp_path)
-    store.ledger.contribute(300.0, DAY, sleeve="investing", settle_date=DAY)
-    p = capital.reallocation(store, DAY, {})
-    assert p["transfers"] == [{"from": "investing", "to": "trading", "cash": 300.0}]   # only what is settled
-    assert any("needs a deposit" in n for n in p["notes"])
+    store.ledger.record("opening_position", "trading", DAY, ticker="SGOV", quantity=100.0, source="manual")
+    income.set_start(store, DAY)
+    # SGOV paid $0.30 a share on 10-02 and 11-02; 100 shares were held the day before each.
+    monkeypatch.setattr(income, "_dividends", lambda cache, t: [(date(2026, 9, 1), 0.31), (date(2026, 10, 2), 0.30),
+                                                                 (date(2026, 11, 2), 0.30)])
+    as_of = date(2026, 11, 3)
+    b = income.budget(store, tmp_path, as_of)
+    assert b["interest"]["basis"] == "estimated" and b["interest"]["earned"] == 60.0       # the 09-01 one is before the start
+    sessions = b["match"]["sessions"]
+    assert b["match"]["earned"] == round(29.0 * sessions * 0.03, 2)
+    store.ledger.contribute(100.0, DAY, settle_date=DAY)
+    store.ledger.fill("trading", "buy", "AAA", 2.0, 10.0, date(2026, 10, 5), settle_date=date(2026, 10, 6))
+    store.ledger.fill("trading", "sell", "AAA", 1.0, 12.0, date(2026, 10, 20), settle_date=date(2026, 10, 21))
+    b = income.budget(store, tmp_path, as_of)
+    assert b["match"]["basis"] == "recorded" and b["match"]["earned"] == 3.0               # 3% of the recorded deposit
+    assert b["traded"] == {"spent": 20.0, "returned": 12.0}
+    assert b["available"] == round(60.0 + 3.0 - 20.0 + 12.0, 2)
+    # A recorded SGOV dividend replaces the estimate.
+    store.ledger.record("dividend", "trading", date(2026, 10, 2), ticker="SGOV", cash=29.5, source="manual")
+    assert income.budget(store, tmp_path, as_of)["interest"] == {
+        "earned": 29.5, "basis": "recorded", "items": [{"date": "2026-10-02", "amount": 29.5, "basis": "recorded"}]}
 
 
-def test_trading_capital_is_not_replenished_each_day(tmp_path):
+def test_no_start_date_means_no_budget(tmp_path):
+    assert income.budget(Store(tmp_path), tmp_path, DAY)["available"] == 0.0
+
+
+def _closes(sgov=100.0, bill_now=4.0, bill_then=4.0, days=300):
+    idx = pd.bdate_range(end="2026-10-30", periods=days)
+    bill = pd.Series(bill_then, index=idx)
+    bill.iloc[-60:] = bill_now
+    return pd.DataFrame({"SGOV": sgov, "^IRX": bill}, index=idx)
+
+
+@pytest.mark.parametrize("last_div, bill_now, status", [(0.33, 4.0, "ok"), (0.33, 3.2, "falling"), (0.15, 3.2, "dried")])
+def test_interest_health_flags_falling_and_dried_up_yields(tmp_path, monkeypatch, last_div, bill_now, status):
     store = Store(tmp_path)
-    store.ledger.contribute(5000.0, DAY, sleeve="investing", settle_date=DAY)
-    store.ledger.transfer("investing", "trading", DAY, cash=1000.0)
-    store.ledger.fill("trading", "buy", "AAA", 10.0, 50.0, DAY, settle_date=DAY)
-    store.ledger.fill("trading", "sell", "AAA", 10.0, 30.0, date(2026, 10, 2), settle_date=date(2026, 10, 5))
-    later = date(2026, 10, 9)
-    p = capital.reallocation(store, later, {"AAA": 30.0})
-    assert p["transfers"] == []                    # Trading lost $200; nothing refills it
-    assert p["sleeves"]["trading"]["funded"] == 1000.0
+    store.ledger.record("opening_position", "trading", DAY, ticker="SGOV", quantity=100.0, source="manual")
+    divs = [(date(2026, m, 1), 0.33) for m in range(1, 10)] + [(date(2026, 10, 1), last_div)]
+    monkeypatch.setattr(income, "_dividends", lambda cache, t: divs)
+    monkeypatch.setattr(income, "alternatives", lambda cache, as_of, st: {"pick": "SHY", "status": st})
+    h = income.health(store, tmp_path, date(2026, 10, 30), closes=_closes(bill_now=bill_now))
+    assert h["status"] == status
+    assert round(h["latest_yield"], 4) == round(last_div * 12 / 100, 4)
+    assert (h["alternatives"] is None) == (status == "ok")
+    assert h["monthly_interest_now"] == round(100 * last_div, 2)
 
 
-def test_the_daily_plan_is_bounded_by_settled_cash_and_skips_holidays(tmp_path):
+def test_retiring_investing_keeps_the_account_and_backs_up_first(tmp_path):
     store = Store(tmp_path)
-    store.ledger.contribute(10.0, DAY, sleeve="investing", settle_date=DAY)
-    plan = capital.daily_plan(store, DAY)
-    assert plan["planned"] == 27.61 and plan["buy"] == 10.0 and plan["shortfall"] == 17.61
-    assert any("not a deposit" in n for n in plan["notes"])
-    holiday = capital.daily_plan(store, date(2026, 11, 26))          # Thanksgiving
-    assert holiday["session"] == "2026-11-27"
-    reserved = capital.daily_plan(store, DAY, reserved_today=8.0)
-    assert reserved["buy"] == 2.0
+    con = store.con
+    con.execute("INSERT INTO sleeves VALUES ('rh-roth-ira', 'investing', '2026-10-01T00:00:00Z')")
+    con.commit()
+    con.execute("INSERT INTO events (event_uid, account_id, sleeve, kind, trade_date, settle_date, ticker, quantity,"
+                " cash, transfer_id, source, recorded_at) VALUES ('a', 'rh-roth-ira', 'investing', 'opening_position',"
+                " '2026-10-01', '2026-10-01', 'SGOV', 40, 0, NULL, 'migration', 'x'), ('b', 'rh-roth-ira', 'investing',"
+                " 'transfer', '2026-10-02', '2026-10-02', 'SGOV', -10, 0, 't1', 'manual', 'x'), ('c', 'rh-roth-ira',"
+                " 'trading', 'transfer', '2026-10-02', '2026-10-02', 'SGOV', 10, 0, 't1', 'manual', 'x')")
+    con.commit()
+    before = store.ledger.state(None, DAY.replace(day=5)).positions
+    out = store.retire_investing(DAY.replace(day=5), backup_dir=tmp_path / "bk")
+    assert (tmp_path / "bk").exists() and out["deleted_events"] >= 2
+    assert store.ledger.state(None, DAY.replace(day=5)).positions == before == {"SGOV": 40.0}
+    assert not con.execute("SELECT 1 FROM events WHERE sleeve = 'investing'").fetchone()
+    assert store.get("global", "income_start") == "2026-10-05"
+    assert store.retire_investing(DAY.replace(day=6)) is None                       # once
+    with pytest.raises(Exception, match="append-only"):                             # the guards are back
+        con.execute("DELETE FROM events")

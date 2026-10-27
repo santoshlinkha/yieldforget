@@ -108,7 +108,7 @@ def parse(text: str) -> list[Row]:
     return rows
 
 
-def preview(ledger: Ledger, text: str, sleeve: str = "investing") -> list[Row]:
+def preview(ledger: Ledger, text: str, sleeve: str = "trading") -> list[Row]:
     rows = parse(text)
     held: dict[str, float] = {}
     for row in rows:
@@ -126,7 +126,7 @@ def preview(ledger: Ledger, text: str, sleeve: str = "investing") -> list[Row]:
     return rows
 
 
-def commit(ledger: Ledger, rows: list[Row], sleeve: str = "investing") -> dict:
+def commit(ledger: Ledger, rows: list[Row], sleeve: str = "trading") -> dict:
     """Write the previewed rows that are new; returns what was written and skipped."""
     written, skipped, warnings = 0, 0, []
     for row in sorted(rows, key=lambda r: (r.trade_date or "", r.line)):
