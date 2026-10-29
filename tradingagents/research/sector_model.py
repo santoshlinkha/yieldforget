@@ -212,7 +212,8 @@ def run(cache_dir: Path, store=None, progress=None, force: bool = False) -> dict
     cut = close["SPY"].dropna().index[-1]
     input_key = K.key({"cutoff": str(cut.date()), "prices": K.prices_hash(close, cut), "version": VERSION,
                        "code": K.code_hash("research/sector_model.py")})
-    saved = latest(cache_dir)
+    f = Path(cache_dir) / "sector_model" / "latest.json"
+    saved = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
     if not force and saved and saved.get("input_key") == input_key:
         say("sector model: same inputs as the saved forecast, loaded it")
         return {**saved, "reused": True}

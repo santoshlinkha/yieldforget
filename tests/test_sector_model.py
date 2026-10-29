@@ -51,3 +51,21 @@ def test_the_winner_is_the_top_ranked_stock_of_each_sector():
                            "CCC": {"rank": 40, "of": 500, "member": True}}}
     w = S.winners(decision, members)
     assert w["XLK"]["ticker"] == "BBB" and w["XLU"]["ticker"] == "CCC" and w["XLK"]["name"] == "Beta"
+
+
+def test_the_same_prices_and_code_load_the_saved_forecast_instead_of_refitting(tmp_path, monkeypatch):
+    import tradingagents.research.prices as prices
+
+    close = _close(n=4700)
+    close.index = pd.bdate_range("2008-01-01", periods=len(close))     # the study's folds start in 2010
+    monkeypatch.setattr(prices, "bars", lambda tickers, cache_dir: {"Close": close})
+    studies = []
+    real = S.study
+    monkeypatch.setattr(S, "study", lambda *a, **k: (studies.append(1), real(*a, **k))[1])
+    first = S.run(tmp_path)
+    again = S.run(tmp_path)
+    assert len(studies) == 1 and again["reused"] and again["forecast"] == first["forecast"]
+    S.run(tmp_path, force=True)                                       # asked: fitted again
+    assert len(studies) == 2
+    close.iloc[-1, 0] *= 1.01                                          # a changed close is new data
+    assert not S.run(tmp_path).get("reused") and len(studies) == 3

@@ -169,6 +169,10 @@ def test_every_model_is_refitted_only_every_20_sessions_and_reused_in_between(tm
     first = Z.run(store, tmp_path)
     assert {"xgb_rank", "lgbm_regression", "mamba"} <= set(fits)
     n = len(fits)
+    runs = store.con.execute("SELECT COUNT(*) FROM model_zoo_runs").fetchone()[0]
+    same = Z.run(store, tmp_path)                                 # same inputs: the saved run, nothing fitted or saved
+    assert same["reused"] and same["id"] == first["id"] and len(fits) == n
+    assert store.con.execute("SELECT COUNT(*) FROM model_zoo_runs").fetchone()[0] == runs
     again = Z.run(store, tmp_path, force=True)                    # same close: every fitted model is reused
     assert len(fits) == n and again["id"] != first["id"], (fits, Z.latest(store.con)["notes"])
     run = Z.latest(store.con)
