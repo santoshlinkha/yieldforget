@@ -400,6 +400,12 @@ def _agent_app(tmp_path, monkeypatch):
 
     monkeypatch.setenv("GOOGLE_API_KEY", "x")
     monkeypatch.setenv("TRADINGAGENTS_NO_PAID_AI", "1")
+    import tradingagents.events.sources as event_sources        # no network in tests: the event sync is a no-op
+    monkeypatch.setattr(event_sources, "sync", lambda cache, **k: [])
+    import tradingagents.research.sector_model as sector_model    # nor the morning's signals and sector steps
+    import tradingagents.stocks.pipeline as pipeline
+    monkeypatch.setattr(pipeline, "run_batch", lambda *a, **k: {"reused": True})
+    monkeypatch.setattr(sector_model, "run", lambda *a, **k: {})
     return srv, srv.App(tmp_path / "my_portfolio.json", tmp_path / "my_buys.json", tmp_path / "u.json",
                         {**srv.DEFAULT_CONFIG, "data_cache_dir": str(tmp_path / "c"), "results_dir": str(tmp_path / "r")})
 
@@ -505,13 +511,15 @@ def test_the_morning_run_is_due_once_per_close_after_its_time_and_runs_each_step
     monkeypatch.setattr(pipeline, "run_batch", lambda *a, **k: calls.append(("signals", a[4].horizons)) or {"reused": True})
     monkeypatch.setattr(sector_model, "run", lambda *a, **k: calls.append(("sector",)) or {})
     monkeypatch.setattr(srv, "get_sp500_members", lambda cache: ["AAA"])
+    import tradingagents.events.sources as event_sources
+    monkeypatch.setattr(event_sources, "sync", lambda cache: calls.append(("events",)) or [{"source": "bls", "status": "ok"}])
     assert app.start_morning()
     for _ in range(100):
         if not app.morning.running:
             break
         time.sleep(0.05)
     state = app.store.get("global", "schedule_state")
-    assert state["cutoff"] == "2026-10-28" and state["error"] is None and len(state["steps"]) == 7
+    assert state["cutoff"] == "2026-10-28" and state["error"] is None and len(state["steps"]) == 8
     assert ("zoo",) in calls and ("decision", True) in calls and sum(c[0] == "forecast" for c in calls) == 3
     assert ("signals", (5, 20, 60)) in calls and ("sector",) in calls
     assert [s.get("reused") for s in state["steps"] if s["step"].startswith("Screener")] == [True]

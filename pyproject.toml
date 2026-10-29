@@ -50,6 +50,7 @@ research = [
     "arch>=7.0",
     "scikit-learn>=1.6",
     "mambapy>=1.2",          # Mamba state-space model in plain PyTorch (mamba-ssm's CUDA kernels do not build on Windows)
+    "openpyxl>=3.1",         # the policy uncertainty index (.xlsx) in tradingagents.events
 ]
 # TimesFM 3.0 (Google): research-only challenger. Its weights are licensed for non-commercial, non-production use
 # (timesfm-non-commercial-license-v1.0); the app scores it only after the owner accepts that license in Settings.

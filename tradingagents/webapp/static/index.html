@@ -798,6 +798,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           <label>Refit models every (trading sessions)<input type="number" id="schEvery" min="5" max="120" step="1"></label>
         </div>
         <fieldset class="small" style="margin:4px 0 8px"><legend>Each morning, make and save</legend>
+          <label class="check"><input type="checkbox" data-step="events"> Release calendars and policy indices</label>
           <label class="check"><input type="checkbox" data-step="funds"> Fund forecasts</label>
           <label class="check"><input type="checkbox" data-step="models"> Every model's scores</label>
           <label class="check"><input type="checkbox" data-step="decision"> The daily decision</label>
@@ -1278,7 +1279,7 @@ async function loadSchedule() {
     $("schOn").checked = !!st.enabled; $("schAt").value = st.morning_at || "07:30"; $("schEvery").value = st.retrain_every_sessions || 20;
     const tfm = d.timesfm3 || {};
     schTfmAccepted = tfm.license_accepted || null;
-    const on = {funds: true, models: true, decision: true, signals: true, sector: true, ...(st.steps || {})};
+    const on = {events: true, funds: true, models: true, decision: true, signals: true, sector: true, ...(st.steps || {})};
     document.querySelectorAll("#schedCard [data-step]").forEach(c => { c.checked = on[c.dataset.step] !== false; });
     $("schTfm").checked = !!(tfm.enabled && tfm.license_accepted);
     $("schTfmNote").textContent = tfm.license_accepted ? `License accepted on ${tfm.license_accepted}.` : "Off: its license allows non-commercial, non-production use only.";

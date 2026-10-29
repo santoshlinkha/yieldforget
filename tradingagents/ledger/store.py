@@ -36,7 +36,8 @@ GLOBAL_DEFAULTS = {
     # trading sessions old.
     "schedule": {"enabled": True, "morning_at": "07:30", "retrain_every_sessions": 20,
                  # What the morning run makes; each one is saved and, on the same inputs, loaded instead of made again.
-                 "steps": {"funds": True, "models": True, "decision": True, "signals": True, "sector": True}},
+                 "steps": {"events": True, "funds": True, "models": True, "decision": True, "signals": True,
+                           "sector": True}},
     "schedule_state": {},     # the last morning run: {"cutoff", "finished_at", "steps", "error"} (written by the app)
     "ai_budget": {"daily_usd": 1.0, "monthly_usd": 10.0, "daily_requests": 200, "monthly_requests": 2000},
     "ai_prices": {},          # "provider/model": {"input": $/M, "output": $/M, "cached_input": $/M}

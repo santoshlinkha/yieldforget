@@ -245,7 +245,7 @@ def _cooldown(provider: str, model: str, exc_text: str, now: datetime) -> tuple[
 
 
 # What the morning run makes (Settings > Every morning); each is saved, and loaded again on the same inputs.
-MORNING_STEPS = {"funds": True, "models": True, "decision": True, "signals": True, "sector": True}
+MORNING_STEPS = {"events": True, "funds": True, "models": True, "decision": True, "signals": True, "sector": True}
 
 
 def _today() -> str:
@@ -803,6 +803,15 @@ class App:
             etfs = [t for t in dict.fromkeys([*etf_list(read_config(self.universe_path)), *held])
                     if t not in ("SGOV", "BIL")]
             model = (self.store.settings("trading") or {}).get("forecast_model") or "xgb_quantile"
+            if on["events"]:
+                def events():
+                    from tradingagents.events.sources import sync
+
+                    report = sync(self.cache_dir)
+                    bad = [f"{r['source']} {r['status']}" for r in report if r["status"] != "ok"]
+                    if bad:
+                        raise RuntimeError("; ".join(bad))
+                step("Release calendars and policy / geopolitical indices", 0.01, events)
             if on["funds"]:
                 for i, h in enumerate((20, 60)):
                     step(f"Fund forecasts, {h} sessions (Chronos-2)", 0.02 + 0.04 * i,
