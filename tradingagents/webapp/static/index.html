@@ -193,6 +193,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .note-text { color: var(--warn); }
 .side.paper { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); border: 1px dashed currentColor; }
+.side sup { font-size: .7em; line-height: 0; }
 .amt { font-weight: 650; font-variant-numeric: tabular-nums; }
 .why { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -737,7 +738,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         <div class="row fc-controls" style="margin-top:0">
           <div style="width:170px"><label for="fcUniverse">Trained on</label><select id="fcUniverse"><option value="etf" selected>Major ETFs</option><option value="stock">S&amp;P 500 stocks</option></select></div>
           <fieldset><legend>Horizons</legend><label class="check"><input type="checkbox" name="fcH" value="5"> 5 sessions</label><label class="check"><input type="checkbox" name="fcH" value="20" checked> 20 sessions</label><label class="check"><input type="checkbox" name="fcH" value="60"> 60 sessions</label></fieldset>
-          <fieldset><legend>Models</legend><label class="check"><input type="checkbox" name="fcM" value="elastic_net" checked> Elastic Net</label><label class="check"><input type="checkbox" name="fcM" value="momentum"> Momentum</label><label class="check"><input type="checkbox" name="fcM" value="xgb"> XGBoost</label><label class="check"><input type="checkbox" name="fcM" value="xgb_rank"> XGBoost ranking</label><label class="check"><input type="checkbox" name="fcM" value="xgb_quantile"> XGBoost quantiles</label><label class="check" title="Amazon's pretrained time-series model, run on this machine; nothing is fitted"><input type="checkbox" name="fcM" value="chronos2"> Chronos-2 (pretrained)</label></fieldset>
+          <fieldset><legend>Models</legend><label class="check"><input type="checkbox" name="fcM" value="elastic_net" checked> Elastic Net</label><label class="check"><input type="checkbox" name="fcM" value="momentum"> Momentum</label><label class="check"><input type="checkbox" name="fcM" value="xgb"> XGBoost</label><label class="check"><input type="checkbox" name="fcM" value="xgb_rank"> XGBoost ranking</label><label class="check"><input type="checkbox" name="fcM" value="xgb_quantile"> XGBoost quantiles</label><label class="check" title="Amazon's pretrained time-series model, run on this machine; nothing is fitted"><input type="checkbox" name="fcM" value="chronos2"> Chronos-2 (pretrained)</label><label class="check" title="Google's pretrained model, run on this machine; research only (non-commercial license, accepted in Settings); weight 0 in the combination"><input type="checkbox" name="fcM" value="timesfm3"> TimesFM 3.0 (research only)</label></fieldset>
           <label class="check" title="Also run each ticked model with Chronos-2's forecast as two extra inputs (ETFs only; about a minute more on the GPU)"><input type="checkbox" id="fcStack"> + Chronos inputs</label>
           <button id="fcRun">Run selected</button>
           <span class="muted" id="fcStatus"></span>
@@ -795,6 +796,15 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           <label>After (this computer's time)<input type="time" id="schAt"></label>
           <label>Refit models every (trading sessions)<input type="number" id="schEvery" min="5" max="120" step="1"></label>
         </div>
+        <fieldset class="small" style="margin:4px 0 8px"><legend>Each morning, make and save</legend>
+          <label class="check"><input type="checkbox" data-step="funds"> Fund forecasts</label>
+          <label class="check"><input type="checkbox" data-step="models"> Every model's scores</label>
+          <label class="check"><input type="checkbox" data-step="decision"> The daily decision</label>
+          <label class="check"><input type="checkbox" data-step="signals"> Screener signals</label>
+          <label class="check"><input type="checkbox" data-step="sector"> Sector forecast</label>
+          <div class="muted">Each is saved. On the same data and models it is loaded, not made again; it is made anew only
+            after a new close, a refit or a code change.</div>
+        </fieldset>
         <div class="col-legend-box small" style="margin:4px 0 8px">
           <label class="check"><input type="checkbox" id="schTfm"> <b>TimesFM 3.0 (research only).</b> I accept its
             <a href="https://github.com/google-research/timesfm" target="_blank" rel="noopener">non-commercial license</a>:
@@ -962,7 +972,7 @@ async function loadTrade() {
     const sz = (x && x.size) || {};
     // The tested policy buys at the next session's close, whatever it is: that is the entry. The last close is a
     // dated reference for sizing and for the illustrative dollar levels; stop and target follow the actual fill.
-    $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side ${experimental ? "paper" : "buy"}">${experimental ? "TOP MODEL CANDIDATE" : "BUY"}</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
+    $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side ${experimental ? "paper" : "buy"}">${experimental ? "1<sup>st</sup> Pick" : "BUY"}</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
         <button class="ghost small-btn" id="boughtBest" title="Record your actual fill (Portfolio tab)">I bought this</button></div>
       <table class="compact" style="margin-top:10px">
        <tr><th class="l">Entry</th><td><b>at the close of ${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever that close is <span class="muted">(the policy the model was tested on; no limit price)</span></td></tr>
@@ -1266,6 +1276,9 @@ async function loadSchedule() {
   if (document.activeElement?.closest?.("#schedCard") == null) {
     $("schOn").checked = !!st.enabled; $("schAt").value = st.morning_at || "07:30"; $("schEvery").value = st.retrain_every_sessions || 20;
     const tfm = d.timesfm3 || {};
+    schTfmAccepted = tfm.license_accepted || null;
+    const on = {funds: true, models: true, decision: true, signals: true, sector: true, ...(st.steps || {})};
+    document.querySelectorAll("#schedCard [data-step]").forEach(c => { c.checked = on[c.dataset.step] !== false; });
     $("schTfm").checked = !!(tfm.enabled && tfm.license_accepted);
     $("schTfmNote").textContent = tfm.license_accepted ? `License accepted on ${tfm.license_accepted}.` : "Off: its license allows non-commercial, non-production use only.";
   }
@@ -1280,7 +1293,8 @@ async function loadSchedule() {
 }
 var schTfmAccepted = null;   // the date already on record, kept when saving again
 $("schSave").onclick = async () => {
-  const value = {enabled: $("schOn").checked, morning_at: $("schAt").value || "07:30", retrain_every_sessions: Math.max(5, Math.min(120, +$("schEvery").value || 20))};
+  const steps = Object.fromEntries([...document.querySelectorAll("#schedCard [data-step]")].map(c => [c.dataset.step, c.checked]));
+  const value = {enabled: $("schOn").checked, morning_at: $("schAt").value || "07:30", retrain_every_sessions: Math.max(5, Math.min(120, +$("schEvery").value || 20)), steps};
   const on = $("schTfm").checked;
   const timesfm3 = {enabled: on, license_accepted: on ? (schTfmAccepted || new Date().toISOString().slice(0, 10)) : null};
   try { await api("/api/settings", {values: {schedule: value, timesfm3}}); $("schMsg").innerHTML = '<span class="pos">✓ Saved.</span>'; loadSchedule(); }
@@ -1490,7 +1504,7 @@ let fcSort = {key: "mean", dir: -1}, lastFc = null, fcView = null, fcWasRunning 
 const fcChecked = name => [...document.querySelectorAll(`input[name=${name}]:checked`)].map(i => i.value);
 function fcModels() {
   const picked = fcChecked("fcM");
-  return $("fcStack").checked ? [...picked, ...picked.filter(m => m !== "chronos2").map(m => m + "+chronos")] : picked;
+  return $("fcStack").checked ? [...picked, ...picked.filter(m => m !== "chronos2" && m !== "timesfm3").map(m => m + "+chronos")] : picked;
 }
 async function loadLive() {
   try {

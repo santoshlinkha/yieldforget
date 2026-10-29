@@ -318,3 +318,33 @@ def test_a_forecast_from_the_same_inputs_is_not_trained_or_saved_again(tmp_path,
     forced = engine.run_forecast(con, tmp_path, tickers, force=True, **kw)
     assert not other.get("reused") and not forced.get("reused")
     assert con.execute("SELECT COUNT(*) FROM forecast_runs").fetchone()[0] == 3
+
+
+def test_timesfm3_forecasts_funds_like_chronos_but_never_carries_weight(tmp_path, monkeypatch):
+    import numpy as np
+
+    from tradingagents.ledger.db import connect
+    from tradingagents.research import engine, foundation
+
+    close, high, low, volume, market = _market(n_assets=6, years=7)
+    close = close.rename(columns={"CASH": "BIL"})
+    high, low, volume = (x.rename(columns={"CASH": "BIL"}) for x in (high, low, volume))
+    monkeypatch.setattr(engine, "bars", _fake_bars(close, high, low, volume, market))
+
+    class Out:
+        def __init__(self, base):
+            self.forecast = np.full(20, base + 0.01)
+            self.quantiles = np.tile(np.linspace(base - 0.05, base + 0.05, 9), (20, 1))
+
+    class Fake:
+        def predict_batch(self, contexts, horizon, **kw):
+            return iter([Out(float(c[-1])) for c in contexts])
+
+    for dev in ("cpu", "cuda"):
+        monkeypatch.setitem(foundation._TIMESFM, dev, Fake())
+    con = connect(tmp_path / "p.sqlite3")
+    tickers = [c for c in close.columns if c != "BIL"]
+    run = engine.run_forecast(con, tmp_path, tickers, horizon=20, model="timesfm3", device_setting="cpu",
+                              artifact_dir=tmp_path / "m")
+    assert run["model"] == "timesfm3" and len(run["forecasts"]) == len(tickers)
+    assert engine.model_weight({**run, "calibration": {}})[0] == 0.0          # shown, never weighted

@@ -500,14 +500,21 @@ def test_the_morning_run_is_due_once_per_close_after_its_time_and_runs_each_step
     monkeypatch.setattr(engine, "run_forecast", lambda *a, **k: calls.append(("forecast", k["model"], k["horizon"])) or {})
     monkeypatch.setattr(model_zoo, "run", lambda *a, **k: calls.append(("zoo",)) or {"reused": True})
     monkeypatch.setattr(daily, "run", lambda *a, **k: calls.append(("decision", a[4])) or {"id": "x"})
+    import tradingagents.research.sector_model as sector_model
+    import tradingagents.stocks.pipeline as pipeline
+    monkeypatch.setattr(pipeline, "run_batch", lambda *a, **k: calls.append(("signals", a[4].horizons)) or {"reused": True})
+    monkeypatch.setattr(sector_model, "run", lambda *a, **k: calls.append(("sector",)) or {})
+    monkeypatch.setattr(srv, "get_sp500_members", lambda cache: ["AAA"])
     assert app.start_morning()
     for _ in range(100):
         if not app.morning.running:
             break
         time.sleep(0.05)
     state = app.store.get("global", "schedule_state")
-    assert state["cutoff"] == "2026-10-28" and state["error"] is None and len(state["steps"]) == 5
+    assert state["cutoff"] == "2026-10-28" and state["error"] is None and len(state["steps"]) == 7
     assert ("zoo",) in calls and ("decision", True) in calls and sum(c[0] == "forecast" for c in calls) == 3
+    assert ("signals", (5, 20, 60)) in calls and ("sector",) in calls
+    assert [s.get("reused") for s in state["steps"] if s["step"].startswith("Screener")] == [True]
     assert not app.morning_due(dt(2026, 10, 29, 9, 0))                     # done for this close
     app.store.set("global", "schedule", {"enabled": False, "morning_at": "07:30", "retrain_every_sessions": 20})
     monkeypatch.setattr(srv.local_store, "last_final_session", lambda now=None: d(2026, 10, 29))
@@ -538,7 +545,7 @@ def test_training_inside_the_morning_run_moves_its_bar_and_shows_on_the_models_t
             break
         time.sleep(0.05)
     gate.set()
-    assert seen["fraction"] == pytest.approx(0.40 + 0.35 * 0.5)
+    assert seen["fraction"] == pytest.approx(0.40 + 0.25 * 0.5)          # the models take 40-65% of the bar
     tab = seen["models_tab"]
     assert tab["running"] and tab["via"] == "morning" and tab["progress"] == "Every model: Fitting Mamba"
     assert not app._job_or_morning(app.decisions, "Daily decision")["running"]     # not that tab's work

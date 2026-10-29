@@ -34,7 +34,9 @@ GLOBAL_DEFAULTS = {
     # Every morning (while the app runs): the forecasts, every model's scores and the daily decision for the latest
     # close, once per close. Models are refitted only when their last fit is ``retrain_every_sessions`` or more
     # trading sessions old.
-    "schedule": {"enabled": True, "morning_at": "07:30", "retrain_every_sessions": 20},
+    "schedule": {"enabled": True, "morning_at": "07:30", "retrain_every_sessions": 20,
+                 # What the morning run makes; each one is saved and, on the same inputs, loaded instead of made again.
+                 "steps": {"funds": True, "models": True, "decision": True, "signals": True, "sector": True}},
     "schedule_state": {},     # the last morning run: {"cutoff", "finished_at", "steps", "error"} (written by the app)
     "ai_budget": {"daily_usd": 1.0, "monthly_usd": 10.0, "daily_requests": 200, "monthly_requests": 2000},
     "ai_prices": {},          # "provider/model": {"input": $/M, "output": $/M, "cached_input": $/M}

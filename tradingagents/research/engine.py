@@ -50,12 +50,21 @@ def ranks(run: dict) -> bool:
 
 
 CHRONOS = "chronos2"          # Chronos-2 on its own: pretrained, nothing fitted
+TIMESFM = "timesfm3"          # TimesFM 3.0 on its own: pretrained, nothing fitted; research only (non-commercial license)
+PRETRAINED = (CHRONOS, TIMESFM)
 STACKED = "+chronos"          # suffix: a model given Chronos-2's forecast as two more inputs
+
+
+def pretrained_model(name: str, close, device: str):
+    """The zero-shot forecaster behind a pretrained model's name."""
+    from .foundation import Chronos2, TimesFM3
+
+    return (TimesFM3 if name == TIMESFM else Chronos2)(close, device=device)
 
 
 def factory(name: str, device: str = "cpu"):
     name = name.removesuffix(STACKED)
-    if name == CHRONOS:
+    if name in PRETRAINED:
         return lambda: None   # built in run_forecast, which has the prices it needs
     table = {"zero": Zero, "train_mean": TrainMean, "vol_prior": VolPrior, "momentum": Momentum,
              "elastic_net": ElasticNet,
@@ -143,23 +152,21 @@ def run_forecast(con, cache_dir: Path, tickers: list[str], horizon: int = 20, mo
 
         panel = panel.join(chronos_features(close[tickers], panel, horizon, chronos_device))
         features += CHRONOS_FEATURES
-    if model == CHRONOS:
+    if model in PRETRAINED:
         bags = 0   # nothing is fitted, so refits on resampled data would all be the same
     train = panel[(pd.to_datetime(panel["label_end"]) <= cutoff) & panel["label"].notna()].sort_index(level="date")
     rows = panel.xs(cutoff, level="date", drop_level=False)
     if rows.empty:
         raise ValueError(f"no ticker has a year of prices at {cutoff.date()}, so nothing can be forecast")
     device, why = choose_device(device_setting, len(train))
-    if model == CHRONOS and chronos_device == "cuda" and device_setting != "cpu":
-        device, why = "cuda", "Chronos-2 is a neural network: the GPU is much faster"
+    if model in PRETRAINED and chronos_device == "cuda" and device_setting != "cpu":
+        device, why = "cuda", "a pretrained neural network: the GPU is much faster"
     artifact_dir = Path(artifact_dir or Path(cache_dir) / "forecast_models")
 
     def fit(dev):
-        if model == CHRONOS:
-            from .foundation import Chronos2
-
+        if model in PRETRAINED:
             def make():
-                return Chronos2(close[tickers], device=dev)
+                return pretrained_model(model, close[tickers], dev)
         else:
             make = factory(model, dev)
         prob = Probabilistic(make).fit(train, features, horizon)
@@ -241,6 +248,8 @@ def model_weight(run: dict) -> tuple[float, str]:
         return 0.0, "ranks nothing"
     if run["model"] == CHRONOS:
         return 0.0, "pretraining may include these prices; waits on its live record"
+    if run["model"] == TIMESFM:
+        return 0.0, "research only: its license is non-commercial, non-production"
     if not cal.get("trial"):
         return 0.0, "no walk-forward trial"
     ic, p = cal.get("mean_ic"), cal.get("p_value_holm")
@@ -262,7 +271,7 @@ def combine_runs(runs: list[dict]) -> dict:
     basis = "evidence"
     if not any(w for w, _ in weights.values()):
         basis = "equal"
-        weights = {r["id"]: ((1.0, "equal weight: no model has significant evidence") if ranks(r) and r["model"] != CHRONOS
+        weights = {r["id"]: ((1.0, "equal weight: no model has significant evidence") if ranks(r) and r["model"] not in PRETRAINED
                              else (0.0, weights[r["id"]][1])) for r in runs}
     by_ticker: dict[str, list[tuple[dict, dict]]] = {}
     for r in runs:
@@ -387,7 +396,7 @@ def latest_run(con, horizon: int | None = None, model: str | None = None, univer
     """
     sql, args = "SELECT id FROM forecast_runs WHERE universe = ?", [universe]
     if not model:
-        sql += f" AND model != '{CHRONOS}'"
+        sql += f" AND model NOT IN ('{CHRONOS}', '{TIMESFM}')"
     if horizon:
         sql += " AND horizon = ?"
         args.append(horizon)
@@ -471,10 +480,9 @@ def forecast_one(con, cache_dir: Path, run: dict, symbol: str, cash: str = "BIL"
 
         rows = rows.join(chronos_features(close[[symbol]], rows, run["horizon"], "cuda" if cuda_usable() else "cpu"))
     model = load_model(run)
-    if run["model"] == CHRONOS:
-        from .foundation import Chronos2
-
-        model.model = Chronos2(close[[symbol]], device="cuda" if cuda_usable() else "cpu").fit(None, [], run["horizon"])
+    if run["model"] in PRETRAINED:
+        model.model = pretrained_model(run["model"], close[[symbol]], "cuda" if cuda_usable() else "cpu").fit(
+            None, [], run["horizon"])
     row = model.predict(rows).iloc[0]
     flags = [] if symbol in config.get("tickers", []) else [
         f"this model was trained on {UNIVERSES.get(run['universe'], run['universe'])} and {symbol} was not among them"

@@ -244,6 +244,10 @@ def _cooldown(provider: str, model: str, exc_text: str, now: datetime) -> tuple[
     return None
 
 
+# What the morning run makes (Settings > Every morning); each is saved, and loaded again on the same inputs.
+MORNING_STEPS = {"funds": True, "models": True, "decision": True, "signals": True, "sector": True}
+
+
 def _today() -> str:
     return date.today().isoformat()
 
@@ -658,6 +662,10 @@ class App:
         models = list(dict.fromkeys(body.get("models") or [body.get("model") or "elastic_net"]))
         for m in models:
             factory(m)   # an unknown name fails here, before anything starts
+        from tradingagents.stocks.model_zoo import timesfm_allowed
+
+        if "timesfm3" in models and not timesfm_allowed(self.store):
+            raise ValueError("TimesFM 3.0 is research only: accept its non-commercial license in Settings first")
         universe = body.get("universe") or "etf"
         if universe == "etf":
             context, _ = self.store.portfolio("combined", _today())
@@ -771,6 +779,7 @@ class App:
 
         g = self.store.settings("global")
         every = int((g.get("schedule") or {}).get("retrain_every_sessions") or 20)
+        on = {**MORNING_STEPS, **((g.get("schedule") or {}).get("steps") or {})}   # Settings: what the morning makes
         refit_ensemble = bool((body or {}).get("refit_ensemble"))
         cutoff = local_store.last_final_session().isoformat()
 
@@ -794,15 +803,23 @@ class App:
             etfs = [t for t in dict.fromkeys([*etf_list(read_config(self.universe_path)), *held])
                     if t not in ("SGOV", "BIL")]
             model = (self.store.settings("trading") or {}).get("forecast_model") or "xgb_quantile"
-            for i, h in enumerate((20, 60)):
-                step(f"Fund forecasts, {h} sessions (Chronos-2)", 0.02 + 0.04 * i,
-                     lambda h=h: run_forecast(self.store.con, self.cache_dir, etfs, horizon=h, model=CHRONOS,
-                                              universe="etf", device_setting=device))
-            step(f"Fund forecasts, 20 sessions ({model})", 0.10,
-                 lambda: run_forecast(self.store.con, self.cache_dir, etfs, horizon=20, model=model, universe="etf",
-                                      device_setting=device))
+            if on["funds"]:
+                for i, h in enumerate((20, 60)):
+                    step(f"Fund forecasts, {h} sessions (Chronos-2)", 0.02 + 0.04 * i,
+                         lambda h=h: run_forecast(self.store.con, self.cache_dir, etfs, horizon=h, model=CHRONOS,
+                                                  universe="etf", device_setting=device))
+                step(f"Fund forecasts, 20 sessions ({model})", 0.10,
+                     lambda: run_forecast(self.store.con, self.cache_dir, etfs, horizon=20, model=model, universe="etf",
+                                          device_setting=device))
+                from tradingagents.stocks.model_zoo import timesfm_allowed
+
+                if timesfm_allowed(self.store):
+                    for h in (20, 60):
+                        step(f"Fund forecasts, {h} sessions (TimesFM 3.0, research only)", 0.12,
+                             lambda h=h: run_forecast(self.store.con, self.cache_dir, etfs, horizon=h, model="timesfm3",
+                                                      universe="etf", device_setting=device))
             ens = self._ensemble_age()
-            if refit_ensemble or (ens.get("trained") and (ens.get("age_sessions") or 0) >= every):
+            if on["models"] and (refit_ensemble or (ens.get("trained") and (ens.get("age_sessions") or 0) >= every)):
                 root = Path(__file__).resolve().parents[2]
                 if (root / "experiments" / "stacking_study.py").is_file():
                     def stack():
@@ -829,13 +846,35 @@ class App:
                 return say
 
             def zoo():
-                return model_zoo.run(self.store, self.cache_dir, within("Every model", 0.40, 0.75))
-            step("Every model's scores (refitted when due)", 0.40, zoo)
+                return model_zoo.run(self.store, self.cache_dir, within("Every model", 0.40, 0.65))
+            if on["models"]:
+                step("Every model's scores (refitted when due)", 0.40, zoo)
 
             def decide():
                 return daily.run(self.store, self.cache_dir, date.today(), "barrier_20", True,
-                                 within("Daily decision", 0.75, 1.0))
-            step("The daily decision (models refitted when due)", 0.75, decide)
+                                 within("Daily decision", 0.65, 0.8))
+            if on["decision"]:
+                step("The daily decision (models refitted when due)", 0.65, decide)
+
+            def signals():
+                from tradingagents.stocks.data import gather
+                from tradingagents.stocks.pipeline import BatchConfig, Progress, run_batch
+
+                names, sources = gather(self.store, "", "", True, True)
+                for t in get_sp500_members(self.cache_dir):
+                    sources.setdefault(t, "sp500")
+                say = within("Screener signals", 0.8, 0.93)
+                return run_batch(self.store.con, self.cache_dir, sorted(sources), sources,
+                                 BatchConfig(horizons=(5, 20, 60), news=False, device=device), Progress(say))
+            if on["signals"]:
+                step("Screener signals, 5/20/60 sessions (models refitted when due)", 0.8, signals)
+
+            def sector():
+                from tradingagents.research import sector_model
+
+                return sector_model.run(self.cache_dir, self.store, within("Sector forecast", 0.93, 1.0))
+            if on["sector"]:
+                step("Sector forecast", 0.93, sector)
             job.fraction = 1.0
             last = self.store.get("global", "schedule_state") or {}
             state = {"cutoff": cutoff, "finished_at": datetime.now().isoformat(timespec="minutes"), "steps": steps,
