@@ -584,7 +584,6 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           <div class="card">
             <div class="card-head"><h3>AI's pick</h3>
               <button class="ghost small-btn" id="runnersAll" hidden title="The AI's analysts screen every ranked stock from a fact sheet and rank the ten they would buy; the full TradingAgents team then analyses their top five, in that order (once a day)">Ask the AI to pick</button></div>
-            <div class="scan-plan" id="scanPlan"></div>
             <div id="aiPickBox"></div>
           </div>
           <div class="card agent-room">
@@ -1083,7 +1082,6 @@ async function loadTrade() {
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
           `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
-    renderScanPlan(t, allPicks);
     $("runnersAll").hidden = false;
     const asked = (t.ai_pick || {}).today;       // once a day: the button rests until tomorrow
     $("runnersAll").disabled = !!asked;
@@ -1200,32 +1198,6 @@ async function runnerAgents(list) {
       });
     } catch (e) { cells.forEach(c => { c.textContent = "–"; }); }
   }
-}
-// Today's scans in four groups of five: the model's picks, the Screener's top by Rank, the AI's own choice and yours.
-// Each runs the agents on the group's stocks not yet analysed today; the server holds the day to its limit.
-function renderScanPlan(t, allPicks) {
-  const sc = t.scans || {used: 0, limit: 0, my_picks: []};
-  const run = async (tickers, extra = {}) => {
-    try { await api("/api/ai-decisions", {tickers, analysts: ["market", "social", "news", "fundamentals"], date: t.data_to, ...extra}); loadAgentReport(); }
-    catch (e) { showError(e.message); }
-  };
-  $("scanPlan").innerHTML =
-    `<div class="scan-head"><b>Today's scans</b> <span class="muted small">${sc.used} of ${sc.limit || "∞"} stocks</span></div>` +
-    `<div class="scan-btns"><button class="ghost small-btn" id="scanModel" title="The model's five picks">Model's picks</button>` +
-    `<button class="ghost small-btn" id="scanRank" title="The Screener's top five by Rank (quality, analysts, upside)">Screener top 5</button>` +
-    `<button class="ghost small-btn" id="scanAi" title="The AI screens every ranked stock and the team analyses its top five (once a day)">AI's choice</button>` +
-    `<button class="ghost small-btn" id="scanMine" title="Your own five (below)">My picks</button></div>` +
-    `<div class="scan-mine"><input id="myPicks" placeholder="Your five: e.g. AAPL, MSFT, COST" value="${esc((sc.my_picks || []).join(", "))}">` +
-    `<button class="ghost small-btn" id="myPicksSave">Save</button></div>`;
-  $("scanModel").onclick = () => run(allPicks.slice(0, 5).map(x => x.ticker));
-  $("scanAi").onclick = () => $("runnersAll").click();
-  $("scanRank").onclick = async () => { const pool = await aiPool(); pool.length ? run(pool) : showError("The Screener has no ranked stocks yet."); };
-  $("scanMine").onclick = () => sc.my_picks.length ? run(sc.my_picks.slice(0, 5)) : showError("Enter your five tickers and press Save first.");
-  $("myPicksSave").onclick = async () => {
-    const list = [...new Set($("myPicks").value.toUpperCase().split(/[\s,;]+/).filter(Boolean))].slice(0, 5);
-    try { await api("/api/settings", {scope: "global", values: {ai_my_picks: list}}); sc.my_picks = list; $("myPicks").value = list.join(", "); }
-    catch (e) { showError(e.message); }
-  };
 }
 // The AI's own pool: the Screener's top stocks by Rank (quality, analyst consensus, target upside), not the model's.
 const AI_POOL = 5;
