@@ -29,33 +29,70 @@ def build_prompt(ticker: str, day: str, cache_dir: Path | None = None) -> str:
     return build(ticker.upper(), day)
 
 
-_RESPONSE = re.compile(r"^#{1,4}\s*Response\s+(\d+)\s*[:.\-–]?[^\n]*$", re.M | re.I)
+# A response heading in whatever form a chat app writes it: "## Response 12: ...", "**Response 12 of 12 - ...**",
+# "### Request 12 — ...", "Response 12." on its own line.
+_RESPONSE = re.compile(r"^[ \t>]*(?:#{1,6}[ \t]*)?[*_]{0,3}[ \t]*(?:Response|Request|Step)[ \t]+(\d{1,2})\b(?:[ \t]+of[ \t]+\d+)?"
+                       r"[^\n]*$", re.M | re.I)
+# The fields that tell which agent a JSON object answers, when the headings cannot be matched.
+_KEYS = {"portfolio_manager": {"rating", "executive_summary"}, "trader": {"action", "reasoning"},
+         "research_manager": {"recommendation", "strategic_actions"}, "sentiment": {"overall_band", "narrative"}}
 
 
 def parse_steps(text: str) -> dict[str, str]:
-    """Each '## Response N' section of an answer, by step key (``upstream_prompt.STEPS``)."""
+    """Each response section of an answer, by step key (``upstream_prompt.STEPS``). A step answered twice keeps
+    its last section."""
     from tradingagents.agents.upstream_prompt import STEPS
 
-    marks = list(_RESPONSE.finditer(text or ""))
+    text = text or ""
+    marks = list(_RESPONSE.finditer(text))
     out = {}
     for i, m in enumerate(marks):
         n = int(m.group(1))
         if 1 <= n <= len(STEPS):
             end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
-            out[STEPS[n - 1][0]] = text[m.end():end].strip()
+            body = text[m.end():end].strip()
+            if body:
+                out[STEPS[n - 1][0]] = body
+    return out
+
+
+def json_objects(text: str) -> list[dict]:
+    """Every JSON object in ``text``, fenced or not, in order (a proper decoder, so nested braces are fine)."""
+    dec, out, i = json.JSONDecoder(), [], 0
+    text = (text or "").replace("“", '"').replace("”", '"')
+    while True:
+        i = text.find("{", i)
+        if i < 0:
+            return out
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i += 1
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+        i = end
+
+
+def _clean(data: dict) -> dict:
+    """Markdown and stray spacing out of a chat's JSON values ("**Buy**" -> "Buy"); enum spellings normalised."""
+    out = {}
+    for k, v in data.items():
+        if isinstance(v, str):
+            v = re.sub(r"^[\s*_`]+|[\s*_`]+$", "", v)
+            if k in ("rating", "recommendation", "action", "overall_band"):
+                v = v.title().replace("Mildly bullish", "Mildly Bullish")
+            if k == "confidence":
+                v = v.lower()
+            if k in ("price_target", "entry_price", "stop_loss", "overall_score"):
+                v = v.replace("$", "").replace(",", "").strip() or None
+        out[k] = v
     return out
 
 
 def _json_of(section: str) -> dict | None:
-    found = re.findall(r"```(?:json)?\s*(\{.*\})\s*```", section, flags=re.S) or re.findall(r"(\{.*\})", section, re.S)
-    for raw in reversed(found):
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict):
-            return data
-    return None
+    found = json_objects(section)
+    return found[-1] if found else None
 
 
 def final_state(text: str, ticker: str, day: str) -> tuple[dict, dict] | None:
@@ -69,6 +106,15 @@ def final_state(text: str, ticker: str, day: str) -> tuple[dict, dict] | None:
     from tradingagents.agents.upstream_prompt import STRUCTURED_STEPS, step_schema
 
     steps = parse_steps(text)
+    objects = json_objects(text)
+    # The older form (one summary block holding the rating and a nested "trader"): read by ``parse_answer``.
+    if len(steps) < 2 and any("rating" in o and isinstance(o.get("trader"), dict) for o in objects):
+        return None
+    # A structured step whose heading was not found: the last JSON object in the answer with that agent's fields.
+    for obj in objects:
+        for step, keys in _KEYS.items():
+            if keys <= set(obj) and step_schema(step) is not None and (step not in steps or not _json_of(steps[step])):
+                steps[step] = "```json\n" + json.dumps(obj) + "\n```"
     if not steps:
         return None
     render = {"sentiment": S.render_sentiment_report, "research_manager": S.render_research_plan,
@@ -78,12 +124,14 @@ def final_state(text: str, ticker: str, day: str) -> tuple[dict, dict] | None:
         if step in STRUCTURED_STEPS:
             data = _json_of(body)
             try:
-                obj = step_schema(step).model_validate(data or {})
+                obj = step_schema(step).model_validate(_clean(data or {}))
                 parsed[step] = obj
                 out[step] = render[step](obj)
             except ValidationError as exc:   # kept as written, and said so
                 out[step] = body
-                notes[step] = f"not in the schema ({exc.error_count()} problem(s)); saved as written"
+                notes[step] = ("no JSON object found" if not data else
+                               "not in the schema: " + "; ".join(f"{'.'.join(map(str, e['loc']))} {e['msg']}"
+                                                                  for e in exc.errors()[:3])) + "; saved as written"
         else:
             out[step] = body
     say = lambda who, key: f"\n{who}: {out[key]}" if out.get(key) else ""  # noqa: E731
@@ -119,15 +167,10 @@ def decision_from_steps(meta: dict) -> dict | None:
 
 
 def parse_answer(text: str) -> dict:
-    """The portfolio manager's JSON from a pasted answer: the last JSON object with a valid ``rating``."""
-    candidates = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text or "", flags=re.S)
-    if not candidates:   # no fenced block: any brace-delimited object that names a rating
-        candidates = re.findall(r"(\{[^{}]*\"rating\"[^{}]*\})", text or "", flags=re.S)
-    for raw in reversed(candidates):
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
+    """The portfolio manager's decision from a pasted answer: the last JSON object with a valid ``rating``
+    (fenced or not), else a plain "Rating: ..." line."""
+    for data in reversed(json_objects(text)):
+        data = _clean(data)
         rating = str(data.get("rating", "")).strip().title()
         if rating in RATINGS:
             return {**data, "rating": rating, "insufficient_evidence": bool(data.get("insufficient_evidence"))}
@@ -135,8 +178,11 @@ def parse_answer(text: str) -> dict:
     if m:
         return {"rating": m.group(1).title(), "executive_summary": "", "investment_thesis": "",
                 "insufficient_evidence": False}
-    raise ValueError("no rating found: the answer must end with the JSON block the prompt asks for "
-                     f"(rating one of {', '.join(RATINGS)})")
+    found = sorted(parse_steps(text))
+    raise ValueError("no portfolio manager decision found: Response 12 must be one JSON object with \"rating\" "
+                     f"(one of {', '.join(RATINGS)}), \"executive_summary\" and \"investment_thesis\". "
+                     + (f"Found responses for: {', '.join(found)}." if found else
+                        "No '## Response N' headings were found either; paste the whole answer."))
 
 
 def decision_markdown(d: dict) -> str:

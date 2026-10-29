@@ -16,7 +16,7 @@ def test_the_last_json_block_with_a_rating_wins():
 
 def test_a_plain_rating_line_is_a_fallback_and_nonsense_is_refused():
     assert parse_answer("Portfolio manager. Final rating: Hold, because the trend is flat.")["rating"] == "Hold"
-    with pytest.raises(ValueError, match="no rating"):
+    with pytest.raises(ValueError, match="no portfolio manager decision"):
         parse_answer('```json\n{"rating": "Strong maybe"}\n```')
 
 
@@ -149,3 +149,34 @@ def test_a_structured_answer_outside_its_schema_is_kept_and_flagged():
     state, meta = manual.final_state(bad, "AMD", "2026-10-28")
     assert "sentiment" in meta["notes"] and '"Sunny"' in state["sentiment_report"]
     assert manual.final_state("no sections here", "AMD", "2026-10-28") is None
+
+
+def test_chat_app_formatting_is_tolerated():
+    import re
+
+    from tradingagents.agents import manual
+
+    # Bold headings with "of 12" and a dash, an upper-case fence label, bold enum values, a "$" price.
+    gemini = re.sub(r"^## Response (\d+): (.*)$", r"**Response \1 of 12 — \2**", ANSWER, flags=re.M)
+    gemini = gemini.replace("```json", "```JSON").replace('"rating": "Overweight"', '"rating": "**overweight**"')
+    gemini = gemini.replace('"price_target": 640', '"price_target": "$640"')
+    state, meta = manual.final_state(gemini, "AMD", "2026-10-28")
+    assert len(meta["steps"]) == 12 and meta["notes"] == {}
+    d = manual.decision_from_steps(meta)
+    assert d["rating"] == "Overweight" and d["price_target"] == 640.0 and d["trader"]["action"] == "Buy"
+    # No headings at all: the structured answers are still found by their fields.
+    bare = re.sub(r"^## Response .*$", "", ANSWER, flags=re.M)
+    state, meta = manual.final_state(bare, "AMD", "2026-10-28")
+    assert manual.decision_from_steps(meta)["rating"] == "Overweight"
+    assert state["trader_investment_plan"].startswith("**Action**: Buy")
+
+
+def test_the_error_says_what_was_found():
+    from tradingagents.agents import manual
+
+    try:
+        manual.parse_answer("## Response 1: Market\ntext\n\n## Response 2: Sentiment\nmore")
+    except ValueError as exc:
+        assert "Found responses for: market, sentiment" in str(exc)
+    else:
+        raise AssertionError("no error")
