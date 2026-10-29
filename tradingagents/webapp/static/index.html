@@ -232,6 +232,19 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
+.rot-group { margin-top: 10px; }
+.rot-gh { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
+.rot-card { border-radius: 8px; padding: 7px 10px; margin-bottom: 6px; background: var(--surface-2); border-left: 3px solid var(--border-strong); }
+.rot-card.in { border-left-color: #059669; } .rot-card.out { border-left-color: #d97706; }
+.rot-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.rot-tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 5px; text-transform: uppercase; }
+.rot-card.in .rot-tag { color: #047857; background: #ecfdf5; } .rot-card.out .rot-tag { color: #92400e; background: #fffbeb; }
+.rot-vs { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rot-fc { margin-left: auto; font-size: 11px; color: var(--muted); }
+.rot-fc.disagree { color: #b45309; }
+.rot-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 5px 0 2px; }
+.rot-chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); white-space: nowrap; }
+.rot-chip.pos { color: #047857; } .rot-chip.neg { color: #b91c1c; } .rot-chip.own { color: var(--muted); }
 /* One verdict badge on every page: filled, no border; BUY green, WATCH amber, HOLD blue, SELL / AVOID red. */
 .vb, .ai-box, .ai-call { border: 0 !important; }
 .vb.BUY, .ai-box.BUY, .ai-call.BUY { color: #047857; background: #ecfdf5; }
@@ -1732,10 +1745,21 @@ async function loadRotation() {
   try { r = await api("/api/rotation"); } catch (e) { $("rotAsOf").textContent = ""; $("rotAlerts").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
   $("rotAsOf").textContent = `closes to ${r.as_of}; causes over the last ${r.window} sessions`;
   const fc = f => f ? ` The ETF forecast (${esc(f.model)}, ${f.horizon} sessions): ${spct(f.mean)}, rank ${f.rank} of ${f.of} sectors.` : "";
-  $("rotAlerts").innerHTML = r.alerts.length ? r.alerts.map(a => `<div class="${a.direction === "in" ? "ok" : "note"}" style="margin-top:8px">
-      <b>${a.direction === "in" ? "Rotating in" : "Rotating out"}${a.stage === "early" ? " (early)" : " (confirmed)"}: ${tk(a.ticker)} ${esc(a.name)}</b> · ${spct(a.vs_spy_1m, 1)} vs SPY over a month.
-      ${esc(a.text)}.<div style="margin-top:4px"><b>Why:</b> ${esc(a.cause)}.${a.r2 != null ? ` <span class="muted small">(the six drivers explain ${pct(a.r2, 0)} of its daily moves)</span>` : ""}</div>
-      <div class="small" style="margin-top:2px">${fc(a.forecast)}${a.forecast_agrees === false ? " <b>It disagrees with this alert.</b>" : a.forecast_agrees ? " It agrees." : ""}</div></div>`).join("")
+  // Each turning sector as a compact card: in or out, early or confirmed, its month against SPY, the forecast's view,
+  // and what moved it as chips (each driver's share of the move); the full sentence behind Show.
+  const card = a => {
+    const chips = (a.drivers || []).map(d => `<span class="rot-chip ${d.part >= 0 ? "pos" : "neg"}" title="${esc(d.driver)} moved ${d.driver_move >= 0 ? "+" : ""}${d.units === "pts" ? d.driver_move.toFixed(2) + " pts" : pct(d.driver_move, 1)}">${esc(d.driver)} ${spct(d.part, 1)}</span>`).join("");
+    const own = (a.drivers || []).reduce((x, d) => x - d.part, a.vs_spy_1m);
+    const fcv = a.forecast ? `<span class="rot-fc ${a.forecast_agrees ? "agree" : "disagree"}" title="ETF forecast (${esc(a.forecast.model)}, ${a.forecast.horizon} sessions): ${spct(a.forecast.mean)}, rank ${a.forecast.rank} of ${a.forecast.of}">forecast ${a.forecast_agrees ? "agrees" : "disagrees"} · #${a.forecast.rank}/${a.forecast.of}</span>` : "";
+    return `<div class="rot-card ${a.direction}"><div class="rot-top"><span class="rot-tag">${a.direction === "in" ? "IN" : "OUT"} · ${a.stage}</span>` +
+      `<b>${tk(a.ticker)}</b> <span>${esc(a.name)}</span><span class="rot-vs ${a.vs_spy_1m >= 0 ? "pos" : "neg"}">${spct(a.vs_spy_1m, 1)} vs SPY</span>${fcv}</div>` +
+      `<div class="rot-chips">${chips}<span class="rot-chip own" title="The part the six drivers do not explain: the sector's own news">own news ${spct(own, 1)}</span></div>` +
+      `<details class="small"><summary><span class="muted">${esc(a.text)}</span></summary><div class="muted" style="margin-top:4px">${esc(a.cause)}.${a.r2 != null ? ` The six drivers explain ${pct(a.r2, 0)} of its daily moves.` : ""}</div></details></div>`;
+  };
+  const ins = r.alerts.filter(a => a.direction === "in"), outs = r.alerts.filter(a => a.direction !== "in");
+  $("rotAlerts").innerHTML = r.alerts.length
+    ? (ins.length ? `<div class="rot-group"><div class="rot-gh">Rotating in <span class="muted">${ins.length}</span></div>${ins.map(card).join("")}</div>` : "") +
+      (outs.length ? `<div class="rot-group"><div class="rot-gh">Rotating out <span class="muted">${outs.length}</span></div>${outs.map(card).join("")}</div>` : "")
     : "<p class='muted'>No sector is turning: every sector is steady in its stage.</p>";
   $("rotTable").innerHTML = "<tr><th class='l'>Sector</th><th>Stage</th><th>Sessions in it</th><th>vs SPY, 1 month</th><th class='l'>What moved it</th></tr>" +
     r.sectors.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b> ${esc(s.name)}</td><td>${esc(s.stage)}</td><td>${s.sessions_in_stage}</td><td class="${s.vs_spy_1m >= 0 ? "pos" : "neg"}">${spct(s.vs_spy_1m, 1)}</td><td class="l small">${esc(s.cause)}</td></tr>`).join("");
