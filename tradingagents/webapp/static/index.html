@@ -232,7 +232,15 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .ai-box.good { color: #6ee7b7; background: #052e22; border-color: #047857; }
   :root:not([data-theme="light"]) .ai-box.mid { color: #fcd34d; background: #2e2205; border-color: #92400e; }
-  :root:not([data-theme="light"]) .ai-box.bad { color: #fca5a5; background: #2e0909; border-color: #b91c1c; } }
+  :root:not([data-theme="light"]) .ai-box.bad { color: #fca5a5; background: #2e0909; border-color: #b91c1c; }
+  :root:not([data-theme="light"]) .ai-call.good { color: #6ee7b7; background: #052e22; border-color: #047857; }
+  :root:not([data-theme="light"]) .ai-call.mid { color: #fcd34d; background: #2e2205; border-color: #92400e; }
+  :root:not([data-theme="light"]) .ai-call.bad { color: #fca5a5; background: #2e0909; border-color: #b91c1c; } }
+.ai-call { font: inherit; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); min-width: 42px; }
+.ai-call.good { color: #047857; background: #ecfdf5; border-color: #6ee7b7; }
+.ai-call.mid { color: #92400e; background: #fffbeb; border-color: #fcd34d; }
+.ai-call.bad { color: #b91c1c; background: #fef2f2; border-color: #fca5a5; }
 #sellBox .rn-ag { display: flex; align-items: center; gap: 5px; min-width: 0; }
 #sellBox .rn-ag-body { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 #sellBox .rn-ai { padding: 1px 7px; font-size: 11px; line-height: 1.4; flex: 0 0 auto; }
@@ -1044,12 +1052,11 @@ async function loadTrade() {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
       return v == null ? "<td>–</td>" : `<td class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
     };
-    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:9%"><col style="width:13%"><col style="width:11%"><col style="width:9%"><col style="width:11%"><col style="width:11%"><col style="width:12%"><col style="width:24%"></colgroup>` +
-      `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th title="Sell target">Sell</th><th title="Stop loss">Stop</th><th>Deadline</th><th class="l">AI agents</th></tr>` +
+    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:11%"><col style="width:16%"><col style="width:12%"><col style="width:11%"><col style="width:12%"><col style="width:12%"><col style="width:14%"><col style="width:12%"></colgroup>` +
+      `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th title="Sell target">Sell</th><th title="Stop loss">Stop</th><th>Deadline</th><th title="The AI agents' call on today's data; AI: not run today (click to run)">AI</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
         <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td>` +
-        `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(s.ticker)}"><span class="muted">…</span></div>` +
-        `<button class="ghost small-btn rn-ai" data-agents="${esc(s.ticker)}" title="Run the AI agents on ${esc(s.ticker)}" aria-label="Run the AI agents on ${esc(s.ticker)}">AI</button></div></td></tr>
+        `<td><button class="ai-call" data-agents="${esc(s.ticker)}" data-aicall="${esc(s.ticker)}" title="Run the AI agents on ${esc(s.ticker)}">AI</button></td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
     // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
@@ -1149,6 +1156,13 @@ async function runnerAgents(list) {
     try {
       const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
       cells.forEach(c => { c.innerHTML = agentCell(r); });
+      const low = String(r.agent_rating || "").toLowerCase(), today = r.available && r.date === agentDay;
+      const call = !today ? null : /^(buy|overweight)$/.test(low) ? ["BUY", "good"] : /^(sell|underweight)$/.test(low) ? ["SELL", "bad"] : ["HOLD", "mid"];
+      document.querySelectorAll(`[data-aicall="${x.ticker}"]`).forEach(b => {
+        b.textContent = call ? call[0] : "AI";
+        b.className = "ai-call" + (call ? " " + call[1] : "");
+        b.title = call ? `The agents: ${r.agent_rating} on ${r.date} (click to read or run again)` : `Run the AI agents on ${x.ticker}`;
+      });
     } catch (e) { cells.forEach(c => { c.textContent = "–"; }); }
   }
 }
