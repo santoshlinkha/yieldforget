@@ -57,7 +57,7 @@ def test_pages_do_not_call_the_total_return_probability_beating_cash(page):
 def test_the_trade_page_leads_with_the_tested_entry_not_a_last_close_limit():
     text = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "<b>limit ${usd(x.buy_limit)}</b>" not in text
-    assert "1<sup>st</sup>" in text and "Weight" in text and "AI agents live" in text and "not an order price" in text
+    assert "Weight" in text and "The Trading Floor" in text and "not an order price" in text
 
 
 def test_a_procedure_id_ignores_refits_and_dollars_but_not_gates():

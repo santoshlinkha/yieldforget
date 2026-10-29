@@ -224,6 +224,10 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
+.agent-room .card-head { align-items: baseline; }
+.room-idle { display: flex; align-items: center; gap: 10px; padding: 18px 12px; border: 1px dashed var(--border-strong);
+  border-radius: 10px; color: var(--muted); font-size: 13px; }
+.room-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); flex: 0 0 auto; }
 #sellBox .sell-fit { width: 100%; table-layout: fixed; }
 .wt { display: inline-flex; align-items: center; gap: 6px; }
 .wt-bar { width: 46px; height: 6px; border-radius: 3px; background: var(--chart-grid); overflow: hidden; display: inline-block; }
@@ -530,6 +534,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
             <div id="buyBox"><p class="muted">Loading…</p></div>
             <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
             <p class="muted small" id="runnersNote" style="margin:6px 0 0"></p>
+            <div id="pickNotes"></div>
           </div>
         </div>
         <div>
@@ -542,8 +547,8 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
               <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on each of the model's picks, one after another (free models first; each stock at most once a day)">Ask the AI to pick</button></div>
             <div id="aiPickBox"><p class="muted small">Loading…</p></div>
           </div>
-          <div class="card">
-            <h3>AI agents live</h3>
+          <div class="card agent-room">
+            <div class="card-head"><h3>The Trading Floor</h3><span class="muted small">the AI agents at work, live</span></div>
             <div id="agentBox"></div>
           </div>
         </div>
@@ -991,7 +996,7 @@ async function loadTrade() {
   const stocks = Object.entries(a.positions || {}).filter(([k]) => k !== "SGOV").reduce((s, [, p]) => s + (p.value || 0), 0);
   $("subtitle").textContent = t.data_to ? "data to " + t.data_to : "no decision yet";
 
-  if (!t.ready) { $("buyBox").innerHTML = `<p class="muted">${esc(t.note)}</p>`; $("sellBox").innerHTML = ""; $("runnersTable").innerHTML = ""; }
+  if (!t.ready) { $("buyBox").innerHTML = `<p class="muted">${esc(t.note)}</p>`; $("sellBox").innerHTML = ""; $("runnersTable").innerHTML = ""; $("pickNotes").innerHTML = ""; }
   else {
     const u = t.universe || {};
     $("buyMeta").textContent = `${(t.mode || "").toUpperCase()} · ${u.sp500 ? `${u.sp500} S&P 500 companies${(u.extra || []).length ? ` + ${u.extra.length} of yours` : ""} scored · ` : ""}data to ${t.data_to} · for the close of ${t.executes}` +
@@ -1011,7 +1016,8 @@ async function loadTrade() {
     // The tested policy buys at the next session's close, whatever it is: that is the entry. The last close is a
     // dated reference for sizing and for the illustrative dollar levels; stop and target follow the actual fill.
     $("buyBox").innerHTML = (x ? `<p class="small" style="margin:0 0 8px">Buy at the close of <b>${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever it is (the rule the model was tested on). Sell when a close reaches <span class="pos">Sell</span> or <span class="neg">Stop</span>, or ${x.horizon} sessions after buying.</p>` : "") +
-      (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
+      "";
+    $("pickNotes").innerHTML = (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
     // Net: the profit or loss so far in dollars (shares × (last close − your fill)), before the sale's cost.
     const netCell = s => {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
@@ -1030,7 +1036,7 @@ async function loadTrade() {
       ? `<colgroup><col style="width:17%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:11%"><col style="width:11%"><col style="width:22%"></colgroup>` +
         `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
         `<th class="num" title="Sell target: sell when a close reaches this far above the fill">Sell</th><th class="num" title="Stop loss: sell when a close falls this far below the fill">Stop</th><th class="l">AI agents</th></tr>` +
-        allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l">${i === 0 ? '<span class="side paper rank1">1<sup>st</sup></span> ' : ""}<b>${tk(x.ticker)}</b></td>` +
+        allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l"><b>${tk(x.ticker)}</b></td>` +
           `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
           `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
@@ -1071,56 +1077,29 @@ async function loadTrade() {
 let agentTicker = null, agentDay = null, agentPolling = false, agentWasRunning = false, lastPicks = [];
 async function loadAgentReport() {
   const box = $("agentBox");
-  if (!agentTicker) { box.innerHTML = ""; return; }
-  let r = {available: false}, j = {};
-  try { [r, j] = await Promise.all([api("/api/agent-report?ticker=" + encodeURIComponent(agentTicker)), api("/api/analyze")]); } catch (e) { /* shown as no report */ }
-  const runningOn = j.running ? String(j.progress || "").split(" ")[0] : null;
-  let h = "";
+  let j = {};
+  try { j = await api("/api/analyze"); } catch (e) { /* shown as idle */ }
   if (j.running) {
     // Live: the stock being analysed, the step it is on, and the last steps as they happen.
+    const on = String(j.progress || "").split(" ")[0];
     const evs = (j.events || []).slice(-8).reverse();
-    h += `<div class="live-head"><span class="live-dot"></span><b>Running the AI agents on ${tk(runningOn)}</b></div>` + jobLine(j, "analysis") +
+    box.innerHTML = `<div class="live-head"><span class="live-dot"></span><b>Analysing ${tk(on)}</b></div>` + jobLine(j, "analysis") +
       (evs.length ? `<ol class="live-steps">${evs.map(e => `<li><span class="muted">${esc(e.at)}</span> ${esc(e.text)}</li>`).join("")}</ol>` : "");
+  } else {
+    box.innerHTML = `<div class="room-idle"><span class="room-dot"></span><span>Quiet for now. When the agents run, the analysts, the debate and the
+      managers show up here as they work.</span></div>` +
+      (j.error ? `<p class="small neg" style="margin:8px 0 0">Last run failed: ${esc(shortFail(j.attempts || [], j.error))}
+        <button class="ghost small-btn" id="agentDismiss">Dismiss</button></p>` : "");
+    if ($("agentDismiss")) $("agentDismiss").onclick = async () => {
+      try { await api("/api/agent-runs/dismiss", {ticker: agentTicker || ""}); loadAgentReport(); } catch (e) { showError(e.message); }
+    };
   }
-  h += `<div style="margin:${j.running ? "12px" : "0"} 0 4px${j.running ? ";padding-top:10px;border-top:1px solid var(--border)" : ""}"><b style="font-size:15px">${tk(agentTicker)}</b>` +
-    `<div class="muted small">TradingAgents team: four analysts, a bull/bear debate, a trader, a risk debate and a portfolio manager</div></div>`;
-  if (j.running) h += "";
-  else h += `<div class="row" style="margin:4px 0 8px"><button id="runAgentsBtn">${r.available ? "Run again" : "Run the AI agents"} on ${esc(agentTicker)}</button>` +
-    `<span class="muted small">all four analysts, as of ${esc(agentDay || "the last close")}; free models first (Gemini, then OpenRouter), a few minutes</span></div>` +
-    (j.error && (j.attempts || []).length ? `<details class="small"><summary><span class="neg">Last run failed</span> · ${esc(shortFail(j.attempts, j.error))} ` +
-      `<button class="ghost small-btn" id="agentDismiss" title="Remove this failed-run message (the run's record is kept)">Dismiss</button></summary>` +
-      `${tries(j.attempts)}<pre class="small" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:140px;overflow:auto">${esc(j.error)}</pre></details>` : "");
-  if (r.available) {
-    h += `<div class="agent-final">${miniMarkdown((r.final || "").split(/\r?\n/).slice(0, 14).join("\n"))}</div>` +
-      `<p class="muted small">Saved ${esc(r.saved_at.replace("T", " "))} for ${esc(r.date)}. The model's numbers above decide; the agents' view is context.` +
-      `${r.html ? ` <a href="/report?path=${encodeURIComponent(r.html)}" target="_blank" rel="noopener">Open the full report</a>` : ""}</p>` +
-      `<details id="agentFull"><summary><b>Full report</b></summary><button class="ghost small-btn" id="agentCopy" hidden title="Copy the report's text">Copy</button> <span class="muted small" id="agentCopied" role="status" aria-live="polite"></span><div id="agentFullBody"><p class="muted">Loading…</p></div></details>`;
-  } else if (!j.running) h += `<p class="muted small">No AI analysis of ${esc(agentTicker)} saved yet.</p>`;
-  box.innerHTML = h;
-  const btn = $("runAgentsBtn");
-  if (btn) btn.onclick = runAgents;
-  if ($("agentDismiss")) $("agentDismiss").onclick = async ev => {
-    ev.preventDefault(); ev.stopPropagation();
-    try { await api("/api/agent-runs/dismiss", {ticker: agentTicker}); loadAgentReport(); } catch (e) { showError(e.message); }
-  };
-  const full = $("agentFull");
-  if (full) full.ontoggle = async () => {
-    if (!full.open || full.dataset.loaded) return;
-    try {
-      const res = await fetch("/api/report?path=" + encodeURIComponent(r.markdown)), text = await res.text();
-      $("agentFullBody").innerHTML = miniMarkdown(text); full.dataset.loaded = 1;
-      $("agentCopy").hidden = false;
-      $("agentCopy").onclick = async () => {
-        try { await navigator.clipboard.writeText(text); $("agentCopied").textContent = "Copied"; }
-        catch (e) { $("agentCopied").textContent = "Could not copy"; }
-        setTimeout(() => { $("agentCopied").textContent = ""; }, 2500);
-      };
-    }
-    catch (e) { $("agentFullBody").textContent = e.message; }
-  };
-  if (j.running && !agentPolling) { agentPolling = true; setTimeout(() => { agentPolling = false; loadAgentReport(); }, 2000); }
   if (agentWasRunning && !j.running && lastPicks.length) runnerAgents(lastPicks);   // just finished: refresh the AI's pick
   agentWasRunning = !!j.running;
+  if (!agentPolling) {   // every 2 s while they work, every 10 s while idle (a run may start from another page)
+    agentPolling = true;
+    setTimeout(() => { agentPolling = false; if (document.querySelector("#today.active")) loadAgentReport(); }, j.running ? 2000 : 10000);
+  }
 }
 // The agents' latest call on a stock: their own rating and what it means as an action, the day it was for and the
 // model that ran it; a later run that failed is said under it (the reason in a few words).
@@ -1165,10 +1144,9 @@ function renderAiPick(seen) {
     `<div class="ai-pick"><div class="order-head"><span class="side ${buys ? "buy" : "paper"}">${buys ? "AI's pick" : "No AI buy"}</span>` +
     `<strong style="font-size:20px">${tk(best.ticker)}</strong><span class="rn-badge ${cls}">${esc(r.agent_rating)}${act ? ` → ${esc(act)}` : ""}</span></div>` +
     `<p class="muted small" style="margin:6px 0">${buys ? "The strongest call" : "None of the picks is rated Buy or Overweight; the strongest call"} of the ${rated.length} the agents read, as of ${esc(r.date)}${r.agent_models ? ` · ${esc(short(r.agent_models))}` : ""}.` +
-    ` <button class="ghost small-btn" data-agentshow="${esc(best.ticker)}">Read it</button></p>` +
+    ` <a class="small" href="/ticker/${encodeURIComponent(best.ticker)}" target="_blank" rel="noopener">Read it</a></p>` +
     `<div class="ai-others small">${rated.filter(x => x !== best).map(x => `<span>${esc(x.ticker)} <span class="muted">${esc(x.r.agent_rating)}</span></span>`).join("")}</div></div>` +
     `<p class="muted small" style="margin:6px 0 0">The agents' view is context; the model's numbers decide.</p>`;
-  document.querySelectorAll("[data-agentshow]").forEach(b => b.onclick = () => { agentTicker = b.dataset.agentshow; loadAgentReport(); });
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
