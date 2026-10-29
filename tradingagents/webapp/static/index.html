@@ -236,9 +236,9 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
   :root:not([data-theme="light"]) .ai-call.good { color: #6ee7b7; background: #052e22; border-color: #047857; }
   :root:not([data-theme="light"]) .ai-call.mid { color: #fcd34d; background: #2e2205; border-color: #92400e; }
   :root:not([data-theme="light"]) .ai-call.bad { color: #fca5a5; background: #2e0909; border-color: #b91c1c; } }
-.th-run, .runners .rn-ai { all: unset; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--accent); white-space: nowrap; }
-.th-run:hover, .runners .rn-ai:hover { text-decoration: underline; }
-.th-run:focus-visible, .runners .rn-ai:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.th-run { all: unset; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.th-run:hover { text-decoration: underline; }
+.th-run:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ai-call { font: inherit; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); min-width: 42px; }
 .ai-call.good { color: #047857; background: #ecfdf5; border-color: #6ee7b7; }
@@ -1073,7 +1073,7 @@ async function loadTrade() {
         allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l"><b>${tk(x.ticker)}</b></td>` +
           `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
-          `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">Run AI</button></div></td></tr>`).join("")
+          `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = false;
     const asked = (t.ai_pick || {}).today;       // once a day: the button rests until tomorrow
