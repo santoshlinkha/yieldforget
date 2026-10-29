@@ -1184,7 +1184,7 @@ async function loadTrade() {
     };
     $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:10%"><col style="width:16%"><col style="width:12%"><col style="width:10%"><col style="width:12%"><col style="width:12%"><col style="width:16%"><col style="width:12%"></colgroup>` +
       `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th title="Sell target">Sell</th><th title="Stop loss">Stop</th><th>Deadline</th><th title="The AI agents' call on today's data; AI: not run today (click to run)">AI</th></tr>` +
-      t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
+      t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td>${actBadge(s.action)}${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
         <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td title="${esc(s.deadline || "")}">${esc(String(s.deadline || "–").replace(/^20(\d\d-)/, "$1"))}</td>` +
         `<td><button class="ai-call" data-agents="${esc(s.ticker)}" data-aicall="${esc(s.ticker)}" title="Run the AI agents on ${esc(s.ticker)}">AI</button></td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
@@ -1354,6 +1354,12 @@ function aiWord(rating, held) {
   const low = String(rating || "").toLowerCase();
   const w = /^(buy|overweight)$/.test(low) ? "BUY" : /^(sell|underweight)$/.test(low) ? (held ? "SELL" : "AVOID") : held ? "HOLD" : "WATCH";
   return [w, w];
+}
+// The decision's action as the same badge: EXIT reads SELL, REDUCE keeps its word; WAIT reads WATCH.
+function actBadge(a) {
+  const w = a === "EXIT" ? "SELL" : a === "WAIT" ? "WATCH" : a === "ENTER" ? "BUY" : a;
+  const cls = {SELL: "SELL", REDUCE: "SELL", HOLD: "HOLD", WATCH: "WATCH", BUY: "BUY", REVIEW: "WATCH"}[w] || "HOLD";
+  return `<span class="vb ${cls}">${esc(w || "–")}</span>`;
 }
 // One word set on every page: BUY, WATCH, HOLD, SELL, AVOID. The model's WAIT (a BUY it may not act on yet) reads WATCH.
 const word = a => a === "WAIT" ? "WATCH" : a;
@@ -2434,7 +2440,7 @@ function renderDcEntries() {
     const on = dcSort.key === k;
     return `<th class="${cls}" aria-sort="${on ? (dcSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-dcsort="${k}">${label}${on ? (dcSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
   }).join("") + "</tr>" +
-    rows.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"${(x.blocked || []).length ? ` data-tip="${esc("Blocked by: " + x.blocked.join("; "))}"` : ""}><b>${x.action}</b></td><td>${x.paper_action ? "PAPER ENTER" : "–"}</td><td>${x.dollars ? usd(x.dollars) : "–"}</td><td>${spct(x.expected_net)} <span class="muted">± ${pct(x.net_sd, 1)}</span></td><td>${spct(x.expected_excess_vs_spy)}</td><td>${pct(x.p_win, 0)}</td><td>${isFinite(x.p_risk) ? pct(x.p_risk, 0) : "missing"}</td><td>${pct(x.cost_rt, 2)}</td></tr>`).join("");
+    rows.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td${(x.blocked || []).length ? ` data-tip="${esc("Blocked by: " + x.blocked.join("; "))}"` : ""}>${actBadge(x.action)}</td><td>${x.paper_action ? "PAPER ENTER" : "–"}</td><td>${x.dollars ? usd(x.dollars) : "–"}</td><td>${spct(x.expected_net)} <span class="muted">± ${pct(x.net_sd, 1)}</span></td><td>${spct(x.expected_excess_vs_spy)}</td><td>${pct(x.p_win, 0)}</td><td>${isFinite(x.p_risk) ? pct(x.p_risk, 0) : "missing"}</td><td>${pct(x.cost_rt, 2)}</td></tr>`).join("");
   $("dcEntries").querySelectorAll("button[data-dcsort]").forEach(btn => btn.onclick = () => {
     const k = btn.dataset.dcsort;
     dcSort = {key: k, dir: dcSort.key === k ? -dcSort.dir : (k === "ticker" || k === "cost" || k === "p_risk" ? 1 : -1)};
