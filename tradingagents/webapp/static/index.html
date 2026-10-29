@@ -188,6 +188,9 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .runners .rn-tk { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
 .runners .rn-ai { padding: 1px 7px; font-size: 11px; line-height: 1.4; }
 .runners .rn-agents { min-width: 0; }
+.runners .rn-ag { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.runners .rn-ag-body { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.runners .rn-ag .rn-ai { flex: 0 0 auto; }
 .runners .rn-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rn-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 5px;
   border: 1px solid currentColor; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -1020,10 +1023,10 @@ async function loadTrade() {
       ? `<colgroup><col style="width:17%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:13%"><col style="width:28%"></colgroup>` +
         `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="The reference close (not an order price): the buy is at the next close">Last close</th>` +
         `<th class="num" title="Sell when a close reaches this far above the fill">Sell target</th><th class="num" title="Sell when a close falls this far below the fill">Stop loss</th><th class="l">AI agents</th></tr>` +
-        t.runners_up.map(x => `<tr><td class="l"><span class="rn-tk"><b>${tk(x.ticker)}</b><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></span></td>` +
+        t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td>` +
           `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
-          `<td class="l rn-agents" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></td></tr>`).join("")
+          `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = !t.runners_up.length;
     $("runnersAll").onclick = async () => {
