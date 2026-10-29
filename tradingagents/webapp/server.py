@@ -2281,6 +2281,8 @@ def make_handler(app: App):
                     self._page("index.html")
                 elif url.path in ("/favicon.svg", "/favicon.ico"):
                     self._send(HTTPStatus.OK, (STATIC / "favicon.svg").read_bytes(), "image/svg+xml")
+                elif url.path == "/logo.svg":
+                    self._send(HTTPStatus.OK, (STATIC / "logo.svg").read_bytes(), "image/svg+xml")
                 elif url.path.startswith("/ticker/"):
                     self._page("ticker.html")
                 elif url.path == "/api/ticker":

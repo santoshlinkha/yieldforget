@@ -39,10 +39,10 @@ body { margin: 0; background: var(--bg); color: var(--text);
 /* app bar */
 header { position: sticky; top: 0; z-index: 10; }
 .appbar { background: var(--brand-bg); color: var(--brand-text); }
-.appbar .wrap { display: flex; align-items: center; gap: 28px; height: 56px; }
+.appbar .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
 .brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; flex-shrink: 0; }
-.brand .mark { width: 30px; height: 30px; display: block; filter: drop-shadow(0 0 6px rgba(63, 240, 207, .25)); }
-.brand h1 { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: -.02em; }
+.brand .mark { width: 44px; height: 44px; display: block; filter: drop-shadow(0 0 8px rgba(63, 240, 207, .3)); }
+.brand h1 { font-size: 21px; font-weight: 700; margin: 0; letter-spacing: -.02em; }
 .wordmark span { background: linear-gradient(180deg, #5cffe6, #16b98a); -webkit-background-clip: text; background-clip: text;
   color: transparent; }
 .brand .acct { color: var(--brand-muted); font-size: 12px; font-weight: 500; }
@@ -82,6 +82,7 @@ nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
 .riskopts input { width: 64px; }
 @media (max-width: 760px) {
   .appbar .wrap { gap: 12px; } .brand .acct, .appbar .status { display: none; }
+  .brand .mark { width: 34px; height: 34px; } .brand h1 { font-size: 17px; }
   nav { flex: 1 1 auto; }   /* a phone cannot fit every tab: they scroll sideways */
   .risk { flex-wrap: wrap; flex-basis: 100%; } .risk-read { min-width: 0; flex-wrap: wrap; }
   .kpis { grid-template-columns: 1fr 1fr; } .kpi .value { font-size: 20px; }
@@ -470,7 +471,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
   <div class="appbar">
     <div class="wrap">
       <div class="brand">
-        <img class="mark" src="/favicon.svg" alt="" width="30" height="30">
+        <img class="mark" src="/logo.svg" alt="" width="44" height="44">
         <div><h1 class="wordmark"><span>Alpha</span>Desk</h1></div>
       </div>
       <nav role="tablist">

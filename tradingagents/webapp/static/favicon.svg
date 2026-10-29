@@ -1,26 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Drawn for 16-32 px: a full-bleed tile, two chunky bars and one bold arrow, high contrast. -->
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1d2a31"/>
-      <stop offset="1" stop-color="#0c1519"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14262c"/>
+      <stop offset="1" stop-color="#071013"/>
     </linearGradient>
     <linearGradient id="teal" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5cffe6"/>
-      <stop offset="1" stop-color="#16b98a"/>
+      <stop offset="0" stop-color="#6bffea"/>
+      <stop offset="1" stop-color="#12b386"/>
     </linearGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
   </defs>
-  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#tile)"/>
-  <rect x="2.5" y="2.5" width="59" height="59" rx="14.5" fill="none" stroke="#ffffff" stroke-opacity=".07"/>
-  <g filter="url(#glow)" fill="url(#teal)">
-    <rect x="17.5" y="38" width="7" height="9" rx="1.6"/>
-    <rect x="28" y="33.5" width="7" height="13.5" rx="1.6"/>
-    <rect x="38.5" y="27" width="7" height="20" rx="1.6"/>
-    <path d="M16.5 36 L27.5 25 L33 30.5 L43.6 19.9" fill="none" stroke="#3ff0cf" stroke-width="3.6"
-          stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M48.3 15.2 L46.6 23.9 L39.6 16.9 Z" fill="#5cffe6" stroke="#5cffe6" stroke-width="1.2" stroke-linejoin="round"/>
-  </g>
+  <rect width="64" height="64" rx="14" fill="url(#tile)"/>
+  <rect x="1" y="1" width="62" height="62" rx="13" fill="none" stroke="#3ff0cf" stroke-opacity=".35" stroke-width="2"/>
+  <rect x="12" y="40" width="11" height="14" rx="2.5" fill="url(#teal)"/>
+  <rect x="27" y="31" width="11" height="23" rx="2.5" fill="url(#teal)"/>
+  <rect x="42" y="22" width="11" height="32" rx="2.5" fill="url(#teal)"/>
+  <path d="M9 33 L24 19 L32 26 L46 12" fill="none" stroke="#0b1418" stroke-width="10" stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <path d="M9 33 L24 19 L32 26 L46 12" fill="none" stroke="#5cffe6" stroke-width="5.5" stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <path d="M53 5 L49.1 18.1 L39.9 8.9 Z" fill="#5cffe6" stroke="#5cffe6" stroke-width="2.5" stroke-linejoin="round"/>
 </svg>
