@@ -13,7 +13,7 @@
   --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #586377; --faint: #94a3b8;
   --border: #e5e7eb; --border-strong: #d1d5db;
   --brand-bg: #0b1220; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-  --accent: #2563eb; --on-accent: #ffffff; --cv-value: #2563eb; --cv-in: #586377; --cv-1: #2a78d6; --cv-2: #eb6834; --cv-3: #1baf7a; --cv-4: #eda100; --accent-soft: #eff4ff; --buy: #047857; --sell: #dc2626;
+  --accent: #2563eb; --on-accent: #ffffff; --cv-value: #2563eb; --cv-in: #586377; --cv-1: #2a78d6; --cv-2: #eb6834; --cv-3: #1baf7a; --cv-4: #eda100; --cv-5: #e87ba4; --accent-soft: #eff4ff; --buy: #047857; --sell: #dc2626;
   --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d; --ok-bg: #ecfdf5; --ok: #065f46; --ok-line: #6ee7b7;
   --chart-grid: #eef0f3; --s1: #2563eb; --s2: #f97316; --s3: #a16207; --s4: #059669;
   --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
@@ -24,7 +24,7 @@
     --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
     --border: #1f2937; --border-strong: #334155;
     --brand-bg: #060a13; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-    --accent: #60a5fa; --on-accent: #0b1220; --cv-value: #3b82f6; --cv-in: #64748b; --cv-1: #3987e5; --cv-2: #d95926; --cv-3: #199e70; --cv-4: #c98500; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
+    --accent: #60a5fa; --on-accent: #0b1220; --cv-value: #3b82f6; --cv-in: #64748b; --cv-1: #3987e5; --cv-2: #d95926; --cv-3: #199e70; --cv-4: #c98500; --cv-5: #d55181; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
     --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --ok-bg: #0f2a20; --ok: #6ee7b7; --ok-line: #1f6b4f;
     --chart-grid: #1c2433; --s1: #60a5fa; --s2: #fb923c; --s3: #facc15; --s4: #34d399;
     --shadow: none;
@@ -1331,8 +1331,8 @@ $("schRun").onclick = async () => {
 // --- track record: were the picks and the agents' calls right? ---
 // The cumulative value of $1 on each recommendation, every group on one axis, normalized: worth per $1 put in, so
 // groups with different numbers of picks compare directly (1.00 = break-even). Colours follow the group.
-const CURVE_KINDS = [["best_buy", "Best buy", "--cv-1"], ["all_picks", "Every pick", "--cv-2"],
-  ["policy", "Policy model", "--cv-3"], ["agents_buys", "Agents' Buy calls", "--cv-4"]];
+const CURVE_KINDS = [["best_buy", "1st pick", "--cv-1"], ["all_picks", "Every pick", "--cv-2"],
+  ["policy", "Policy model", "--cv-3"], ["agents_buys", "Agents' Buy calls", "--cv-4"], ["weighted", "Weighted split", "--cv-5"]];
 function drawCurve(one) {
   const series = CURVE_KINDS.map(([k, label, color]) => ({k, label, color,
     pts: ((one[k] || {}).curve || []).filter(p => p.invested > 0).map(p => ({...p, per: p.value / p.invested}))}))
@@ -1410,7 +1410,7 @@ async function loadTrackRecord() {
     ? `${net ? `net of costs · vs SPY ${spct(x.avg_net_vs_spy)} · ` : "direction call, no costs · "}${x.correct} of ${x.judged} beat ${net ? "cost" : "direction"} · ${x.dates} data date${x.dates === 1 ? "" : "s"}${x.net_se_by_date != null ? ` · ±${(x.net_se_by_date * 100).toFixed(1)}% s.e.` : ""}${net ? ` · raw ${spct(x.avg_raw_return)}` : ""}`
     : (x.open ? `${x.open} still open: each finishes 20 sessions after it is bought` : "Nothing bought yet");
   $("recKpis").innerHTML =
-    kpi("Best buy: average net return", show(s.best_buy), sub(s.best_buy), "hero") +
+    kpi("1st pick: average net return", show(s.best_buy), sub(s.best_buy), "hero") +
     kpi("All picks: average net return", show(s.all_picks), sub(s.all_picks)) +
     kpi("Policy model: average net return", show(s.policy), sub(s.policy)) +
     kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "No Trades Yet", sub(s.agents, false));
@@ -1425,7 +1425,8 @@ async function loadTrackRecord() {
   };
   $("recDollar").innerHTML = `<caption class="small muted l" style="caption-side:top;text-align:left">If you had bought <b>$1</b> of every recommendation exactly as made (at the next close, sold at the 20th close after, less the estimated round-trip cost; the agents' Buy/Overweight calls before costs)</caption>` +
     `<tr><th class="l">Recommendations</th><th>Finished</th><th>Put in</th><th>Worth now</th><th>Profit / loss</th><th>Still open</th><th>Open P/L (latest close)</th></tr>` +
-    dollarLine("Best buy each day", one.best_buy) + dollarLine("Every pick (best + runners-up)", one.all_picks) +
+    dollarLine("1st pick each day", one.best_buy) + dollarLine("Every pick (1st + runners-up)", one.all_picks) +
+    dollarLine("Weighted split ($1 a day across the picks)", one.weighted) +
     dollarLine("Policy model's picks", one.policy) + dollarLine("AI agents' Buy calls", one.agents_buys);
   drawCurve(one);
   $("recRule").textContent = `${d.outcome ? d.outcome[0].toUpperCase() + d.outcome.slice(1) + ". " : ""}Beat cost: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade). Overlapping holds are not independent: the sample is the number of data dates, not of rows.`;

@@ -53,7 +53,7 @@ def _picks(con, per_day: int = 5) -> list[dict]:
         for i, e in enumerate(passing[:per_day]):
             out.append({"key": f"pick|{cutoff}|{e['ticker']}|{i + 1}",
                         "decision_id": r["id"], "data_to": cutoff, "executes": r["execution_date"], "mode": r["mode"],
-                        "ticker": e["ticker"], "place": i + 1, "role": "best buy" if i == 0 else "runner-up",
+                        "ticker": e["ticker"], "place": i + 1, "role": "1st pick" if i == 0 else "runner-up",
                         "expected_net": e.get("expected_net"), "p_win": e.get("p_win"), "cost_rt": e.get("cost_rt") or 0.0,
                         "horizon": int(payload.get("horizon") or 20)})
     return out
@@ -177,6 +177,24 @@ def _follow(close: pd.DataFrame, ticker: str, after: str, horizon: int) -> dict:
     return out
 
 
+def _day_weights(picks: list[dict], close: pd.DataFrame) -> dict[str, float]:
+    """Each day's split of $1 across its 1st pick and runners-up, by the Trade page's method (``allocation``),
+    from prices up to that day's data date only: what the page would have shown then."""
+    from .allocation import weights
+
+    out: dict[str, float] = {}
+    by_day: dict[str, list[dict]] = {}
+    for p in picks:
+        by_day.setdefault(p["data_to"], []).append(p)
+    for day, rows in by_day.items():
+        rows = sorted(rows, key=lambda r: r["place"])
+        hist = close.loc[:pd.Timestamp(day)] if not close.empty else None
+        w = weights([r["ticker"] for r in rows], [r.get("expected_net") for r in rows], hist)["weights"]
+        for r in rows:
+            out[r["key"]] = float(w.get(r["ticker"], 0.0))
+    return out
+
+
 def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | None = None) -> dict:
     from tradingagents.research.prices import bars
 
@@ -242,36 +260,37 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
                 "costs": "estimated round trip deducted" if costs else "none (a direction call, not a trade)",
                 "open": still_open}
 
-    def one_dollar(rows, key=None, costs=True, follows=lambda r: True):
+    def one_dollar(rows, key=None, costs=True, follows=lambda r: True, stake=lambda r: 1.0):
         """$1 on every recommendation followed exactly (bought at the next close, sold at the 20th close after, less
         the round-trip cost): what was put in, what it is worth, and the profit, for finished and open ones apart.
         Open ones are valued at the latest close. Day by day, the running total of the finished ones."""
         chosen = [r for r in rows if (key is None or key(r)) and follows(r) and r.get("return") is not None
                   and r.get("status") in ("done", "open")]
-        net = lambda r: r["return"] - (float(r.get("cost_rt") or 0.0) if costs else 0.0)  # noqa: E731
-        held = lambda r: r["return"] - (float(r.get("cost_rt") or 0.0) / 2 if costs else 0.0)  # noqa: E731
+        net = lambda r: stake(r) * (r["return"] - (float(r.get("cost_rt") or 0.0) if costs else 0.0))  # noqa: E731
+        held = lambda r: stake(r) * (r["return"] - (float(r.get("cost_rt") or 0.0) / 2 if costs else 0.0))  # noqa: E731
         done = [r for r in chosen if r["status"] == "done"]
         still = [r for r in chosen if r["status"] == "open"]
         by_day = {}
         for r in done:
-            day = by_day.setdefault(r["data_to"], [0, 0.0])
-            day[0] += 1
+            day = by_day.setdefault(r["data_to"], [0.0, 0.0])
+            day[0] += stake(r)
             day[1] += net(r)
-        running, n, total = [], 0, 0.0
+        running, n, total = [], 0.0, 0.0
         for day in sorted(by_day):
             n, total = n + by_day[day][0], total + by_day[day][1]
-            running.append({"date": day, "invested": float(n), "profit": round(total, 4)})
-        return {"each_usd": 1.0, "finished": {"trades": len(done), "invested": float(len(done)),
+            running.append({"date": day, "invested": round(n, 4), "profit": round(total, 4)})
+        put_done, put_open = sum(stake(r) for r in done), sum(stake(r) for r in still)
+        return {"each_usd": 1.0, "finished": {"trades": len(done), "invested": round(put_done, 4),
                                               "profit": round(sum(net(r) for r in done), 4),
-                                              "value": round(len(done) + sum(net(r) for r in done), 4)},
+                                              "value": round(put_done + sum(net(r) for r in done), 4)},
                 # Still held: valued at the latest close less the entry half of the cost (the exit half is not paid
                 # yet), the same rule as the curve.
-                "open": {"trades": len(still), "invested": float(len(still)),
+                "open": {"trades": len(still), "invested": round(put_open, 4),
                          "profit": round(sum(held(r) for r in still), 4),
-                         "value": round(len(still) + sum(held(r) for r in still), 4)},
+                         "value": round(put_open + sum(held(r) for r in still), 4)},
                 "costs": "estimated round trip deducted" if costs else "none", "running": running}
 
-    def value_curve(rows, key=None, costs=True, follows=lambda r: True) -> list[dict]:
+    def value_curve(rows, key=None, costs=True, follows=lambda r: True, stake=lambda r: 1.0) -> list[dict]:
         """Day by day: dollars put in ($1 on each recommendation from its entry close) and what they are worth. A
         position held is valued at that day's close less half the round-trip cost (the entry half); once sold at its
         20th close it is worth 1 + its return less the whole cost from then on."""
@@ -284,23 +303,30 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
         value = pd.Series(0.0, index=days)
         for r in chosen:
             cost = float(r.get("cost_rt") or 0.0) if costs else 0.0
+            k = stake(r)
             e, last = pd.Timestamp(r["entry_date"]), pd.Timestamp(r["last_date"])
             px = close[r["ticker"]].ffill()
-            invested[days >= e] += 1.0
+            invested[days >= e] += k
             held = (days >= e) & (days <= last)
-            value[held] += (px[held] / r["entry"]).to_numpy() - cost / 2
+            value[held] += k * ((px[held] / r["entry"]).to_numpy() - cost / 2)
             if r["status"] == "done":
-                value[days == last] += -cost / 2                 # sold that close: the exit half of the cost
-                value[days > last] += 1.0 + r["return"] - cost
+                value[days == last] += -k * cost / 2             # sold that close: the exit half of the cost
+                value[days > last] += k * (1.0 + r["return"] - cost)
         on = invested > 0
         return [{"date": str(d.date()), "invested": round(float(i), 2), "value": round(float(v), 4)}
                 for d, i, v in zip(days[on], invested[on], value[on], strict=True)]
 
     buys = lambda r: r.get("rating") in UP  # noqa: E731   (the agents' Buy/Overweight calls: $1 bought on each)
+    weight = _day_weights(picks, close)
+    split = lambda r: weight.get(r["key"], 0.0)  # noqa: E731   ($1 a day split by the Trade page's weights)
     dollars = {"best_buy": one_dollar(picks, lambda r: r["place"] == 1), "all_picks": one_dollar(picks),
+               "weighted": one_dollar(picks, stake=split),
                "policy": one_dollar(policy), "agents_buys": one_dollar(agents, costs=False, follows=buys)}
     curves = {"best_buy": value_curve(picks, lambda r: r["place"] == 1), "all_picks": value_curve(picks),
+              "weighted": value_curve(picks, stake=split),
               "policy": value_curve(policy), "agents_buys": value_curve(agents, costs=False, follows=buys)}
+    for p in picks:
+        p["weight"] = weight.get(p["key"])
     for k, c in curves.items():
         dollars[k]["curve"] = c
 

@@ -256,6 +256,9 @@ def test_one_dollar_on_every_recommendation_adds_up_net_of_costs(tmp_path, monke
     assert f["trades"] == 2 and f["invested"] == 2.0 and f["profit"] == pytest.approx(-0.02)
     assert f["value"] == pytest.approx(1.98) and one["best_buy"]["finished"]["profit"] == pytest.approx(0.09)
     assert one["all_picks"]["running"][-1] == {"date": str(idx[0].date()), "invested": 2.0, "profit": -0.02}
+    # The weighted split: $1 a day across the day's picks (equal here: too little history for the risk model).
+    w = one["weighted"]["finished"]
+    assert w["trades"] == 2 and w["invested"] == pytest.approx(1.0) and w["profit"] == pytest.approx(-0.01)
 
 
 def test_the_cumulative_value_curve_follows_each_dollar_from_entry_to_exit(tmp_path, monkeypatch):
