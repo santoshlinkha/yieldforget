@@ -161,7 +161,12 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
   background: var(--surface); border-radius: 8px; padding: 10px 12px; color: var(--text); font-size: 13px; }
 .failbox .head { font-weight: 600; color: var(--sell); }
 .failbox > summary { cursor: pointer; } .failbox[open] > summary { margin-bottom: 6px; }
-.run-del { float: right; margin-left: 8px; }
+.run-del { margin-left: auto; flex: 0 0 auto; padding: 1px 8px; font-size: 11px; }
+.run-box { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+.run-sum { gap: 10px; flex-wrap: nowrap; }
+.run-sum .verdict { flex: 0 0 auto; font-size: 11px; padding: 2px 9px; }
+.run-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.run-sum::after { margin-left: 6px !important; }
 .failbox ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
 .failbox li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 6px; align-items: start; line-height: 1.4; }
 .failbox li .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--sell); }
@@ -942,8 +947,8 @@ async function load() {
     };
     // Each saved run shows the agents' own decision (their rating as an action); the model's verdict is the card above.
     const withRun = rp.runs.filter(run => run.agents && !run.run);
-    let h = withRun.length ? `<p class="small">Agents' decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.agents)}</b></a>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details ${run.run ? `data-run="${esc(run.run)}"` : `data-day="${esc(run.date)}"`}><summary><button class="ghost small-btn run-del" data-delrun="${esc(run.date)}"${run.run ? ` data-delrunid="${esc(run.run)}"` : ""} title="Delete this analysis (moved to a _deleted folder, not erased)" aria-label="Delete the ${esc(run.date)} analysis">Delete</button>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.run ? `<span class="muted">${esc(earlier(run))}</span>` : ""}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""}${run.run && run.decision ? ` · final decision then: ${esc(run.decision)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+    let h = "";
+    h += rp.runs.length ? rp.runs.map(run => `<details class="run-box" ${run.run ? `data-run="${esc(run.run)}"` : `data-day="${esc(run.date)}"`}><summary class="run-sum">${run.agents ? `<span class="verdict ${run.agents}" title="The agents' decision for this run">${run.agents}</span>` : ""}<span class="run-meta"><b>${esc(run.date)}</b>${run.run ? `<span class="muted">${esc(earlier(run))}</span>` : ""}<span class="muted"> · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} AI calls` : ""}${run.run && run.decision ? ` · final decision then: ${esc(run.decision)}` : ""}</span></span><button class="ghost small-btn run-del" data-delrun="${esc(run.date)}"${run.run ? ` data-delrunid="${esc(run.run)}"` : ""} title="Delete this analysis (moved to a _deleted folder, not erased)" aria-label="Delete the ${esc(run.date)} analysis">Delete</button></summary>` +
       runStages(run) + `<div class="runView"></div></details>`).join("")
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     if (allRuns > rp.runs.length) h += `<p class="muted small">Showing the latest ${rp.runs.length} of ${allRuns} runs.</p>`;
