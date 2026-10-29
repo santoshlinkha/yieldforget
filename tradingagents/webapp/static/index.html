@@ -1543,10 +1543,11 @@ function fitScreen(view, cols) {
   t.querySelectorAll("td").forEach(td => { if (!td.title && td.textContent.length > 14) td.title = td.textContent.trim(); });
   $("qsLegend").innerHTML = `<dl class="col-legend">` +
     cols.map(([, label, help]) => `<dt>${esc(label)}</dt><dd>${esc(help || "")}</dd>`).join("") + "</dl>";
+  $("qsLegendBox").hidden = false;
   showLegend(store.get("qsLegendShown", true));
 }
 function renderScreen() {
-  $("qsTable").classList.remove("fit-table"); $("qsLegend").innerHTML = "";
+  $("qsTable").classList.remove("fit-table"); $("qsLegend").innerHTML = ""; $("qsLegendBox").hidden = true;
   if (!qsData || !qsData.latest) { $("qsTable").innerHTML = "<tr><td class='muted l'>Not built yet: build it once (a few minutes the first time).</td></tr>"; return; }
   const q = $("qsFilter").value.trim().toLowerCase();
   let rows = qsData.latest.rows.filter(r => !q || `${r.ticker} ${r.name} ${r.sector}`.toLowerCase().includes(q));
