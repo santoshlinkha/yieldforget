@@ -488,4 +488,19 @@ CREATE TABLE model_zoo_runs (
     payload_json TEXT NOT NULL
 );
 """ + _guards("model_zoo_runs"),
+    # Live feedback resolved through the trade engine the model was trained on (stocks.feedback): each prediction
+    # keeps its raw and calibrated numbers, the calibration applied, its volatility (for the barrier levels) and the
+    # decision procedure it belongs to; each outcome adds the policy's own net result and when it was observable.
+    11: """
+ALTER TABLE model_predictions ADD COLUMN p_win_raw REAL;
+ALTER TABLE model_predictions ADD COLUMN expected_net_raw REAL;
+ALTER TABLE model_predictions ADD COLUMN calibration_version TEXT;
+ALTER TABLE model_predictions ADD COLUMN sigma REAL;
+ALTER TABLE model_predictions ADD COLUMN procedure_id TEXT;
+ALTER TABLE model_outcomes ADD COLUMN policy_version TEXT;
+ALTER TABLE model_outcomes ADD COLUMN policy_net REAL;
+ALTER TABLE model_outcomes ADD COLUMN policy_exit_on TEXT;
+ALTER TABLE model_outcomes ADD COLUMN policy_reason TEXT;
+CREATE INDEX model_predictions_procedure ON model_predictions (procedure_id, info_cutoff, ticker)
+""",
 }

@@ -126,9 +126,10 @@ def test_predictions_are_saved_scored_once_and_calibrate_only_with_enough_data(t
     con.execute("PRAGMA foreign_keys=OFF")                              # decisions themselves are not needed here
     for d in days[:12]:
         scores = {f"S{i:02d}": {"rank": i + 1, "of": 30, "score_pct": 1 - i / 29, "expected_net": 0.02 - i * 0.001,
-                                "p_win": 0.7 - i * 0.01, "p_risk": 0.1, "cost_rt": 0.001} for i in range(30)}
+                                "p_win": 0.7 - i * 0.01, "p_risk": 0.1, "cost_rt": 0.001, "sigma": 0.01}
+                  for i in range(30)}
         feedback.record(con, {"id": f"d{d.date()}", "info_cutoff": str(d.date()), "horizon": 5, "scores": scores,
-                              "entries": [], "lots": []})
+                              "entries": [], "lots": [], "model": {"procedure_id": "proc-A"}})
     assert feedback.record(con, {"id": f"d{days[0].date()}", "info_cutoff": str(days[0].date()), "horizon": 5,
                                  "scores": {"S00": {}}, "entries": [], "lots": []}) == 1
     assert con.execute("SELECT COUNT(*) FROM model_predictions").fetchone()[0] == 360        # saved once
@@ -137,14 +138,21 @@ def test_predictions_are_saved_scored_once_and_calibrate_only_with_enough_data(t
                          index=days)
     close["SPY"] = 100.0
     monkeypatch.setattr("tradingagents.research.prices.bars", lambda tickers, cache: {"Close": close})
-    assert feedback.resolve(con, tmp_path) == 360
-    assert feedback.resolve(con, tmp_path) == 0                                                 # never twice
+    from tradingagents.stocks.positions import Policy
+
+    stocks = [c for c in close.columns if c != "SPY"]
+    engine = {"px": close[stocks], "div": close[stocks] * 0.0, "low": close[stocks], "close": close[stocks],
+              "policy": Policy("barrier_5", "barrier", 5)}
+    assert feedback.resolve(con, tmp_path, engine=engine) == 360
+    assert feedback.resolve(con, tmp_path, engine=engine) == 0                                  # never twice
     card = feedback.scorecard(con)
     assert card["matured"] == 360 and card["ic_mean"] > 0.9 and card["top_fifth_edge"] > 0
-    assert feedback.calibration(con)["active"]
-    assert not feedback.calibration(con, min_rows=1000)["active"]
+    end = days[-1].date()
+    assert feedback.calibration(con, end, "proc-A")["active"]
+    assert not feedback.calibration(con, end, "proc-A", min_rows=1000)["active"]
+    assert not feedback.calibration(con, end, "another-procedure")["active"]
     today = pd.DataFrame({"p_win": [0.7, 0.4], "expected_net": [0.02, -0.01]}, index=["X", "Y"])
-    out = feedback.apply(today, feedback.calibration(con))
+    out = feedback.apply(today, feedback.calibration(con, end, "proc-A"))
     assert list(out["p_win_model"]) == [0.7, 0.4] and out["p_win"].between(0, 1).all()
     path = feedback.export(con, tmp_path / "hist")
     assert path.exists() and len(pd.read_csv(path)) == 360
@@ -211,3 +219,20 @@ def test_the_second_models_buys_are_recorded_and_a_limit_fills_only_through_its_
     assert T.unhide(store.con, out["policy"][0]["key"]) == 1 and T.build(Con(), tmp_path)["hidden"] == 0   # Undo
     T.hide(store.con, out["policy"][1]["key"])
     assert T.restore_all(store.con) == 1 and len(T.build(Con(), tmp_path)["policy"]) == 2
+
+
+def test_the_track_record_leads_with_net_returns_with_the_cost_the_verdict_uses(tmp_path, monkeypatch):
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    close = pd.DataFrame({"AAA": np.r_[100.0, 100.0, np.full(28, 101.0)], "SPY": 100.0}, index=idx)
+    picks = [{"key": f"p|{d}|AAA", "ticker": "AAA", "data_to": str(idx[0].date()), "horizon": 20, "place": 1,
+              "cost_rt": 0.02, "role": "best"} for d in (1, 2)]
+    monkeypatch.setattr(T, "_picks", lambda con: [dict(p) for p in picks])
+    monkeypatch.setattr(T, "_policy_picks", lambda con: [])
+    monkeypatch.setattr(T, "hidden", lambda con: set())
+    monkeypatch.setattr("tradingagents.research.prices.bars", lambda tickers, cache: {"Close": close, "Low": close})
+    s = T.build(None, tmp_path)["summary"]["all_picks"]
+    # +1% raw, 2% cost: the headline is the net -1%, and "beat cost" agrees with it.
+    assert s["avg_raw_return"] == pytest.approx(0.01) and s["avg_net_return"] == pytest.approx(-0.01)
+    assert s["correct"] == 0 and s["dates"] == 1 and "avg_return" not in s

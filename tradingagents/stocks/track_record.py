@@ -217,21 +217,37 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
             rose = a["return"] > 0
             a["verdict"] = "correct" if rose == (a["rating"] in UP) else "wrong"
 
-    def summary(rows, key=None):
+    def summary(rows, key=None, costs=True):
+        """Net of the estimated round-trip cost first (the same cost the verdict uses), the raw return beside it,
+        the number of distinct data dates (overlapping 20-session holds are not independent) and a standard
+        error over those dates."""
         done = [r for r in rows if r.get("verdict") and (key is None or key(r))]
+        still_open = sum(1 for r in rows if r.get("status") == "open" and (key is None or key(r)))
         if not done:
-            return {"judged": 0, "open": sum(1 for r in rows if r.get("status") == "open" and (key is None or key(r)))}
-        rets = np.array([r["return"] for r in done])
+            return {"judged": 0, "open": still_open}
+        raw = np.array([r["return"] for r in done])
+        cost = np.array([float(r.get("cost_rt") or 0.0) for r in done]) if costs else np.zeros(len(done))
+        net = raw - cost
+        spy = [(n, r["spy"]) for n, r in zip(net, done) if r.get("spy") is not None]
+        by_date = pd.Series(net, index=[r["data_to"] for r in done]).groupby(level=0).mean()
+        se = float(by_date.std(ddof=1) / np.sqrt(len(by_date))) if len(by_date) > 1 else None
         return {"judged": len(done), "correct": sum(r["verdict"] == "correct" for r in done),
                 "hit_rate": float(np.mean([r["verdict"] == "correct" for r in done])),
-                "avg_return": float(rets.mean()),
-                "avg_vs_spy": float(np.mean([r["return"] - r["spy"] for r in done if r.get("spy") is not None] or [np.nan])),
-                "open": sum(1 for r in rows if r.get("status") == "open" and (key is None or key(r)))}
+                "avg_net_return": float(net.mean()) if costs else None,
+                "avg_net_vs_spy": float(np.mean([n - s_ for n, s_ in spy])) if costs and spy else None,
+                "avg_raw_return": float(raw.mean()),
+                "avg_raw_vs_spy": float(np.mean([r["return"] - r["spy"] for r in done if r.get("spy") is not None]
+                                                or [np.nan])),
+                "net_se_by_date": se if costs else None, "dates": int(len(by_date)),
+                "costs": "estimated round trip deducted" if costs else "none (a direction call, not a trade)",
+                "open": still_open}
 
     return {"picks": picks, "policy": policy, "agents": sorted(agents, key=lambda a: a["data_to"], reverse=True),
             "hidden": len(gone),
             "summary": {"best_buy": summary(picks, lambda r: r["place"] == 1), "all_picks": summary(picks),
-                        "policy": summary(policy), "agents": summary(agents)},
+                        "policy": summary(policy), "agents": summary(agents, costs=False)},
+            "outcome": "fixed-horizon diagnostic: held to the 20th close after entry (the limit record from its fill), "
+                       "not the barrier policy's result and not an account; see model_outputs record.fixed_horizon_*",
             "rules": {"correct_pick": "the return over 20 sessions from the next close beat the round-trip cost",
                       "correct_policy": "the same, from the next close or from the limit fill; a limit that never "
                                         "filled is not judged",

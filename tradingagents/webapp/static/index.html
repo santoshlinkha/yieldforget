@@ -918,17 +918,21 @@ function showUndo(text, key) {
 async function loadTrackRecord() {
   let d;
   try { d = await api("/api/track-record"); } catch (e) { $("recPicks").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
-  const s = d.summary, show = x => x.judged ? `${x.correct} of ${x.judged} (${pct(x.hit_rate, 0)})` : "none judged yet";
+  // Net of the estimated round-trip cost first (the cost the verdict uses); raw beside it; then the sample.
+  const s = d.summary, show = x => x.judged ? `${spct(x.avg_net_return ?? x.avg_raw_return)}` : "none matured yet";
+  const sub = (x, net = true) => x.judged
+    ? `${net ? `net of costs · vs SPY ${spct(x.avg_net_vs_spy)} · ` : "direction call, no costs · "}${x.correct} of ${x.judged} beat ${net ? "cost" : "direction"} · ${x.dates} data date${x.dates === 1 ? "" : "s"}${x.net_se_by_date != null ? ` · ±${(x.net_se_by_date * 100).toFixed(1)}% s.e.` : ""}${net ? ` · raw ${spct(x.avg_raw_return)}` : ""}`
+    : `${x.open} still open`;
   $("recKpis").innerHTML =
-    kpi("Best buy, correct", show(s.best_buy), s.best_buy.judged ? `average ${spct(s.best_buy.avg_return)} · vs SPY ${spct(s.best_buy.avg_vs_spy)}` : `${s.best_buy.open} still open`, "hero") +
-    kpi("All picks, correct", show(s.all_picks), s.all_picks.judged ? `average ${spct(s.all_picks.avg_return)} · vs SPY ${spct(s.all_picks.avg_vs_spy)}` : `${s.all_picks.open} still open`) +
-    kpi("Second model, correct", show(s.policy), s.policy.judged ? `average ${spct(s.policy.avg_return)} · vs SPY ${spct(s.policy.avg_vs_spy)}` : `${s.policy.open} still open`) +
-    kpi("AI agents, correct", show(s.agents), s.agents.judged ? `average ${spct(s.agents.avg_return)}` : `${s.agents.open} still open`);
-  $("recRule").textContent = `Correct: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade).`;
-  const del = r => `<td><button class="ghost small-btn rec-del" data-key="${esc(r.key)}" title="Delete this row from the track record (the saved decision is kept; Restore brings it back)" aria-label="Delete">✕</button></td>`;
-  const verdict = r => r.verdict === "correct" ? '<span class="pos"><b>✓ correct</b></span>' : r.verdict === "wrong" ? '<span class="neg"><b>✗ wrong</b></span>'
+    kpi("Best buy: average net return", show(s.best_buy), sub(s.best_buy), "hero") +
+    kpi("All picks: average net return", show(s.all_picks), sub(s.all_picks)) +
+    kpi("Policy model: average net return", show(s.policy), sub(s.policy)) +
+    kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "none matured yet", sub(s.agents, false));
+  $("recRule").textContent = `${d.outcome ? d.outcome[0].toUpperCase() + d.outcome.slice(1) + ". " : ""}Beat cost: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade). Overlapping holds are not independent: the sample is the number of data dates, not of rows.`;
+  const del = r => `<td><button class="ghost small-btn rec-del" data-key="${esc(r.key)}" title="Hide this row (the saved decision is kept; Show hidden rows brings it back)" aria-label="Hide row">Hide</button></td>`;
+  const verdict = r => r.verdict === "correct" ? `<span class="pos"><b>✓ ${r.rating ? "right direction" : "beat cost"}</b></span>` : r.verdict === "wrong" ? `<span class="neg"><b>✗ ${r.rating ? "wrong direction" : "below cost"}</b></span>`
     : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
-  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th><th></th></tr>" +
+  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th><th></th></tr>" +
     d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
       `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
       `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td>${del(r)}</tr>`).join("")
@@ -944,13 +948,13 @@ async function loadTrackRecord() {
     d.agents.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b></td><td class="l">${esc(r.rating)}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td>` +
       `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td>${del(r)}</tr>`).join("")
     : "<tr><td class='muted'>No AI agent rating saved yet.</td></tr>";
-  $("recHidden").innerHTML = d.hidden ? `${d.hidden} row(s) deleted from this view. <a href="#" id="recRestore">Restore all</a>` : "";
-  // Delete at once (no prompt): the row goes, stays gone after a refresh, and Undo brings it back.
+  $("recHidden").innerHTML = d.hidden ? `${d.hidden} row(s) hidden from this view. <a href="#" id="recRestore">Show hidden rows</a>` : "";
+  // Hide at once (no prompt): the row is hidden, stays hidden after a refresh, and Undo brings it back.
   document.querySelectorAll("#record .rec-del").forEach(b => b.onclick = async () => {
     const row = b.closest("tr"), key = b.dataset.key, name = row.querySelector("b") ? row.querySelector("b").textContent : "row";
     row.hidden = true;
-    try { await api("/api/track-record/hide", {key}); } catch (e) { row.hidden = false; showUndo(`Could not delete: ${e.message}`); return; }
-    showUndo(`Deleted ${name}.`, key);
+    try { await api("/api/track-record/hide", {key}); } catch (e) { row.hidden = false; showUndo(`Could not hide: ${e.message}`); return; }
+    showUndo(`Hid ${name} (the saved record is kept).`, key);
   });
   if ($("recRestore")) $("recRestore").onclick = async ev => { ev.preventDefault(); await api("/api/track-record/restore", {}); loadTrackRecord(); };
 }

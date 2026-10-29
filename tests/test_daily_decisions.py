@@ -81,6 +81,7 @@ def test_models_are_reused_when_only_the_dollar_amounts_change(env):
     assert first["model"]["bundle"]["reused"] is False and second["model"]["bundle"]["reused"] is True
     assert second["model"]["bundle"]["sha256"] == first["model"]["bundle"]["sha256"]
     assert second["settings"]["capital"]["daily_sgov_usd"] == 10.0
+    assert first["model"]["procedure_id"] == second["model"]["procedure_id"]      # same procedure: same cohort
 
 
 def test_no_lot_is_sold_on_its_entry_session(env):

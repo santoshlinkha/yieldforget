@@ -67,6 +67,25 @@ def risk_informative(p_risk: np.ndarray) -> bool:
     return len(p) > 1 and float(p.max() - p.min()) >= RISK_MIN_SPREAD
 
 
+def decision_procedure(policy, bundle: dict, ranker: dict, r: dict) -> str:
+    """The decision procedure's id (``model_outputs.procedure_id``): what the live record and the evidence are about.
+    A weekly refit of the same recipe keeps it; a different ranker, ensemble recipe, gate, sizing rule, cost model or
+    exit policy changes it."""
+    from tradingagents.model_outputs import procedure_id
+
+    from .positions import execution_spec
+
+    gates = {k: r.get(k) for k in ("min_expected_net", "min_p_win", "max_large_loss_prob", "risk_gate_when_uninformative",
+                                   "require_downside_estimate")}
+    sizing = {k: r.get(k) for k in ("max_position_share", "max_names", "min_order", "combined_name_cap")}
+    return procedure_id(recipe={"bundle": BUNDLE_VERSION, "thresholds": bundle.get("thresholds")},
+                        ranking=ranker.get("name", "xgb_rank"),
+                        ensemble={"version": ranker.get("version")} if ranker.get("name") == "ensemble" else None,
+                        calibration={"live": "feedback-v2"}, gates=gates, ordering=f"score_pct, then {TIE_ORDER}",
+                        sizing=sizing, costs={"model": "spread estimate + 2 bp a side"},
+                        execution=execution_spec(policy), features=list(bundle.get("features") or []))
+
+
 def rules(store) -> dict:
     return {**DEFAULT_RULES, **store.get("global", "stock_rules")}
 
@@ -550,7 +569,8 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     # The live record, once enough has matured, recalibrates P(profit) and expected net (stocks.feedback).
     from . import feedback
 
-    live = feedback.calibration(store.con)
+    procedure_id = decision_procedure(policy, bundle, ranker_used, r)
+    live = feedback.calibration(store.con, cutoff.date(), procedure_id)
     today = feedback.apply(today, live)
     prices = px.loc[cutoff]
     from tradingagents.optimizer.data import latest_prices
@@ -616,6 +636,10 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                 "score_pct": round(float(row["score_pct"]), 4),
                 "expected_net": round(float(row["expected_net"]), 5), "net_sd": round(float(row["net_sd"]), 5),
                 "p_win": round(float(row["p_win"]), 4), "p_risk": round(float(row["p_risk"]), 4),
+                # Before the live calibration (what it is fitted on), and the volatility the barrier levels use.
+                "p_win_raw": round(float(row.get("p_win_model", row["p_win"])), 4),
+                "expected_net_raw": round(float(row.get("expected_net_model", row["expected_net"])), 5),
+                "sigma": None if not np.isfinite(row["sigma"]) else round(float(row["sigma"]), 6),
                 "p_risk_informative": bool(row["risk_informative"]),
                 "cost_rt": round(float(row["cost_rt"]), 5)}
 
@@ -662,6 +686,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     record = {"id": decision_id, "info_cutoff": str(cutoff.date()), "execution_date": str(execute), "mode": mode,
               "sleeve": r["sleeve"], "settings": {"capital": snap, "rules": r},
               "model": {"policy": policy.__dict__, "policy_version": policy.version(), "bundle": art, "ranker": ranker_used,
+                        "procedure_id": procedure_id,
                         "bundle_meta": bundle["meta"], "thresholds": bundle["thresholds"], "evidence": ev,
                         "live_calibration": {k: v for k, v in live.items() if k != "p_win_map"},
                         "code": code_version()},
@@ -680,7 +705,8 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     # Every prediction is saved before its outcome is known, and earlier ones that have matured are scored.
     feedback.record(store.con, record, model_key=str(art.get("key") if isinstance(art, dict) else art))
     try:
-        feedback.resolve(store.con, cache_dir)
+        feedback.resolve(store.con, cache_dir, engine={"px": px, "div": div, "low": data.low, "close": data.close,
+                                                        "policy": policy})
         feedback.export(store.con, store.folder / "results" / "model_history")
     except Exception as exc:   # scoring past predictions never blocks today's decision
         say(f"could not score past predictions: {exc}")
