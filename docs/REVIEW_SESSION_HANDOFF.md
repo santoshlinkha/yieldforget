@@ -1,5 +1,22 @@
 # Repository review handoff
 
+## Session 3 (2026-10-28/29): merged into portfolio-app
+
+- `portfolio-app` was fast-forwarded to `claude/improvements-2026-10-28` at the owner's request. The untracked audit docs
+  that were in the main folder were moved to `..udit-docs-backup-2026-10-28` (the branch has the committed copies).
+  Restarting the app applies migrations 11-12 (a backup is taken first).
+- Added: agent report Copy (before Close), Dismiss for failed runs, Delete per saved run (moved to `_deleted`);
+  provider cooldowns (out of credit 6 h, free daily limit to 00:00 UTC, rate limit 10 min; saving a key clears them);
+  same-inputs reuse for agents, daily decisions, every-model runs and forecasts (`force` overrides);
+  progress bars on Screener/Forecasts; Models tab Decision column; morning schedule (Settings > Every morning);
+  refits every `schedule.retrain_every_sessions` (20) for the decision bundle, the every-model fits and the ensemble
+  weights; Track record $1-per-recommendation totals and 5-day paging.
+- **Ensemble trained** 2026-10-29 00:17 (`experiments/output/stacking_stock.log`, bundle in
+  `~/.tradingagents/cache/optimizer/decision_models/ensemble.json`). Development 2014-24 IC 0.032 (0.011, 0.053),
+  below equal weights of the same members (0.043); 2025 on IC -0.010 (-0.055, 0.038). Not validated. The app ranks by
+  it now (experimental mode). Owner decision pending: keep, switch to equal weights, or keep XGBoost.
+- Full suite on the branch before the merge: 1,754 passed, 5 skipped. No browser check of the pages yet.
+
 ## Implementation session 2 (2026-10-28) — read this first
 
 - **Where:** branch `claude/improvements-2026-10-28`, worktree `C:\Users\santo\Desktop\random_projects\Robinhood\TradingAgents-claude`, based on `3f72cbd`. The main checkout (`portfolio-app`) and the other worktrees (`codex/improvements-2026-10-28`, `quant-upgrades`) were not touched. Nothing was pushed.
