@@ -224,6 +224,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
+.note-fold > summary { font-size: 13px; }
 .notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; }
 .alert-strip { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border); }
 .alert-title { font-weight: 700; font-size: 13px; }
@@ -1144,7 +1145,8 @@ async function loadTrade() {
     $("polMeta").textContent = `${pol.model_version} · trained to ${pol.trained_to} · ${pol.status.state}`;
     const rowP = x => { const o = x.options.find(o => o.action === x.model_choice) || {};
       return `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td>${esc(PN[x.model_choice] || x.model_choice)}</td><td>${spct(o.expected_excess)}</td><td>${o.q10_excess == null ? "–" : spct(o.q10_excess, 1)}</td><td>${o.p_stop == null ? "–" : pct(o.p_stop, 0)}</td><td class="l small">${x.action === "insufficient evidence" ? "abstains" : esc(x.action)}</td></tr>`; };
-    $("polBox").innerHTML = (pol.status.validated ? "" : `<div class="note">Insufficient evidence: ${esc(pol.status.why || pol.status.state)}. Shown for reference; nothing here is a recommendation.</div>`) +
+    $("polBox").innerHTML = (pol.status.validated ? "" : `<div class="note"><details class="note-fold"><summary><span><b>Not validated:</b> shown for reference, not a recommendation.</span></summary>` +
+      `<div class="small" style="margin-top:6px">${esc(pol.status.why || pol.status.state)}.</div></details></div>`) +
       ((pol.top || []).length + (pol.held || []).length ? `<table class="compact" style="margin-top:8px"><tr><th class="l">Ticker</th><th>Model's choice</th><th>Expected vs cash</th><th>Bad case</th><th>P(stop first)</th><th class="l">Action</th></tr>` +
         [...(pol.held || []), ...(pol.top || [])].map(rowP).join("") + "</table>" : "<p class='muted small'>No stock clears the buy margin and the risk budget: cash.</p>");
   }
