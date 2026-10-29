@@ -157,7 +157,11 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .sg-table th.num, .sg-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .sg-table th.l, .sg-table td.l { text-align: left; }
 .sg-table .sg-clip { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sg-table .sg-warn summary { cursor: pointer; display: flex; gap: 4px; align-items: baseline; list-style: none; }
+.sg-table .sg-w { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.sg-table .sg-w > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-table .sg-w b { font-weight: 600; }
+.sg-table .sg-warns .sg-clip { white-space: normal; }
+.sg-table .sg-warn summary { cursor: pointer; display: flex; gap: 4px; align-items: flex-start; list-style: none; }
 .sg-table .sg-warn summary::-webkit-details-marker { display: none; }
 .sg-table .sg-warn summary .sg-clip { flex: 1; min-width: 0; }
 .sg-table .sg-warn[open] div { white-space: normal; margin-top: 3px; }
@@ -173,12 +177,40 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .split > .card, .split > div > .card:last-child { margin-bottom: 16px; }
 .split.wide { grid-template-columns: 3fr 2fr; }
+/* Trade page: everything fits its panel. Tables fill their card and wrap; a genuinely wide one scrolls inside it. */
+.trade-top { grid-template-columns: 3fr 2fr; align-items: start; }
+#today .card { min-width: 0; overflow: hidden; }
+#today .table-wrap { overflow-x: hidden; }
+#today .table-wrap.scroll-x { overflow-x: auto; }
+#today .table-wrap table { width: 100%; }
+#today td, #today th { white-space: normal; overflow-wrap: anywhere; }
+#today .table-wrap.scroll-x td, #today .table-wrap.scroll-x th { white-space: nowrap; overflow-wrap: normal; }
+#today .tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+#today .movers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#today .movers ol { padding-left: 18px; margin: 4px 0; }
+.trade-context { margin-top: 8px; }
+.trade-context > summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding: 10px 2px; border-top: 1px solid var(--border); list-style: none; }
+.trade-context > summary::-webkit-details-marker { display: none; }
+.trade-context > summary::before { content: "▸"; color: var(--muted); }
+.trade-context[open] > summary::before { content: "▾"; }
+@media (max-width: 900px) { .trade-top { grid-template-columns: 1fr; } #today .movers { grid-template-columns: 1fr; } }
 .split > * { min-width: 0; }
 #buyBox table, #sellBox table, #budgetBox table, #incBox table { width: 100%; }
 #buyBox th.l { white-space: nowrap; width: 1%; padding-right: 14px; }
 #buyBox td, #budgetBox td, #incBox td, #sellBox td.l, #rotTable td.l { white-space: normal; }
 #buyBox td { text-align: left; }
-@media (max-width: 900px) { .split, .split.wide { grid-template-columns: 1fr; } }
+#secBox { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); min-width: 0; }
+.sector-forecast-head { align-items: flex-start; }
+.sector-forecast-title { min-width: 0; font-size: 15px; line-height: 1.35; }
+.sector-forecast-table { width: 100%; table-layout: fixed; margin-top: 8px; }
+.sector-forecast-table th, .sector-forecast-table td { padding: 5px 4px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+.sector-forecast-table th { line-height: 1.25; }
+.sector-forecast-table th:nth-child(1), .sector-forecast-table td:nth-child(1) { width: 7%; }
+.sector-forecast-table th:nth-child(2), .sector-forecast-table td:nth-child(2) { width: 24%; }
+.sector-forecast-table th:nth-child(3), .sector-forecast-table td:nth-child(3) { width: 19%; }
+.sector-forecast-table th:nth-child(4), .sector-forecast-table td:nth-child(4) { width: 50%; }
+@media (max-width: 900px) { .split, .split.wide, .split.wide.trade-layout { grid-template-columns: 1fr; } }
 
 .table-wrap { overflow-x: visible; }
 @media (max-width: 900px) { .table-wrap { overflow-x: auto; } }
@@ -343,6 +375,39 @@ select option { background: var(--surface); color: var(--text); }
 .jobline .ev { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #keysTable input { font: inherit; font-size: 13px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 10px; }
 #keysTable input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+
+/* --- form controls, one style everywhere --- */
+input[type=text], input[type=number], input[type=date], input[type=time], input[type=search], input[type=password],
+input[type=email], input[type=url], input:not([type]), textarea {
+  font: inherit; font-size: 13.5px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 7px 10px; min-height: 34px;
+  box-shadow: inset 0 1px 1px color-mix(in srgb, var(--text) 4%, transparent);
+  transition: border-color .12s, box-shadow .12s; }
+textarea { min-height: 90px; line-height: 1.45; }
+input[type=text]:hover, input[type=number]:hover, input[type=date]:hover, input[type=time]:hover,
+input[type=search]:hover, input[type=password]:hover, input:not([type]):hover, textarea:hover { border-color: var(--accent); }
+input[type=text]:focus, input[type=number]:focus, input[type=date]:focus, input[type=time]:focus, input[type=search]:focus,
+input[type=password]:focus, input:not([type]):focus, textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+input:disabled, textarea:disabled { opacity: .55; cursor: not-allowed; }
+input[type=number]::-webkit-inner-spin-button { opacity: .5; }
+input[type=checkbox], input[type=radio] {
+  -webkit-appearance: none; appearance: none; flex: none; width: 17px; height: 17px; margin: 0; cursor: pointer;
+  border: 1.5px solid var(--border-strong); background: var(--surface); display: inline-grid; place-content: center;
+  vertical-align: -3px; transition: background .12s, border-color .12s; }
+input[type=checkbox] { border-radius: 5px; }
+input[type=radio] { border-radius: 50%; }
+input[type=checkbox]::before { content: ""; width: 9px; height: 9px; transform: scale(0); transition: transform .1s;
+  background: var(--on-accent, #fff); clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0, 43% 62%); }
+input[type=radio]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; transform: scale(0);
+  transition: transform .1s; background: var(--on-accent, #fff); }
+input[type=checkbox]:checked, input[type=radio]:checked { background: var(--accent); border-color: var(--accent); }
+input[type=checkbox]:checked::before, input[type=radio]:checked::before { transform: scale(1); }
+input[type=checkbox]:hover, input[type=radio]:hover { border-color: var(--accent); }
+input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type=checkbox]:disabled, input[type=radio]:disabled { opacity: .5; cursor: not-allowed; }
+label.check, .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -378,75 +443,85 @@ select option { background: var(--surface); color: var(--text); }
         <div class="row"><button id="tdRun" title="The internal model's decision for the next session, from the latest close (free, on this machine)">Make today's decision</button>
           <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="tdTrain"> fit models if needed</label>
           <span class="muted small" id="tdStatus"></span></div></div>
-      <div class="split wide">
+      <!-- 1. Today's trade: what to buy (left), what to sell and the alternatives (right). -->
+      <div class="split trade-top">
         <div>
           <div class="card">
             <div class="card-head"><h3>Best stock to buy</h3><span class="muted small" id="buyMeta"></span></div>
             <div id="buyBox"><p class="muted">Loading…</p></div>
             <div id="agentBox"></div>
           </div>
+        </div>
+        <div>
           <div class="card">
             <h3>Sell</h3>
             <div id="sellBox"></div>
           </div>
           <div class="card">
             <h3>Runners-up</h3>
-            <div class="row" style="margin:0 0 6px;justify-content:space-between"><p class="muted small" id="runnersNote" style="margin:0">The next stocks that pass the model's gates, in its order, in case the first is not wanted.</p>
+            <div class="row" style="margin:0 0 6px;justify-content:space-between;align-items:flex-start"><p class="muted small" id="runnersNote" style="margin:0">The next stocks that pass the model's gates, in its order, in case the first is not wanted.</p>
               <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on each runner-up, one after another (free models first)">Run the AI agents on all</button></div>
             <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
           </div>
-          <div class="card">
-            <div class="card-head"><h3>Trade outcome model</h3><span class="muted small" id="polMeta"></span></div>
-            <p class="muted small">A second, separate model: for each stock it compares buying at the next close, buying on a limit, and cash, by expected return over cash after costs and a bad case. It abstains ("insufficient evidence") until its holdout validation passes.</p>
-            <div id="polBox"></div>
-          </div>
-        </div>
-        <div>
-          <div class="card">
-            <h3>The model's live record</h3>
-            <div id="recordBox" class="small"></div>
-          </div>
         </div>
       </div>
 
-      <div class="section-title"><h2>Sector rotation</h2><span class="muted" id="rotAsOf">Loading…</span></div>
-      <div class="card">
-        <p class="muted">Sectors move through four stages against the market: Improving → Leading → Weakening → Lagging. The alerts are the early stages, ahead of the turn, with what moved them.</p>
-        <div id="rotAlerts"></div>
-        <div id="secBox" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)"></div>
-        <details class="small" style="margin-top:10px"><summary><b>Every sector</b></summary>
-          <div class="table-wrap"><table id="rotTable" class="compact"></table></div></details>
-        <p class="muted small" id="rotMethod"></p>
-      </div>
-
-      <div class="section-title"><h2>Market</h2><span class="muted" id="mkAsOf">Loading market data…</span></div>
-      <div class="tiles" id="mkTiles"></div>
-      <div class="card">
-        <div class="card-head">
-          <h3>Why it's happening</h3>
-          <span><span class="muted" id="mkStatus"></span> <button class="ghost" id="mkExplain">Explain today's moves</button></span>
-        </div>
-        <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
-      </div>
-      <div class="split wide">
+      <!-- 2. How the models are doing. -->
+      <div class="split">
         <div class="card">
-          <h3>Returns</h3>
-          <p class="muted">Yields and the VIX change in points; everything else in percent.</p>
-          <div class="table-wrap"><table id="mkTable" class="compact"></table></div>
+          <h3>The model's live record</h3>
+          <div id="recordBox" class="small"></div>
         </div>
-        <div>
-          <div class="card"><h3>Sectors, last month</h3><div class="bars" id="mkSectors"></div></div>
-          <div class="card"><h3>Disruptive themes, last month</h3><p class="muted">Median move of each theme's stocks and funds.</p><div class="bars" id="mkThemes"></div></div>
-        </div>
-      </div>
-      <div class="card">
-        <h3>S&amp;P 500 under the surface</h3>
-        <p class="muted" id="mkBreadth"></p>
-        <div class="movers">
-          <div><h4>Best, last month</h4><ol id="mkLeaders"></ol></div>
-          <div><h4>Worst, last month</h4><ol id="mkLaggards"></ol></div>
+        <div class="card">
+          <div class="card-head"><h3>Trade outcome model</h3><span class="muted small" id="polMeta"></span></div>
+          <p class="muted small">A second, separate model: for each stock it compares buying at the next close, buying on a limit, and cash, by expected return over cash after costs and a bad case. It abstains ("insufficient evidence") until its holdout validation passes.</p>
+          <div id="polBox"></div>
         </div>
       </div>
+
+      <!-- 3. Market context: research, folded until wanted. -->
+      <details class="trade-context" id="tradeContext">
+        <summary><span class="section-title" style="display:inline-flex;margin:0"><h2 style="margin:0">Market context</h2></span>
+          <span class="muted small" id="mkAsOf">Loading market data…</span></summary>
+        <div class="tiles" id="mkTiles"></div>
+        <div class="split">
+          <div>
+            <div class="card">
+              <div class="card-head">
+                <h3>Why it's happening</h3>
+                <span><span class="muted" id="mkStatus"></span> <button class="ghost" id="mkExplain">Explain today's moves</button></span>
+              </div>
+              <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
+            </div>
+            <div class="card">
+              <h3>S&amp;P 500 under the surface</h3>
+              <p class="muted" id="mkBreadth"></p>
+              <div class="movers">
+                <div><h4>Best, last month</h4><ol id="mkLeaders"></ol></div>
+                <div><h4>Worst, last month</h4><ol id="mkLaggards"></ol></div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Returns</h3>
+              <p class="muted">Yields and the VIX change in points; everything else in percent.</p>
+              <div class="table-wrap"><table id="mkTable" class="compact"></table></div>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-head"><h3>Sector rotation</h3><span class="muted" id="rotAsOf">Loading…</span></div>
+              <p class="muted">Sectors move through four stages against the market: Improving → Leading → Weakening → Lagging. The alerts are the early stages, ahead of the turn, with what moved them.</p>
+              <div id="rotAlerts"></div>
+              <div id="secBox"></div>
+              <details class="small" style="margin-top:10px"><summary><b>Every sector</b></summary>
+                <div class="table-wrap scroll-x"><table id="rotTable" class="compact"></table></div></details>
+              <p class="muted small" id="rotMethod"></p>
+            </div>
+            <div class="card"><h3>Sectors, last month</h3><div class="bars" id="mkSectors"></div></div>
+            <div class="card"><h3>Disruptive themes, last month</h3><p class="muted">Median move of each theme's stocks and funds.</p><div class="bars" id="mkThemes"></div></div>
+          </div>
+        </div>
+      </details>
     </section>
 
     <section class="tab" id="scanTab">
@@ -466,8 +541,6 @@ select option { background: var(--surface); color: var(--text); }
           <div class="row" style="margin:0;align-items:center;gap:8px"><b>What the columns mean</b><button type="button" class="ghost small-btn" id="qsLegendToggle" aria-expanded="true" aria-controls="qsLegend">Hide</button></div>
           <div id="qsLegend"></div>
         </div>
-        <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
-        <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
         <details class="small"><summary><b>How the scores and ranks are measured</b></summary>
           <ul class="muted">
             <li><b>Quality score (0–100)</b>: the share of the ticker page's tests the stock passes: the moat checks (gross margin, return on capital, margin stability, free cash flow, and so on) plus the financial strength items (debt to equity, interest coverage, current ratio) and the profitability items (FCF, ROIC above 15%, margin trends). A pass counts 1, a "check" ½, a flag 0; tests without data are left out. Example: 13 of 14 tests passed = 92.9.</li>
@@ -480,6 +553,8 @@ select option { background: var(--surface); color: var(--text); }
             <li><b>Valuation</b> is shown but not in the score, so a good company and a cheap one stay distinguishable. None of these was tested for predicting returns; it is a screen of facts and opinions as of today.</li>
           </ul>
         </details>
+        <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
+        <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
       </div>
     </section>
 
@@ -1173,7 +1248,7 @@ async function loadTrackRecord() {
   let d;
   try { d = await api("/api/track-record"); } catch (e) { $("recPicks").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
   // Net of the estimated round-trip cost first (the cost the verdict uses); raw beside it; then the sample.
-  const s = d.summary, show = x => x.judged ? `${spct(x.avg_net_return ?? x.avg_raw_return)}` : "No trades yet";
+  const s = d.summary, show = x => x.judged ? `${spct(x.avg_net_return ?? x.avg_raw_return)}` : "No Trades Yet";
   const sub = (x, net = true) => x.judged
     ? `${net ? `net of costs · vs SPY ${spct(x.avg_net_vs_spy)} · ` : "direction call, no costs · "}${x.correct} of ${x.judged} beat ${net ? "cost" : "direction"} · ${x.dates} data date${x.dates === 1 ? "" : "s"}${x.net_se_by_date != null ? ` · ±${(x.net_se_by_date * 100).toFixed(1)}% s.e.` : ""}${net ? ` · raw ${spct(x.avg_raw_return)}` : ""}`
     : (x.open ? `${x.open} still open: each finishes 20 sessions after it is bought` : "Nothing bought yet");
@@ -1181,7 +1256,7 @@ async function loadTrackRecord() {
     kpi("Best buy: average net return", show(s.best_buy), sub(s.best_buy), "hero") +
     kpi("All picks: average net return", show(s.all_picks), sub(s.all_picks)) +
     kpi("Policy model: average net return", show(s.policy), sub(s.policy)) +
-    kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "No trades yet", sub(s.agents, false));
+    kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "No Trades Yet", sub(s.agents, false));
   // $1 on each recommendation, followed exactly: finished ones at their 20th close, open ones at the latest close.
   const one = d.one_dollar || {};
   const dollarLine = (label, x) => {
@@ -1247,7 +1322,7 @@ async function loadSectorForecast() {
   let d;
   try { d = await api("/api/sector-forecast"); } catch (e) { $("secBox").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
   const j = d.job || {}, r = d.report, w = d.winners || {};
-  let h = `<div class="card-head"><b style="font-size:15px">Next 20 sessions: which sector leads (machine-learning forecast)</b>` +
+  let h = `<div class="card-head sector-forecast-head"><b class="sector-forecast-title">Next 20 sessions: which sector leads (machine-learning forecast)</b>` +
     `<button class="ghost small-btn" id="secRun" ${j.running ? "disabled" : ""}>${r ? "Run again" : "Run the sector model"}</button></div>`;
   if (j.running) h += jobLine(j, "sector");
   if (!r) h += `<p class="muted small">Not run yet. It studies 2008-2026 and forecasts in a few seconds, on this computer.</p>`;
@@ -1255,7 +1330,7 @@ async function loadSectorForecast() {
     const st = r.status || {}, hold = (r.parts || {}).holdout || {}, lr = hold.lambdarank || {};
     h += `<p class="muted small">LightGBM LambdaRank ranks the 11 sector funds by their expected return over SPY for the 20 sessions after the next close, from each sector's momentum and stage and the market drivers (rates, curve, oil, dollar, credit, VIX). Data to ${esc(r.forecast.as_of)}.</p>` +
       (st.validated ? "" : `<div class="note">Not validated: ${esc(st.why || "")}. On 2025-26 data it never saw, its order matched the real order with a rank correlation of ${(lr.ic || 0).toFixed(2)}. Shown for reference, not as a signal.</div>`) +
-      `<table class="compact" style="margin-top:8px"><tr><th class="l">#</th><th class="l">Sector</th><th>Expected vs SPY</th><th class="l">Probable winner (internal stock model)</th></tr>` +
+      `<table class="compact sector-forecast-table"><tr><th class="l">#</th><th class="l">Sector</th><th>Expected vs SPY</th><th class="l">Probable winner (internal stock model)</th></tr>` +
       r.forecast.sectors.map(x => { const win = w[x.ticker];
         return `<tr${x.rank <= 3 ? ' class="chosen"' : ""}><td class="l">${x.rank}</td><td class="l"><b>${tk(x.ticker)}</b> ${esc(x.name)}</td><td>${spct(x.expected_excess, 1)}</td>` +
           `<td class="l">${win ? `<b>${tk(win.ticker)}</b> <span class="muted small">${esc(win.name)} · #${win.rank} of ${win.of}</span>` : '<span class="muted">–</span>'}</td></tr>`; }).join("") + "</table>" +
@@ -1518,11 +1593,11 @@ const qsParts = r => `quality ${qsPct(r.quality_pct)} + consensus ${qsPct(r.anal
 // Fixed column widths per view: sorting never reshapes the table; it fills its panel and scrolls inside it when the
 // window is narrower than the columns need. Long text is cut with "…" and shown whole on hover.
 const QS_WIDTHS = {
-  quality: {rank: 56, ticker: 190, combined_score: 76, quality_rank: 70, quality_score: 70, moat_passed: 60, strength_flags: 70,
+  quality: {rank: 56, ticker: 150, combined_score: 76, quality_rank: 70, quality_score: 70, moat_passed: 60, strength_flags: 70,
             valuation_flags: 84, implied_growth: 76, forward_pe: 62, analyst_mean: 118, analysts: 70, target_upside: 74},
-  signals: {rank: 52, ticker: 170, verdict: 112, model_rank: 76, action: 108, trend: 118, lift_up: 80, lift_down: 88,
+  signals: {rank: 52, ticker: 140, verdict: 112, model_rank: 76, action: 108, trend: 118, lift_up: 80, lift_down: 88,
             p_large_loss: 66, warnings: 220, quality_score: 64, analyst_mean: 56},
-  models: {rank: 56, ticker: 210, ens: 86, ens_net: 96, ens_spy: 76, agree: 100, best_model: 170, quality_score: 70}};
+  models: {rank: 56, ticker: 180, ens: 86, ens_net: 96, ens_spy: 76, agree: 100, best_model: 170, quality_score: 70}};
 // The column explanations sit above the table; Hide / Show is remembered on this browser.
 function showLegend(on) {
   $("qsLegend").hidden = !on;
@@ -1625,7 +1700,10 @@ function renderSignals(shown, arrow) {
       const act = d ? badge(d.action, {ENTER: "pos", EXIT: "neg", REDUCE: "neg"}[d.action] || "") +
         (d.paper_action ? `<div class="muted small">${esc(d.paper_action.toLowerCase())}</div>` : "") : "<span class='muted'>–</span>";
       const warns = sg ? sg.warnings : null;
-      const warnLine = w => `<span class="${w.level === "info" ? "pos" : "neg"}">${esc(w.text)}</span>`;
+      const warnLine = w => {
+        const [name, ...rest] = String(w.text).split(": "), cls = w.level === "info" ? "pos" : "neg";
+        return `<span class="sg-w"><b class="${cls}">${esc(name)}</b>${rest.length ? `<span class="muted">${esc(rest.join(": "))}</span>` : ""}</span>`;
+      };
       const warnCell = !sg ? "<span class='muted'>no forecast</span>" : !warns.length ? "<span class='muted'>none</span>"
         : warns.length === 1 ? `<div class="sg-clip" title="${esc(warns[0].text)}">${warnLine(warns[0])}</div>`
         : `<details class="sg-warn"><summary><span class="sg-clip" title="${esc(warns[0].text)}">${warnLine(warns[0])}</span> <span class="muted">+${warns.length - 1}</span></summary>${warns.slice(1).map(w => `<div>${warnLine(w)}</div>`).join("")}</details>`;
