@@ -1126,7 +1126,7 @@ function renderZoo() {
   $("zooWeights").innerHTML = `<p class="${ens.coverage ? "" : "note"}"><b>Ranking today:</b> ${esc(zoo.ranking_note || "")}.</p>` +
     (ew && ens.coverage ? `<p class="muted small">Ensemble weights, learned from earlier years' out-of-sample results: ` +
       Object.entries(ew).sort((a, b) => b[1] - a[1]).map(([k, w]) => `${esc(ZOO_SHORT[k] || k)} <b>${Math.round(w * 100)}%</b>`).join(" · ") + `</p>` : "") +
-    `<div class="table-wrap"><table class="compact zoo-fit"><caption class="sr-only">Model lifecycle and coverage</caption><tr><th class="l" scope="col">Model</th><th class="l" scope="col">Role</th><th scope="col">Stocks</th><th scope="col" title="Rank correlation with the net trade result on data the model had not seen: 2012-24 · 2025 on">Tested IC</th><th class="l" scope="col">Its forecast</th><th scope="col">Column</th></tr>` +
+    `<div class="table-wrap"><table class="compact zoo-fit"><caption class="sr-only">Model lifecycle and coverage</caption><tr><th class="l" scope="col" title="Model: each stock model (hover a name for its full description)">Model</th><th class="l" scope="col" title="Role: whether the model decides the daily ranking, is its fallback, or is only shown">Role</th><th scope="col" title="Stocks: how many of today's stocks the model scored">Stocks</th><th scope="col" title="Tested IC: rank correlation with the net trade result on data the model had not seen (2012-24 · 2025 on)">Tested IC</th><th class="l" scope="col" title="Its forecast: what the model's own forecast number measures (hover a row for its timing)">Its forecast</th><th scope="col" title="Column: tick to show this model as a column in the stock table below">Column</th></tr>` +
     models.map(k => {
       const m = zoo.models[k], o = out(k), part = m.of && m.coverage < m.of;
       return `<tr><th class="l" scope="row" title="${esc(m.label)}">${esc(ZOO_SHORT[k] || k)}${m.failed ? ` <span class="neg small" title="${esc(m.failed)}">failed</span>` : ""}</th><td class="l small">${esc(LIFE[m.lifecycle] || m.lifecycle || "")}</td>` +
@@ -1151,7 +1151,7 @@ function renderZoo() {
   const pctCell = x => x ? `<td><b>${Math.round(x.pct * 100)}</b></td>` : "<td class='muted' title='not scored'>–</td>";
   const sortTh = (k, label, title, cls = "") => {
     const on = zooSort.key === k;
-    return `<th class="${cls}" scope="col" aria-sort="${on ? (zooSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${esc(k)}" title="${esc(title)}">${label}${on ? (zooSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
+    return `<th class="${cls}" scope="col" aria-sort="${on ? (zooSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${esc(k)}" title="${esc(title + "\nClick to sort by it; click again to reverse.")}">${label}${on ? (zooSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
   };
   // A stock's details: every model's percentile and its own forecast, named by what it measures.
   const details = r => `<tr class="zoo-detail"><td colspan="${3 + shown.length}"><div class="zoo-grid">` +
@@ -1657,9 +1657,10 @@ function fitScreen(view, cols) {
   // Shares of the panel's width (from each column's weight), so the table always fits the panel exactly.
   const total = cols.reduce((sum, [c]) => sum + (w[c] || 90), 0);
   t.insertAdjacentHTML("afterbegin", "<colgroup>" + cols.map(([c]) => `<col style="width:${((w[c] || 90) / total * 100).toFixed(2)}%">`).join("") + "</colgroup>");
+  // Hover: the header's full name and meaning; a click sorts by it (again: the other way).
   t.querySelectorAll("th[data-k]").forEach(th => {
     const c = cols.find(x => x[0] === th.dataset.k);
-    if (c && c[2]) th.title = c[2];
+    if (c) th.title = `${c[1]}${c[2] ? ": " + c[2] : ""}\nClick to sort by it; click again to reverse.`;
   });
   t.querySelectorAll("td").forEach(td => { if (!td.title && td.textContent.length > 14) td.title = td.textContent.trim(); });
   $("qsLegend").innerHTML = `<dl class="col-legend">` +
