@@ -175,6 +175,14 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .sg-table .sg-w > span { display: block; }
 .sg-table .sg-w b { font-weight: 600; }
 .sg-table td.sg-warns { white-space: normal; vertical-align: top; }
+.tr-cell { display: flex; align-items: center; gap: 4px; font-size: 11.5px; line-height: 1.5; white-space: nowrap; }
+.tr-cell .tr-hz { color: var(--muted); width: 22px; font-size: 10.5px; }
+.tr-cell .tr-arrow { font-weight: 700; width: 10px; text-align: center; }
+.tr-cell .tr-p { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.tr-cell.up .tr-arrow, .tr-cell.up .tr-word { color: #047857; }
+.tr-cell.down .tr-arrow, .tr-cell.down .tr-word { color: #b91c1c; }
+.tr-cell.side .tr-arrow, .tr-cell.side .tr-word { color: #2563eb; }
+.tr-cell.none .tr-word, .tr-cell.none .tr-arrow { color: var(--muted); }
 .sg-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: 5px;
   border: 1px solid currentColor; line-height: 1.5; }
 .runners { width: 100%; table-layout: fixed; }
@@ -1933,7 +1941,7 @@ const SG_COLS = [["rank", "Rank", "The screen rank (quality and analysts), the s
   ["ticker", "Ticker", "The stock; its company name below (hover for the full name)"], ["verdict", "Verdict", "BUY / WATCH / HOLD / SELL / AVOID: the ticker page explains each"],
   ["model_rank", "Model #", "The daily decision's rank among today's S&P 500 stocks (1 = best): the learned ensemble when it is trained, else the decision's own weekly XGBoost fit. It decides the verdict. It is the Decision column on the Models tab, not the Models tab's mean or its XGB (54) column."],
   ["action", "Action", "What the latest daily decision says for the stock (ENTER, WAIT, HOLD, EXIT, REDUCE; 'paper enter' while the model is experimental). Hover for the reasons"],
-  ["trend", "Trend", "The trend model's call over the next 20 sessions (up, down, sideways, or no clear trend) and its probability"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
+  ["trend", "Trend", "The trend forecast over the next 5 and 20 sessions (up, down, sideways, or no clear trend) and the chance of that call"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
   ["lift_down", "Breakdown", "Breakdown lift: P(trading below the 20-day low within 20 sessions, intraday) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss at the 20-session end)"],
   ["warnings", "Warnings", "Signals that stand out against today's other stocks (breakout, breakdown, crash, deep drawdown), one under another"],
   ["quality_score", "Quality", "The quality score (0-100), as in the first view"],
@@ -2023,6 +2031,15 @@ function showScreenView() {
   document.querySelectorAll("[data-qv]").forEach(b => b.setAttribute("aria-pressed", b.dataset.qv === qsView));
   if (models) { if (!zoo) loadZoo(); else renderZoo(); }
 }
+// A trend forecast in a Screener cell: its horizon, its call and that call's chance.
+function trendCell(t, h) {
+  const call = t && t.trend ? String(t.trend) : "";
+  const [arrow, cls, word] = /^up/.test(call) ? ["↑", "up", "Up"] : /^down/.test(call) ? ["↓", "down", "Down"]
+    : /^side/.test(call) ? ["→", "side", "Sideways"] : ["·", "none", call ? "No clear" : "–"];
+  return `<div class="tr-cell ${cls}" title="${esc(call || "no forecast")}${t && t.trend_p != null ? " · " + pct(t.trend_p, 0) : ""}">` +
+    `<span class="tr-hz">${h}</span><span class="tr-arrow">${arrow}</span><span class="tr-word">${word}</span>` +
+    `${t && t.trend_p != null && cls !== "none" ? `<span class="tr-p">${pct(t.trend_p, 0)}</span>` : ""}</div>`;
+}
 function renderScreen() {
   showScreenView();
   $("qsTable").classList.remove("fit-table"); $("qsLegend").innerHTML = ""; $("qsLegendBox").hidden = true;
@@ -2090,7 +2107,7 @@ function renderSignals(shown, arrow) {
           `${v && v.action !== v.verdict ? `<div class="muted small">model ${esc(v.verdict)} · not validated</div>` : ""}</td>` +
         `<td class="num" title="${v && v.model ? `expected ${(100 * v.model.expected_net).toFixed(2)}% after costs, P(profit) ${pct(v.model.p_win, 0)}` : ""}">${v && v.model ? `#${v.model.rank}<span class="muted small">/${v.model.of}</span>` : "–"}</td>` +
         `<td class="l" title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}">${act}</td>` +
-        `<td class="l">${sg ? `${esc(sg.trend)}${sg.trend_p != null ? ` <span class="muted small">${pct(sg.trend_p, 0)}</span>` : ""}` : "–"}</td>` +
+        `<td class="l">${trendCell(g.trend5, "5d")}${trendCell(sg && {trend: sg.trend, trend_p: sg.trend_p}, "20d")}</td>` +
         `<td class="num">${sg ? liftCell(sg.lifts.up_break, false) : "–"}</td><td class="num">${sg ? liftCell(sg.lifts.down_break, true) : "–"}</td>` +
         `<td class="num">${sg ? pct(sg.forecast.p_large_loss, 0) : "–"}</td>` +
         `<td class="l small sg-warns">${warnCell}</td>` +

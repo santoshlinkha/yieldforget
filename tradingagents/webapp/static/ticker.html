@@ -1302,8 +1302,6 @@ async function loadSignals() {
   if (sg && sg.status === "ok") {
     const f = sg.forecast;
     const tp = [["up", f.trend_up], ["down", f.trend_down], ["sideways", f.trend_sideways], ["unclear", f.trend_unclear]];
-    h += `<h3 class="sec">Trend over ${sg.horizon} sessions</h3><p class="small">Trend: <b>${esc(sg.trend)}</b>${sg.trend_p != null ? ` (${pct(sg.trend_p, 0)}, ${(sg.trend_lifts[sg.trend] || 0).toFixed(2)}× its usual share)` : ""} · ` +
-      tp.map(([n, v]) => `${n} ${pct(v, 0)}`).join(" · ") + `</p>`;
     h += signalTable(sg);
     h += sg.warnings.length ? `<ul class="small">${sg.warnings.map(w => `<li class="${w.level === "high" ? "down" : w.level === "warn" ? "neg" : "pos"}">${esc(w.text)}</li>`).join("")}</ul>`
       : `<p class="small muted">No breakout, breakdown or crash warning for this stock today.</p>`;

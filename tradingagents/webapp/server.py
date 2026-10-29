@@ -1093,8 +1093,14 @@ class App:
             present = {r["ticker"] for r in out["rows"]}
             out["rows"] += [{"ticker": t, "signal": None, "decision": None}
                             for t in sorted(held - present) if t not in daily.CASH_FUNDS]
+        # The 5-session trend forecast beside the 20-session one, for every row (the signals batch fits both).
+        five = signals.latest(self.store.con, 5, ticker=ticker)
         for r in out["rows"]:
             t = r["ticker"]
+            s5 = five.get(t)
+            r["trend5"] = ({"horizon": 5, "trend": s5.get("trend"), "trend_p": s5.get("trend_p"), "data_to": s5.get("data_to"),
+                            **{k: (s5.get("forecast") or {}).get(f"trend_{k}") for k in ("up", "down", "sideways", "unclear")}}
+                           if s5 and s5.get("status") == "ok" else None)
             row = rows.get(t) or (self._screen_row(t) if ticker else None)
             r["screen"] = row and {k: row.get(k) for k in ("quality_score", "quality_rank", "analyst_mean",
                                                             "analyst_label", "target_upside", "rank")}
@@ -1112,12 +1118,7 @@ class App:
                 r["entry"] = self._entry_plan(t, r["signal"])
             if ticker:
                 r["policy"] = self._policy_row(decision, t)
-                # The 5-session trend forecast beside the 20-session one (the signals batch fits both).
-                s5 = signals.latest(self.store.con, 5, ticker=t).get(t)
-                r["trend5"] = ({"horizon": 5, "trend": s5.get("trend"), "trend_p": s5.get("trend_p"),
-                                "data_to": s5.get("data_to"),
-                                **{k: (s5.get("forecast") or {}).get(f"trend_{k}") for k in ("up", "down", "sideways", "unclear")}}
-                               if s5 and s5.get("status") == "ok" else None)
+
         return out
 
     @staticmethod
