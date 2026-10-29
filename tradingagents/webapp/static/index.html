@@ -41,9 +41,10 @@ header { position: sticky; top: 0; z-index: 10; }
 .appbar { background: var(--brand-bg); color: var(--brand-text); }
 .appbar .wrap { display: flex; align-items: center; gap: 28px; height: 56px; }
 .brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; flex-shrink: 0; }
-.brand .mark { width: 28px; height: 28px; border-radius: 7px; background: linear-gradient(135deg, #3b82f6, #10b981); display: grid; place-items: center; }
-.brand .mark svg { width: 16px; height: 16px; }
-.brand h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+.brand .mark { width: 30px; height: 30px; display: block; filter: drop-shadow(0 0 6px rgba(63, 240, 207, .25)); }
+.brand h1 { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: -.02em; }
+.wordmark span { background: linear-gradient(180deg, #5cffe6, #16b98a); -webkit-background-clip: text; background-clip: text;
+  color: transparent; }
 .brand .acct { color: var(--brand-muted); font-size: 12px; font-weight: 500; }
 /* Every tab stays visible: the status text beside them gives way first. */
 nav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; height: 100%; min-width: 0; flex: 0 0 auto; }
@@ -203,6 +204,9 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .trade-top > div > .card { flex: 1 1 auto; margin-bottom: 16px; }
 .trade-top > div > .card:last-child { margin-bottom: 16px; }
 .trade-bottom > .card { margin-bottom: 16px; height: auto; }
+#sellBox .sell-fit { width: 100%; table-layout: fixed; }
+#sellBox .sell-fit th, #sellBox .sell-fit td { padding-left: 6px; padding-right: 6px; }
+#sellBox .sell-fit td.l.small { white-space: normal; }
 .trend-row { grid-template-columns: 1fr 1fr; align-items: stretch; }
 .trend-row > .card { margin-bottom: 16px; min-width: 0; }
 #trend .trend-row #secBox { margin-top: 0; padding-top: 0; border-top: 0; }
@@ -461,8 +465,8 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
   <div class="appbar">
     <div class="wrap">
       <div class="brand">
-        <div class="mark"><svg viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12l4-4 3 3 5-6"/></svg></div>
-        <div><h1>AlphaDesk</h1></div>
+        <img class="mark" src="/favicon.svg" alt="" width="30" height="30">
+        <div><h1 class="wordmark"><span>Alpha</span>Desk</h1></div>
         <span class="acct">Roth IRA</span>
       </div>
       <nav role="tablist">
@@ -958,10 +962,15 @@ async function loadTrade() {
        <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (each checked on a close)</td></tr></table>` +
       (x.patient ? `<details class="small" style="margin-top:6px"><summary>Untested alternative: a patient limit</summary><p class="muted">Limit ${usd(x.patient.price)}, the signal model's median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not the chance of a fill. Returns after such fills were never evaluated. Stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)}.</p></details>` : "")
       : "") + (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
-    $("sellBox").innerHTML = t.sells.length ? `<table class="compact"><tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Bought</th><th>Unrealized</th><th>Sell at target</th><th>Sell at stop</th><th>Deadline</th></tr>` +
+    // Net $: the profit or loss so far in dollars (shares × (last close − your fill)), before the sale's cost.
+    const netCell = s => {
+      const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
+      return v == null ? "<td>–</td>" : `<td class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
+    };
+    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net $</th><th>Sell at target</th><th>Sell at stop</th><th>Deadline</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
-        <td>${money(s.last_close)}</td><td>${money(s.entry)}</td><td>${s.unrealized == null ? "–" : spct(s.unrealized)}</td><td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
-        <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
+        <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
+        <tr><td></td><td colspan="6" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
     // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
     $("runnersTable").className = "compact runners";

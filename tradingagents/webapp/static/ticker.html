@@ -36,6 +36,11 @@ table, .num { font-variant-numeric: tabular-nums; }
 .appbar .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
 .appbar a { color: var(--brand-muted); text-decoration: none; font-size: 13px; }
 .appbar a:hover { color: var(--brand-text); }
+.appbar .home-link { display: inline-flex; align-items: center; gap: 8px; }
+.appbar .home-link img { filter: drop-shadow(0 0 5px rgba(63, 240, 207, .25)); }
+.wordmark { color: var(--brand-text); letter-spacing: -.02em; }
+.wordmark span { background: linear-gradient(180deg, #5cffe6, #16b98a); -webkit-background-clip: text; background-clip: text;
+  color: transparent; }
 .title { padding: 22px 0 6px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
 .title h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
 .title .name { color: var(--muted); font-size: 15px; }
@@ -277,7 +282,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
 </style>
 </head>
 <body>
-<header class="appbar"><div class="wrap"><a href="/">← AlphaDesk</a><span class="muted small" id="asof"></span></div></header>
+<header class="appbar"><div class="wrap"><a href="/" class="home-link"><img src="/favicon.svg" alt="" width="22" height="22"><span>← <b class="wordmark"><span>Alpha</span>Desk</b></span></a><span class="muted small" id="asof"></span></div></header>
 <main class="wrap">
   <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span><span id="vbadge"></span></div>
   <p class="muted small" id="desc"></p>
