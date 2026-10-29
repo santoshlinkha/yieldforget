@@ -1337,8 +1337,12 @@ class App:
         text = str(body.get("text") or "")
         source = str(body.get("source") or "ChatGPT Plus (pasted)")[:60]
         if not ticker or len(text.strip()) < 40:
-            raise ValueError("paste the whole answer, ending with its JSON block")
-        decision = parse_answer(text)
+            raise ValueError("paste the whole answer: all twelve responses, each under its '## Response N' heading")
+        from tradingagents.agents.manual import decision_from_steps, final_state
+
+        # The per-step answer (prompt v2): the same final state an API run has, saved as the same report files.
+        staged = final_state(text, ticker, day)
+        decision = (decision_from_steps(staged[1]) if staged else None) or parse_answer(text)
         from tradingagents.agents.manual import PROMPT_VERSION
         from tradingagents.optimizer.ai_views import fresh_report_folder
 
@@ -1354,8 +1358,14 @@ class App:
             encoding="utf-8")
         if pid:   # the prompt the answer was given, kept with it
             (folder / "prompt.txt").write_text(saved[-1].read_text(encoding="utf-8"), encoding="utf-8")
-        md = decision_markdown(decision)
-        (folder / "5_portfolio" / "decision.md").write_text(md, encoding="utf-8")
+        if staged and staged[0]["final_trade_decision"]:
+            from tradingagents.reporting import write_report_tree
+
+            write_report_tree(staged[0], ticker, folder)          # 1_analysts ... 5_portfolio, complete_report
+            md = staged[0]["final_trade_decision"]
+        else:
+            md = decision_markdown(decision)
+            (folder / "5_portfolio" / "decision.md").write_text(md, encoding="utf-8")
         log = TradingMemoryLog(self.config)
         before = {(e["date"], e["ticker"].upper()) for e in log.load_entries()}
         log.store_decision(ticker, day, md, decision["rating"])
@@ -1365,6 +1375,9 @@ class App:
                                      None, models=source)
         trader = decision.get("trader") if isinstance(decision.get("trader"), dict) else None
         provenance = {"source": source, "prompt_version": PROMPT_VERSION, "prompt_id": pid,
+                      "answer_form": "per-step (API form)" if staged else "single JSON block",
+                      "steps_answered": staged[1]["steps"] if staged else None,
+                      "schema_notes": staged[1]["notes"] if staged else None,
                       "rating": decision["rating"], "rating_recorded": recorded, "trader": trader,
                       "model_decision": final.get("decision_id"),
                       "saved_at": datetime.now().astimezone().isoformat(timespec="seconds")}

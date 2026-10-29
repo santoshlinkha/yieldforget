@@ -552,3 +552,23 @@ def test_dismiss_clears_a_failure_from_another_stock_too(tmp_path, monkeypatch):
     out = app.dismiss_agent_failures("DVA")                     # the Trade page shows another stock
     assert out["job_error_cleared"] and app.analysis.error is None and out["runs_hidden"] == 1
     assert app._last_agent_run("GDDY") is None
+
+
+def test_a_per_step_chat_answer_is_saved_as_the_api_runs_report_files(server):
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_manual import ANSWER
+
+    base, tmp_path, _ = server
+    status, out = _call(base, "/api/manual-answer", {"ticker": "AMD", "date": "2026-10-23", "text": ANSWER})
+    assert status == 200 and out["rating"] == "Overweight" and out["trader"]["entry_price"] == 570.5
+    rep = tmp_path / "results" / "AMD" / "2026-10-23" / "reports"
+    for f in ("1_analysts/market.md", "1_analysts/sentiment.md", "1_analysts/news.md", "1_analysts/fundamentals.md",
+              "2_research/bull.md", "2_research/bear.md", "2_research/manager.md", "3_trading/trader.md",
+              "4_risk/aggressive.md", "4_risk/conservative.md", "4_risk/neutral.md", "5_portfolio/decision.md",
+              "complete_report.md", "complete_report.html"):
+        assert (rep / f).is_file(), f
+    assert (rep / "5_portfolio" / "decision.md").read_text(encoding="utf-8").startswith("**Rating**: Overweight")
+    assert "FINAL TRANSACTION PROPOSAL: **BUY**" in (rep / "3_trading" / "trader.md").read_text(encoding="utf-8")
+    prov = json.loads((rep / "provenance.json").read_text(encoding="utf-8"))
+    assert prov["answer_form"] == "per-step (API form)" and len(prov["steps_answered"]) == 12

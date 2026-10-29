@@ -283,7 +283,7 @@ select option { background: var(--surface); color: var(--text); }
             <ol class="small muted" style="margin:8px 0 8px 18px;padding:0">
               <li>Click <b>Copy the prompt</b>: it holds the TradingAgents team's own prompts (TauricResearch), every agent from the market analyst to the portfolio manager in the framework's order, with the data each analyst's tools return as of the day above. The chat plays each agent in turn. It carries no holdings and none of the app's verdicts, model ranks or signals, so the chat's view is independent. Building it fetches the data and takes about a minute.</li>
               <li>Paste it into ChatGPT (or Gemini or Claude in your browser) and send it.</li>
-              <li>Copy the whole answer, paste it below and click <b>Save the answer</b>. It must end with the JSON block the prompt asks for.</li>
+              <li>Copy the whole answer, paste it below and click <b>Save the answer</b>. It must hold all twelve responses, each under its <code>## Response N</code> heading; the four structured ones (sentiment, research manager, trader, portfolio manager) as JSON. The app saves it as the same report files an API run writes.</li>
             </ol>
             <div class="runbar"><button class="ghost" id="mpCopy">Copy the prompt</button><span class="muted small" id="mpInfo"></span></div>
             <textarea id="mpPrompt" readonly style="display:none;width:100%;height:120px;margin-top:8px;font:12px ui-monospace,Consolas,monospace"></textarea>
