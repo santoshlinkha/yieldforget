@@ -560,7 +560,6 @@ select option { background: var(--surface); color: var(--text); }
           <p class="muted small" style="margin:2px 0 4px">Each group's worth divided by what it put in, so groups of different sizes share one axis: $1.00 is break-even. Held positions at each day's close less the entry half of the cost; sold ones at their 20th close less the whole cost.</p>
           <div id="recCurveKey"></div>
           <div class="cv-wrap" id="recCurve"></div>
-          <details class="small"><summary>Show as a table</summary><div class="table-wrap"><table class="compact" id="recCurveTable"></table></div></details>
         </div>
         <div class="table-wrap"><table id="recPicks" class="compact"></table></div><div id="recPicksMore"></div>
       </div>
@@ -1101,7 +1100,7 @@ function drawCurve(one) {
     .filter(s => s.pts.length);
   if (!series.length) {
     $("recCurve").innerHTML = '<p class="muted small">Nothing bought yet: the first recommendation is bought at the close after its data date.</p>';
-    $("recCurveKey").innerHTML = ""; $("recCurveTable").innerHTML = ""; return;
+    $("recCurveKey").innerHTML = ""; return;
   }
   const dates = [...new Set(series.flatMap(s => s.pts.map(p => p.date)))].sort(), n = dates.length;
   const at = Object.fromEntries(series.map(s => [s.k, Object.fromEntries(s.pts.map(p => [p.date, p]))]));
@@ -1151,9 +1150,6 @@ function drawCurve(one) {
     show(Math.max(0, Math.min(n - 1, Math.round(n === 1 ? 0 : (vx - L) / (W - L - R) * (n - 1))))); };
   hit.onmouseleave = hide; hit.onblur = hide; hit.onfocus = () => show(cvAt);
   hit.onkeydown = ev => { const dd = {ArrowRight: 1, ArrowLeft: -1}[ev.key]; if (dd) { ev.preventDefault(); show(Math.max(0, Math.min(n - 1, cvAt + dd))); } };
-  $("recCurveTable").innerHTML = `<tr><th class='l'>Date</th>${series.map(s => `<th>${esc(s.label)}<div class="muted small">per $1 (worth / put in)</div></th>`).join("")}</tr>` +
-    dates.slice().reverse().map(d => `<tr><td class="l">${esc(d)}</td>${series.map(s => { const p = at[s.k][d];
-      return p ? `<td><b>${usd(p.per)}</b> <span class="muted small">${usd(p.value)} / ${usd(p.invested)}</span></td>` : "<td class='muted'>–</td>"; }).join("")}</tr>`).join("");
 }
 // Each table shows its first 20 rows (newest first); "Show more" adds 20.
 const REC_STEP = 20;
