@@ -552,7 +552,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           <div class="card">
             <div class="card-head"><h3>AI's pick</h3>
               <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on each of the model's picks, one after another (free models first; each stock at most once a day)">Ask the AI to pick</button></div>
-            <div id="aiPickBox"><p class="muted small">Loading…</p></div>
+            <div id="aiPickBox"></div>
           </div>
           <div class="card agent-room">
             <div class="card-head"><h3>The Trading Floor</h3><span class="muted small">the AI agents at work, live</span></div>
@@ -1038,6 +1038,7 @@ async function loadTrade() {
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
     // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
     $("runnersTable").className = "compact runners";
+    lastTrade = t;
     const allPicks = [...(x ? [x] : []), ...t.runners_up];
     $("runnersTable").innerHTML = allPicks.length
       ? `<colgroup><col style="width:17%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:11%"><col style="width:11%"><col style="width:22%"></colgroup>` +
@@ -1081,7 +1082,7 @@ async function loadTrade() {
   loadRecord();
 }
 // --- the TradingAgents team on the model's pick: run it, watch it, read its full report ---
-let agentTicker = null, agentDay = null, agentPolling = false, agentWasRunning = false, lastPicks = [];
+let agentTicker = null, agentDay = null, agentPolling = false, agentWasRunning = false, lastPicks = [], lastTrade = null;
 async function loadAgentReport() {
   const box = $("agentBox");
   let j = {};
@@ -1136,19 +1137,34 @@ async function runnerAgents(list) {
 }
 const AI_RANK = {buy: 5, overweight: 4, hold: 3, underweight: 2, sell: 1};
 // The AI's pick: of the model's picks the agents have read, the one they rate highest (ties: the model's order).
-function renderAiPick(seen) {
-  // Only a stock the agents rate Buy or Overweight is the AI's pick; nothing else is shown.
-  const rated = seen.filter(s => s.r.available && s.r.agent_rating)
-    .map((s, i) => ({...s, i, score: AI_RANK[String(s.r.agent_rating).toLowerCase()] || 0}))
-    .filter(s => s.score >= 4);
-  if (!rated.length) { $("aiPickBox").innerHTML = `<p class="muted small" style="margin:0">No AI pick yet.</p>`; return; }
-  const best = rated.slice().sort((a, b) => b.score - a.score || a.i - b.i)[0], r = best.r;
-  const act = r.agent_action || "", short = m => String(m || "").split("/").pop().replace(":free", "");
-  $("aiPickBox").innerHTML =
-    `<div class="ai-pick"><div class="order-head"><span class="side buy">AI's pick</span>` +
-    `<strong style="font-size:20px">${tk(best.ticker)}</strong><span class="rn-badge pos">${esc(r.agent_rating)}${act ? ` → ${esc(act)}` : ""}</span></div>` +
-    `<p class="muted small" style="margin:6px 0 0">As of ${esc(r.date)}${r.agent_models ? ` · ${esc(short(r.agent_models))}` : ""} · ` +
-    `<a href="/ticker/${encodeURIComponent(best.ticker)}" target="_blank" rel="noopener">Read it</a></p></div>`;
+// The AI's picks: the stocks the agents chose to buy (rated Buy or Overweight), at the agents' own entry price, sell
+// target and stop loss, with the trading budget split across them. Blank until the agents have run.
+async function renderAiPick(seen) {
+  const ran = seen.filter(s => s.r.available && s.r.agent_rating);
+  if (!ran.length) { $("aiPickBox").innerHTML = ""; return; }
+  const buys = ran.map((s, i) => ({...s, i, score: AI_RANK[String(s.r.agent_rating).toLowerCase()] || 0}))
+    .filter(s => s.score >= 4).sort((a, b) => b.score - a.score || a.i - b.i);
+  if (!buys.length) { $("aiPickBox").innerHTML = `<p class="muted small" style="margin:0">The AI found nothing to buy today.</p>`; return; }
+  const plans = await Promise.all(buys.map(b => api("/api/entry-plans?ticker=" + encodeURIComponent(b.ticker)).catch(() => ({runs: []}))));
+  // The budget split: the Trade page's weights, renormalized over the AI's picks.
+  const a = (lastTrade && lastTrade.allocation) || {weights: {}, budget: 0};
+  const raw = buys.map(b => a.weights[b.ticker] ?? 1 / buys.length), sum = raw.reduce((x, y) => x + y, 0) || 1;
+  const num = v => v == null || v === "" ? "–" : usd(+v);
+  const rows = buys.map((b, k) => {
+    const run = (plans[k].runs || [])[0] || {}, row = run.final || run.trader || {}, p = row.plan || {};
+    const lv = (row.validation || {}).levels || {}, w = raw[k] / sum;
+    const price = p.entry_price != null ? num(p.entry_price)
+      : p.entry_range_low != null ? `${num(p.entry_range_low)}–${num(p.entry_range_high)}` : "–";
+    return `<tr><td class="l"><b>${tk(b.ticker)}</b></td><td class="l"><span class="rn-badge pos">${esc(b.r.agent_rating)}</span></td>` +
+      `<td class="num">${Math.round(w * 100)}%</td><td class="num">${a.budget ? usd(w * a.budget) : "–"}</td>` +
+      `<td class="num"><b>${price}</b></td><td class="num pos">${num(lv.price_target)}</td><td class="num neg">${num(lv.stop_loss)}</td></tr>`;
+  });
+  $("aiPickBox").innerHTML = `<div class="table-wrap"><table class="compact ai-picks"><colgroup><col style="width:15%"><col style="width:19%">` +
+    `<col style="width:11%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:13%"></colgroup>` +
+    `<tr><th class="l">Ticker</th><th class="l">Rating</th><th class="num">Weight</th><th class="num">Amount</th>` +
+    `<th class="num" title="The agents' entry price (or range)">Buy at</th><th class="num" title="The agents' sell target">Sell</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
+    rows.join("") + `</table></div>` +
+    `<p class="muted small" style="margin:6px 0 0">As of ${esc(buys[0].r.date)}: the agents' own prices from their entry plans. Context, not a validated signal.</p>`;
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
