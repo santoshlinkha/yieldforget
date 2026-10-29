@@ -337,7 +337,7 @@ details[open] > summary::after { content: "Hide"; }
 <body>
 <header class="appbar"><div class="wrap"><a href="/" class="home-link"><img src="/logo.svg" alt="" width="32" height="32"><span>← <b class="wordmark"><span>Alpha</span>Desk</b></span></a><span class="muted small" id="asof"></span></div></header>
 <main class="wrap">
-  <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span><span id="vbadge"></span></div>
+  <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span></div>
   <p class="muted small" id="desc"></p>
   <div id="err"></div>
   <div class="grid">
@@ -1247,7 +1247,6 @@ async function loadSignals() {
         : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
       `<p class="small" style="margin:10px 0 4px"><b>Context</b> <span class="muted">(shown, does not change the verdict)</span></p><ul class="vchecks">` +
       (vd.context || []).map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>`;
-    $("vbadge").innerHTML = `<span class="verdict ${word(vd.action)}" title="${esc(vd.label + ": " + vd.summary)}">${word(vd.action)}</span>`;
   }
   if (dec) {
     const why = (dec.blocked || dec.reasons || []).join("; ");

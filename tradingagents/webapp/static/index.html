@@ -224,6 +224,14 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
+/* One verdict badge on every page: filled, no border; BUY green, WATCH amber, HOLD blue, SELL / AVOID red. */
+.vb, .ai-box, .ai-call { border: 0 !important; }
+.vb.BUY, .ai-box.BUY, .ai-call.BUY { color: #fff; background: #059669; }
+.vb.WATCH, .ai-box.WATCH, .ai-call.WATCH, .vb.REVIEW { color: #422006; background: #fbbf24; }
+.vb.HOLD, .ai-box.HOLD, .ai-call.HOLD { color: #fff; background: #2563eb; }
+.vb.SELL, .vb.AVOID, .ai-box.SELL, .ai-box.AVOID, .ai-call.SELL, .ai-call.AVOID { color: #fff; background: #dc2626; }
+.vb.ABSTAIN { color: var(--text); background: var(--border); }
+
 .note-fold > summary { font-size: 13px; }
 .notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; }
 .alert-strip { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border); }
@@ -453,7 +461,7 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
 .chip input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .chip input:checked + span::before { background: currentColor; }
 .chip:hover span { border-color: var(--accent); }
-.vb { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; }
+.vb { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; padding: 2px 9px; border-radius: 999px; }
 .vb.BUY { color: var(--buy, #059669); } .vb.SELL, .vb.AVOID { color: var(--sell, #dc2626); } .vb.HOLD { color: var(--accent); } .vb.WATCH, .vb.REVIEW { color: #d97706; } .vb.ABSTAIN { color: var(--muted); }
 .econ { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); margin: 0 0 14px; }
 .econ h4 { margin: 0 0 6px; font-size: 13px; }
@@ -1232,10 +1240,11 @@ async function loadAgentReport() {
 // hold the stock and WATCH when you do not; Underweight and Sell are SELL when you hold it and AVOID when you do not.
 function aiWord(rating, held) {
   const low = String(rating || "").toLowerCase();
-  if (/^(buy|overweight)$/.test(low)) return ["BUY", "good"];
-  if (/^(sell|underweight)$/.test(low)) return [held ? "SELL" : "AVOID", "bad"];
-  return [held ? "HOLD" : "WATCH", "mid"];
+  const w = /^(buy|overweight)$/.test(low) ? "BUY" : /^(sell|underweight)$/.test(low) ? (held ? "SELL" : "AVOID") : held ? "HOLD" : "WATCH";
+  return [w, w];
 }
+// One word set on every page: BUY, WATCH, HOLD, SELL, AVOID. The model's WAIT (a BUY it may not act on yet) reads WATCH.
+const word = a => a === "WAIT" ? "WATCH" : a;
 function agentCell(r, held = false) {
   const lr = r.last_run, short = m => String(m || "").split("/").pop().replace(":free", "");
   let h = "";
@@ -2063,7 +2072,7 @@ function renderSignals(shown, arrow) {
         : warns.map(warnLine).join("");
       return `<tr><td class="num">${r.rank}</td>` +
         `<td class="l sg-name"><b>${tk(r.ticker)}</b><div class="muted small sg-clip" title="${esc(r.name || "")}">${esc(r.name || "")}</div></td>` +
-        `<td class="l" title="${esc(v ? v.label + ": " + v.summary : "")}">${v ? badge(v.action, VERDICT_CLS[v.action] || "") : "<span class='muted'>–</span>"}` +
+        `<td class="l" title="${esc(v ? v.label + ": " + v.summary : "")}">${v ? `<span class="vb ${word(v.action)}">${word(v.action)}</span>` : "<span class='muted'>–</span>"}` +
           `${v && v.action !== v.verdict ? `<div class="muted small">model ${esc(v.verdict)} · not validated</div>` : ""}</td>` +
         `<td class="num" title="${v && v.model ? `expected ${(100 * v.model.expected_net).toFixed(2)}% after costs, P(profit) ${pct(v.model.p_win, 0)}` : ""}">${v && v.model ? `#${v.model.rank}<span class="muted small">/${v.model.of}</span>` : "–"}</td>` +
         `<td class="l" title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}">${act}</td>` +
@@ -2138,9 +2147,9 @@ function aiRender() {
       return `<tr><td><input type="checkbox" data-t="${esc(r.ticker)}" ${aiPicked.has(r.ticker) ? "checked" : ""} aria-label="Analyze ${esc(r.ticker)}"></td>
         <td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.name || "")}</span></td>
         <td class="l muted small">${esc(r.why)}${r.held ? " · held" : ""}</td>
-        <td>${ai ? `<span class="vb ${ai.action}">${ai.action}</span>` : "<span class='muted small'>not run</span>"}</td>
+        <td>${ai ? `<span class="vb ${word(ai.action)}">${word(ai.action)}</span>` : "<span class='muted small'>not run</span>"}</td>
         <td class="l small">${ai ? `<a href="/ticker/${encodeURIComponent(r.ticker)}#report=${esc(ai.date)}" target="_blank" rel="noopener" title="The agents' call">Final decision, ${esc(ai.date)}</a>${ai.stale ? " <span class='muted'>(stale)</span>" : ""}` : "–"}</td>
-        <td title="${esc(r.verdict_summary || "")}">${r.verdict ? `<span class="vb ${r.verdict}">${r.verdict}</span>` : "–"}</td>
+        <td title="${esc(r.verdict_summary || "")}">${r.verdict ? `<span class="vb ${word(r.verdict)}">${word(r.verdict)}</span>` : "–"}</td>
         <td class="${agree === "✓" ? "pos" : agree === "✗" ? "neg" : "muted"}">${agree}</td></tr>`;
     }).join("") : "<tr><td colspan='7' class='muted l'>Nothing to list: no holdings, no BUY verdicts and no daily decision yet.</td></tr>");
   const hidden = d.rows.length - aiShown(d.rows).length;
