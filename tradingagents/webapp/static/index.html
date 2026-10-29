@@ -551,7 +551,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           </div>
           <div class="card">
             <div class="card-head"><h3>AI's pick</h3>
-              <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on each of the model's picks, one after another (free models first; each stock at most once a day)">Ask the AI to pick</button></div>
+              <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on the Screener's top 5 stocks by Rank (not the model's picks), one after another; each stock at most once a day">Ask the AI to pick</button></div>
             <div id="aiPickBox"></div>
           </div>
           <div class="card agent-room">
@@ -1049,14 +1049,17 @@ async function loadTrade() {
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
           `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
-    $("runnersAll").hidden = !allPicks.length;
+    $("runnersAll").hidden = false;
     $("runnersAll").onclick = async () => {
-      try { await api("/api/ai-decisions", {tickers: allPicks.map(x => x.ticker), analysts: ["market", "social", "news", "fundamentals"], date: t.data_to}); }
+      const pool = await aiPool();
+      if (!pool.length) { showError("The Screener has no ranked stocks yet: build it first."); return; }
+      try { await api("/api/ai-decisions", {tickers: pool, analysts: ["market", "social", "news", "fundamentals"], date: t.data_to}); }
       catch (e) { showError(e.message); }
-      agentTicker = allPicks[0].ticker; loadAgentReport(); runnerAgents(allPicks);
+      loadAgentReport();
     };
     lastPicks = allPicks;
     runnerAgents(allPicks);
+    loadAiPicks();
     // The fill is whatever the next close was: ask for it rather than pre-filling the reference close.
     if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfSide").value = "buy"; $("pfPrice").value = ""; $("pfPrice").placeholder = "your actual fill price"; $("pfDate").value = x.entry?.session || ""; $("pfUnits").focus(); };
     $("runnersNote").textContent = allPicks.length ? "Every stock that passes the model's gates, in its order; the weights split the trading budget across them." : "";
@@ -1102,7 +1105,7 @@ async function loadAgentReport() {
       try { await api("/api/agent-runs/dismiss", {ticker: agentTicker || ""}); loadAgentReport(); } catch (e) { showError(e.message); }
     };
   }
-  if (agentWasRunning && !j.running && lastPicks.length) runnerAgents(lastPicks);   // just finished: refresh the AI's pick
+  if (agentWasRunning && !j.running) { if (lastPicks.length) runnerAgents(lastPicks); loadAiPicks(); }   // just finished: refresh
   agentWasRunning = !!j.running;
   if (!agentPolling) {   // every 2 s while they work, every 10 s while idle (a run may start from another page)
     agentPolling = true;
@@ -1124,14 +1127,26 @@ function agentCell(r) {
   return h;
 }
 async function runnerAgents(list) {
-  const seen = [];
   for (const x of list) {
     const cell = document.querySelector(`[data-agentcell="${x.ticker}"]`);
     try {
       const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
       if (cell) cell.innerHTML = agentCell(r);
-      seen.push({ticker: x.ticker, r});
     } catch (e) { if (cell) cell.textContent = "–"; }
+  }
+}
+// The AI's own pool: the Screener's top stocks by Rank (quality, analyst consensus, target upside), not the model's.
+const AI_POOL = 5;
+async function aiPool() {
+  try {
+    const q = await api("/api/screen/quality");
+    return ((q.latest || {}).rows || []).filter(r => r.rank).sort((a, b) => a.rank - b.rank).slice(0, AI_POOL).map(r => r.ticker);
+  } catch (e) { return []; }
+}
+async function loadAiPicks() {
+  const seen = [];
+  for (const t of await aiPool()) {
+    try { seen.push({ticker: t, r: await api("/api/agent-report?ticker=" + encodeURIComponent(t))}); } catch (e) { /* skipped */ }
   }
   renderAiPick(seen);
 }
@@ -1164,7 +1179,7 @@ async function renderAiPick(seen) {
     `<tr><th class="l">Ticker</th><th class="l">Rating</th><th class="num">Weight</th><th class="num">Amount</th>` +
     `<th class="num" title="The agents' entry price (or range)">Buy at</th><th class="num" title="The agents' sell target">Sell</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
     rows.join("") + `</table></div>` +
-    `<p class="muted small" style="margin:6px 0 0">As of ${esc(buys[0].r.date)}: the agents' own prices from their entry plans. Context, not a validated signal.</p>`;
+    `<p class="muted small" style="margin:6px 0 0">As of ${esc(buys[0].r.date)}: chosen by the agents from the Screener's top ${AI_POOL} by Rank, at their own prices. Context, not a validated signal.</p>`;
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
