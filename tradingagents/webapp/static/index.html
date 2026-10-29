@@ -133,6 +133,15 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .cv-key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12px; color: var(--muted); }
 .cv-key i { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--cv-value); }
 .cv-key i.in { border-top: 2px dashed var(--cv-in); }
+.zoo-fit th, .zoo-fit td { white-space: normal; }
+.zoo-fit td.small, .zoo-fit th { max-width: 260px; }
+#zooTable { width: auto; min-width: 0; }
+#zooTable .zoo-open { white-space: nowrap; }
+.zoo-detail td { background: var(--surface-2); }
+.zoo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.zoo-chip { display: flex; flex-direction: column; gap: 1px; border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; background: var(--surface); }
+.zoo-chip b { font-size: 16px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
 .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -515,7 +524,7 @@ select option { background: var(--surface); color: var(--text); }
         <button id="zooRun">Run all models</button></div>
       <p class="status" id="zooStatus"></p>
       <p class="muted small" id="zooMeta"></p>
-      <p class="small" id="zooWeights"></p>
+      <div class="small" id="zooWeights"></div>
       <div class="row" style="margin:6px 0"><input id="zooFilter" placeholder="Find a ticker" style="max-width:220px"><span class="muted small" id="zooCount"></span></div>
       <div class="card"><div class="table-wrap"><table id="zooTable" class="compact"></table></div></div>
     </section>
@@ -975,34 +984,36 @@ async function loadZoo() {
     (Object.keys(d.notes || {}).length ? ` · ${Object.entries(d.notes).map(([k, v]) => `${ZOO_SHORT[k] || k} ${v}`).join("; ")}` : "");
   renderZoo();
 }
-// Which model columns to show: the wide matrix is secondary, so the choice is the viewer's (kept on this browser).
-let zooCols = store.get("zooCols", null);
-const LIFE = {active_decision: "decides the ranking", fallback_decision: "decides the ranking (fallback)",
-  challenger: "challenger: shown, decides nothing", baseline: "baseline"};
+// The stock table shows what decides (Decision), the ensemble and the plain mean; every other model is one click
+// away (a stock's row opens its details) or added as a column (Show).
+let zooCols = store.get("zooCols2", ["decision", "ensemble"]);
+const zooOpen = new Set();
+const LIFE = {active_decision: "decides", fallback_decision: "decides (fallback)", challenger: "shown only", baseline: "baseline"};
 function renderZoo() {
   if (!zoo) return;
-  const models = Object.keys(zoo.models).sort((a, b) => (b === "decision") - (a === "decision") || (b === "ensemble") - (a === "ensemble")),
+  const order = k => k === "decision" ? 0 : k === "ensemble" ? 1 : 2;
+  const models = Object.keys(zoo.models).sort((a, b) => order(a) - order(b)),
     q = ($("zooFilter").value || "").trim().toUpperCase();
-  const shown = models.filter(k => !zooCols || zooCols.includes(k));
+  const shown = models.filter(k => zooCols.includes(k));
   const ew = zoo.ensemble && zoo.ensemble.weights;
   const ens = zoo.models.ensemble || {};
-  const ic = k => { const r = (zoo.tested || {})[k]; return r && r.development_ic != null ? `IC ${r.development_ic.toFixed(3)}${r.recent_ic != null ? ` · ${r.recent_ic.toFixed(3)}` : ""}` : "untested"; };
+  const ic = k => { const r = (zoo.tested || {})[k]; return r && r.development_ic != null ? `${r.development_ic.toFixed(3)}${r.recent_ic != null ? ` · ${r.recent_ic.toFixed(3)}` : ""}` : "untested"; };
   const out = k => zoo.outputs?.[zoo.models[k].output];
-  // Lifecycle and coverage first: which model decides, which only inform, and how many stocks each scored.
+  // Lifecycle and coverage first, compact: long descriptions are in each name's tooltip.
   $("zooWeights").innerHTML = `<p class="${ens.coverage ? "" : "note"}"><b>Ranking today:</b> ${esc(zoo.ranking_note || "")}.</p>` +
     (ew && ens.coverage ? `<p class="muted small">Ensemble weights, learned from earlier years' out-of-sample results: ` +
       Object.entries(ew).sort((a, b) => b[1] - a[1]).map(([k, w]) => `${esc(ZOO_SHORT[k] || k)} <b>${Math.round(w * 100)}%</b>`).join(" · ") + `</p>` : "") +
-    `<div class="table-wrap"><table class="compact"><caption class="sr-only">Model lifecycle and coverage</caption><tr><th class="l" scope="col">Model</th><th class="l" scope="col">Role</th><th scope="col">Stocks scored</th><th scope="col">Development IC · recent</th><th class="l" scope="col">Its forecast number</th><th scope="col">Show</th></tr>` +
+    `<div class="table-wrap"><table class="compact zoo-fit"><caption class="sr-only">Model lifecycle and coverage</caption><tr><th class="l" scope="col">Model</th><th class="l" scope="col">Role</th><th scope="col">Stocks</th><th scope="col" title="Rank correlation with the net trade result on data the model had not seen: 2012-24 · 2025 on">Tested IC</th><th class="l" scope="col">Its forecast</th><th scope="col">Column</th></tr>` +
     models.map(k => {
       const m = zoo.models[k], o = out(k), part = m.of && m.coverage < m.of;
-      return `<tr><td class="l"><b>${esc(ZOO_SHORT[k] || k)}</b><div class="muted small">${esc(m.label)}</div></td><td class="l small">${esc(LIFE[m.lifecycle] || m.lifecycle || "")}${m.failed ? `<div class="neg small">${esc(m.failed)}</div>` : ""}</td>` +
-        `<td class="${m.coverage ? (part ? "note-text" : "") : "neg"}">${m.coverage} of ${m.of}${part && m.coverage ? " (partial)" : ""}${m.coverage ? "" : " (none)"}</td><td>${ic(k)}</td>` +
-        `<td class="l small">${o ? esc(o.label) + ` <span class="muted">(${esc(o.entry.replace(/^the /, ""))} → ${esc(o.exit.replace(/^the /, ""))})</span>` : '<span class="muted">rank only</span>'}</td>` +
-        `<td><input type="checkbox" data-zoocol="${esc(k)}" aria-label="Show ${esc(ZOO_SHORT[k] || k)} in the stock table" ${shown.includes(k) ? "checked" : ""}></td></tr>`;
+      return `<tr><th class="l" scope="row" title="${esc(m.label)}">${esc(ZOO_SHORT[k] || k)}${m.failed ? ` <span class="neg small" title="${esc(m.failed)}">failed</span>` : ""}</th><td class="l small">${esc(LIFE[m.lifecycle] || m.lifecycle || "")}</td>` +
+        `<td class="${m.coverage ? (part ? "note-text" : "") : "neg"}">${m.coverage ?? 0}${m.of ? `/${m.of}` : ""}</td><td class="small">${ic(k)}</td>` +
+        `<td class="l small" title="${o ? esc(`${o.entry} → ${o.exit}`) : ""}">${o ? esc(o.label) : '<span class="muted">rank only</span>'}</td>` +
+        `<td><input type="checkbox" data-zoocol="${esc(k)}" aria-label="Show ${esc(ZOO_SHORT[k] || k)} as a column" ${shown.includes(k) ? "checked" : ""}></td></tr>`;
     }).join("") + "</table></div>";
   document.querySelectorAll("[data-zoocol]").forEach(c => c.onchange = () => {
     zooCols = [...document.querySelectorAll("[data-zoocol]")].filter(x => x.checked).map(x => x.dataset.zoocol);
-    store.set("zooCols", zooCols); renderZoo();
+    store.set("zooCols2", zooCols); renderZoo();
   });
   const rows = Object.entries(zoo.stocks).map(([t, m]) => {
     const fitted = ZOO_FITTED.map(k => m[k] && m[k].pct).filter(v => v != null);
@@ -1014,22 +1025,37 @@ function renderZoo() {
     if (x == null) return 1; if (y == null) return -1;
     return (x < y ? -1 : x > y ? 1 : 0) * zooSort.dir;
   });
-  // Each model's own forecast number keeps its own definition (unit, clock): the title says which.
-  const cell = (k, x) => x ? `<td title="${x.forecast != null && out(k) ? esc(out(k).label) + ": " + spct(x.forecast, 1) : "percentile among today's stocks"}"><b>${Math.round(x.pct * 100)}</b>${x.forecast != null ? `<div class="muted small">${spct(x.forecast, 1)}${k === "ensemble" ? " net" : k.startsWith("chronos2") ? " from t" : ""}</div>` : ""}</td>` : "<td class='muted' title='not scored'>–</td>";
+  const pctCell = x => x ? `<td><b>${Math.round(x.pct * 100)}</b></td>` : "<td class='muted' title='not scored'>–</td>";
   const sortTh = (k, label, title, cls = "") => {
     const on = zooSort.key === k;
     return `<th class="${cls}" scope="col" aria-sort="${on ? (zooSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${esc(k)}" title="${esc(title)}">${label}${on ? (zooSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
   };
-  $("zooTable").innerHTML = `<caption class="sr-only">Each model's percentile for each stock (100 = its top pick)</caption><tr>${sortTh("t", "Ticker", "Sort by ticker", "l")}${sortTh("avg", "Mean pct (N)", "Equal-weight mean of the fitted models' percentiles that scored the stock; N can differ by stock. Not the learned ensemble.")}` +
-    shown.map(k => sortTh(k, `${esc(ZOO_SHORT[k] || k)}<div class="muted small" style="font-weight:400;text-transform:none">${zoo.models[k].coverage} stocks</div>`, `${zoo.models[k].label}. ${out(k) ? out(k).label : "Rank only"}.`)).join("") + "</tr>" +
-    rows.slice(0, q ? 600 : 150).map(r => `<tr><th class="l" scope="row"><b>${tk(r.t)}</b>${(zoo.watchlist || []).includes(r.t) ? ' <span class="muted small">yours</span>' : ""}</th><td><b>${r.avg == null ? "–" : Math.round(r.avg * 100)}</b> <span class="muted small">(${r.n})</span></td>${shown.map(k => cell(k, r.m[k])).join("")}</tr>`).join("");
+  // A stock's details: every model's percentile and its own forecast, named by what it measures.
+  const details = r => `<tr class="zoo-detail"><td colspan="${3 + shown.length}"><div class="zoo-grid">` +
+    models.filter(k => r.m[k]).map(k => { const x = r.m[k], o = out(k);
+      return `<div class="zoo-chip" title="${esc(zoo.models[k].label)}"><span class="muted small">${esc(ZOO_SHORT[k] || k)}</span><b>${Math.round(x.pct * 100)}</b>` +
+        `${x.forecast != null && o ? `<span class="small" title="${esc(o.label)}">${spct(x.forecast, 1)} ${k === "ensemble" ? "net" : k.startsWith("chronos2") ? "from t" : "vs cash"}</span>` : ""}` +
+        `${x.rank ? `<span class="muted small">#${x.rank} of ${x.of}</span>` : ""}</div>`; }).join("") +
+    `</div><p class="muted small" style="margin:6px 0 0">Percentile among today's stocks (100 = that model's top pick). ${models.filter(k => !r.m[k]).length ? `Not scored by: ${models.filter(k => !r.m[k]).map(k => esc(ZOO_SHORT[k] || k)).join(", ")}.` : ""} <a href="/ticker/${encodeURIComponent(r.t)}" target="_blank" rel="noopener">Open ${esc(r.t)}</a></p></td></tr>`;
+  $("zooTable").innerHTML = `<caption class="sr-only">Each stock's percentile by the deciding ranking, the ensemble and the mean of the models (100 = top); click a stock for every model</caption><tr>${sortTh("t", "Ticker", "Sort by ticker", "l")}` +
+    shown.map(k => sortTh(k, esc(ZOO_SHORT[k] || k), `${zoo.models[k].label}. ${zoo.models[k].coverage} stocks.`)).join("") +
+    `${sortTh("avg", "Mean (N)", "Equal-weight mean of the fitted models' percentiles that scored the stock; N can differ by stock. Not the learned ensemble.")}</tr>` +
+    rows.slice(0, q ? 600 : 150).map(r => `<tr class="zoo-row"><th class="l" scope="row"><button type="button" class="th-sort zoo-open" data-zoorow="${esc(r.t)}" aria-expanded="${zooOpen.has(r.t)}" title="Every model's view of ${esc(r.t)}">${zooOpen.has(r.t) ? "▾" : "▸"} <b>${esc(r.t)}</b></button>${(zoo.watchlist || []).includes(r.t) ? ' <span class="muted small">yours</span>' : ""}</th>` +
+      `${shown.map(k => pctCell(r.m[k])).join("")}<td><b>${r.avg == null ? "–" : Math.round(r.avg * 100)}</b> <span class="muted small">(${r.n})</span></td></tr>` +
+      (zooOpen.has(r.t) ? details(r) : "")).join("");
   $("zooTable").querySelectorAll("button[data-sort]").forEach(b => b.onclick = () => {
     const k = b.dataset.sort;
     zooSort = {key: k, dir: zooSort.key === k ? -zooSort.dir : (k === "t" ? 1 : -1)};
     renderZoo();
     $("zooTable").querySelector(`button[data-sort="${CSS.escape(k)}"]`)?.focus();
   });
-  $("zooCount").textContent = q ? `${rows.length} match` : `Showing the top 150 of ${rows.length} by ${zooSort.key === "avg" ? "the equal-weight mean percentile" : ZOO_SHORT[zooSort.key] || "ticker"}; type a ticker to find any stock.`;
+  $("zooTable").querySelectorAll("button[data-zoorow]").forEach(b => b.onclick = () => {
+    const t = b.dataset.zoorow;
+    zooOpen.has(t) ? zooOpen.delete(t) : zooOpen.add(t);
+    renderZoo();
+    $("zooTable").querySelector(`button[data-zoorow="${CSS.escape(t)}"]`)?.focus();
+  });
+  $("zooCount").textContent = q ? `${rows.length} match` : `Showing the top 150 of ${rows.length} by ${zooSort.key === "avg" ? "the mean percentile" : ZOO_SHORT[zooSort.key] || "ticker"}; type a ticker to find any stock; click a stock for every model.`;
 }
 $("zooRun").onclick = async () => { try { await api("/api/model-zoo/run", {}); loadZoo(); } catch (e) { showError(e.message); } };
 $("zooFilter").oninput = renderZoo;
