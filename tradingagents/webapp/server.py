@@ -1156,15 +1156,22 @@ class App:
             raise ValueError("no ticker")
         job = self.analysis
         cleared = False
+        # The page shows the analysis job's last error whichever stock it was for (its progress line starts with that
+        # stock), so Dismiss clears it whenever nothing is running, and hides that stock's failed runs as well.
+        tickers = {ticker}
         with job.switch:
-            # A run's progress line starts with its ticker ("AAA as of 2026-10-23: ...").
-            if not job.running and job.error and str(job.progress).upper().startswith(ticker + " "):
+            if not job.running and job.error:
+                first = str(job.progress).split(" ", 1)[0].strip().upper()
+                if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", first):
+                    tickers.add(first)
                 job.error, job.attempts = None, []
                 cleared = True
-        rows = self.store.con.execute(
-            "SELECT run_id FROM agent_runs WHERE ticker = ? AND status != 'ok' AND finished_at >"
-            " COALESCE((SELECT MAX(finished_at) FROM agent_runs WHERE ticker = ? AND status = 'ok'), '')",
-            (ticker, ticker)).fetchall()
+        rows = []
+        for t in sorted(tickers):
+            rows += self.store.con.execute(
+                "SELECT run_id FROM agent_runs WHERE ticker = ? AND status != 'ok' AND finished_at >"
+                " COALESCE((SELECT MAX(finished_at) FROM agent_runs WHERE ticker = ? AND status = 'ok'), '')",
+                (t, t)).fetchall()
         with transaction(self.store.con):
             for r in rows:
                 self.store.con.execute("INSERT OR IGNORE INTO hidden_outputs VALUES ('agent_run', ?, ?)",

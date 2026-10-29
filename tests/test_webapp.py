@@ -542,3 +542,13 @@ def test_training_inside_the_morning_run_moves_its_bar_and_shows_on_the_models_t
     tab = seen["models_tab"]
     assert tab["running"] and tab["via"] == "morning" and tab["progress"] == "Every model: Fitting Mamba"
     assert not app._job_or_morning(app.decisions, "Daily decision")["running"]     # not that tab's work
+
+
+def test_dismiss_clears_a_failure_from_another_stock_too(tmp_path, monkeypatch):
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    _agent_row(app, "GDDY", "2026-10-28", "failed", "2026-10-29T06:00:00.000000Z")
+    app.analysis.error, app.analysis.attempts = "No AI provider could run the agents", [{"provider": "google"}]
+    app.analysis._progress = "GDDY · openrouter · agent: model error (OpenAIRateLimitError)"
+    out = app.dismiss_agent_failures("DVA")                     # the Trade page shows another stock
+    assert out["job_error_cleared"] and app.analysis.error is None and out["runs_hidden"] == 1
+    assert app._last_agent_run("GDDY") is None
