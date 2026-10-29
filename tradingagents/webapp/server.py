@@ -427,6 +427,9 @@ class App:
         asked = self.store.get("global", "ai_pick_state") or {}
         done = asked.get("date") == _today() and all(self._agents_ran_today(t) for t in asked.get("tickers") or [])
         out["ai_pick"] = {**asked, "today": done}      # asked today and every stock in it decided
+        gg = self.store.settings("global")
+        out["scans"] = {"used": len(self._scanned_today()), "limit": int(gg.get("ai_daily_scans") or 0),
+                        "my_picks": gg.get("ai_my_picks") or []}
         scr = self.store.get("global", "ai_screen_state") or {}
         out["ai_screen"] = scr if scr.get("date") == _today() else None
         picks = ([out["best"]] if out.get("best") else []) + list(out.get("runners_up") or [])
@@ -1232,6 +1235,12 @@ class App:
                 return {"ticker": ticker, "rating": done["rating"], "how": "reused", "reused": True,
                         "provider": done["actual_provider"], "model": done["actual_model"],
                         "final": {"action": done["final_action"]}, "fell_back": bool(done["fell_back"])}
+        limit = int(g.get("ai_daily_scans") or 0)
+        if limit and ticker.upper() not in self._scanned_today() and len(self._scanned_today()) >= limit:
+            from tradingagents.ledger.ai_gateway import AIBlocked
+
+            raise AIBlocked(f"the daily limit of {limit} stocks analysed is reached (Settings: ai_daily_scans); "
+                            "it starts again tomorrow")
         try:
             out = self._try_agents(job, ticker, day, analysts, folder, est, evidence, attempts, errors)
         except AIInProgress:
@@ -1248,6 +1257,16 @@ class App:
     @staticmethod
     def _agent_chain(attempts: list[dict]) -> list:
         return [(c["llm_provider"], c["deep_think_llm"], sorted((c.get("agent_models") or {}).items())) for c in attempts]
+
+    def _scanned_today(self) -> set[str]:
+        """The stocks the agents were started on today (local calendar day), whatever the outcome."""
+        start = datetime.combine(date.today(), datetime.min.time()).astimezone().astimezone(
+            __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            return {r[0].upper() for r in self.store.con.execute(
+                "SELECT DISTINCT ticker FROM agent_runs WHERE started_at >= ?", (start,))}
+        except Exception:
+            return set()
 
     def _agents_ran_today(self, ticker: str):
         """Today's successful agent run on ``ticker`` (local calendar day), if any: the agents run once a day."""

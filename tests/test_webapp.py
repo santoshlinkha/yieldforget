@@ -627,6 +627,19 @@ def test_ask_the_ai_to_pick_runs_once_a_calendar_day(tmp_path, monkeypatch):
     assert app.start_ai_decisions({**body, "ai_pick": False}) is not None     # a plain agent run is not limited
 
 
+def test_the_agents_analyse_at_most_the_daily_limit_of_stocks(tmp_path, monkeypatch):
+    from tradingagents.ledger.ai_gateway import AIBlocked
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    g = {**app.store.settings("global"), "ai_daily_scans": 2}
+    monkeypatch.setattr(app, "_scanned_today", lambda: {"AAA", "BBB"})
+    monkeypatch.setattr(app, "_agents_ran_today", lambda t: None)
+    monkeypatch.setattr(app, "_same_agent_run", lambda record: None)
+    monkeypatch.setattr(app, "_try_agents", lambda *a, **k: {"rating": "Buy", "how": "agents"})
+    with pytest.raises(AIBlocked, match="daily limit of 2"):
+        app._run_agents(srv.Job(), "CCC", "2026-10-28", ["market"], g)
+
+
 def test_the_agents_run_at_most_once_a_day_per_stock(tmp_path, monkeypatch):
     from datetime import UTC, datetime as dt
 

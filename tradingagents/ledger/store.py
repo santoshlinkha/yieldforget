@@ -51,6 +51,10 @@ GLOBAL_DEFAULTS = {
     "ai_pick_state": {},
     # The AI's own first screen (stocks.ai_screen): {"date", "cutoff", "picks", "note", "model", "considered"}.
     "ai_screen_state": {},
+    # At most this many different stocks get a new agent analysis a day (a reused one is free and not counted).
+    "ai_daily_scans": 25,
+    # The owner's own five for the agents (Trade page, AI's pick).
+    "ai_my_picks": [],
     # TimesFM 3.0: research only, scored in the Models view once the owner accepts its non-commercial license.
     "timesfm3": {"enabled": False, "license_accepted": None},
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).
