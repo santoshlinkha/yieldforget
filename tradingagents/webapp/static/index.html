@@ -155,7 +155,8 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .fit-table td { font-size: 12.5px; padding-left: 6px; padding-right: 6px; }
 .fit-table th { padding-left: 6px; padding-right: 6px; }
 .sort-mark { display: inline-block; width: 1em; text-align: center; }
-.fit-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-table td { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+.fit-table td .sg-clip { white-space: normal; overflow: visible; text-overflow: clip; }
 .fit-table .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-legend-box { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; background: var(--surface-2); }
 .col-legend-box > ul { margin: 6px 0 0; padding-left: 18px; }
@@ -1721,7 +1722,10 @@ function fitScreen(view, cols) {
     th.removeAttribute("title");
     if (c) th.dataset.tip = QS_FULL[c[0]] || c[1];
   });
-  t.querySelectorAll("td").forEach(td => { if (!td.title && td.textContent.length > 14) td.title = td.textContent.trim(); });
+  // No hover on the rows: their text wraps onto as many lines as it needs instead.
+  t.querySelectorAll("tr:not(:first-child) [title], tr:not(:first-child) [data-tip]").forEach(el => {
+    el.removeAttribute("title"); el.removeAttribute("data-tip");
+  });
   $("qsLegend").innerHTML = `<dl class="col-legend">` +
     cols.map(([, label, help]) => `<dt>${esc(label)}</dt><dd>${esc(help || "")}</dd>`).join("") + "</dl>";
   $("qsLegendBox").hidden = false;
