@@ -759,18 +759,35 @@ function openModal(title, html) {
     openModal.bound = true;
     $("reportModalClose").onclick = closeModal;
     $("reportModal").addEventListener("click", ev => { if (ev.target === $("reportModal")) closeModal(); });
-    document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !$("reportModal").hidden) closeModal(); });
+    document.addEventListener("keydown", ev => {
+      if ($("reportModal").hidden) return;
+      if (ev.key === "Escape") { closeModal(); return; }
+      if (ev.key !== "Tab") return;
+      // Tab stays inside the dialog while it is open.
+      const items = [...$("reportModal").querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter(el => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+      else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+    });
   }
+  // Focus returns to whatever opened the dialog, and the page behind it cannot be reached while it is open.
+  if ($("reportModal").hidden) openModal.opener = document.activeElement;
   $("reportModalTitle").textContent = title;
   $("reportModalBody").innerHTML = html;
   $("reportModalBody").scrollTop = 0;
   $("reportModal").hidden = false;
   document.body.classList.add("modal-open");
+  document.querySelectorAll("body > :not(#reportModal)").forEach(el => { el.inert = true; });
   $("reportModalClose").focus();
 }
 function closeModal() {
   $("reportModal").hidden = true;
   document.body.classList.remove("modal-open");
+  document.querySelectorAll("body > :not(#reportModal)").forEach(el => { el.inert = false; });
+  openModal.opener?.focus?.();
+  openModal.opener = null;
 }
 // --- Markdown, rendered safely: every piece of text is escaped first; links only to web addresses ---
 function mdInline(t) {

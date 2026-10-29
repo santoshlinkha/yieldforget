@@ -49,3 +49,16 @@ def test_the_trade_view_says_when_p_profit_is_a_transfer_from_the_base_ranker():
                                      "quality_note": "P(profit after costs) comes from the base ranker's model"}}}
     notes = " ".join(trade.plan(decision, 100.0)["notes"])
     assert "base ranker's model" in notes and "400 of 500" in notes
+
+
+def test_hidden_tabs_load_on_demand_and_the_report_dialog_keeps_focus():
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[1] / "tradingagents" / "webapp" / "static"
+    index = (static / "index.html").read_text(encoding="utf-8")
+    startup = index[index.rindex("(async () => {"):]
+    assert "loadForecasts()" not in startup and "loadTrackRecord()" not in startup and "TAB_LOADERS" in index
+    assert "inflight.get(key)?.abort()" in index                               # stale reads are cancelled
+    assert 'aria-controls' in index and "ArrowRight" in index                   # keyboard tabs
+    ticker = (static / "ticker.html").read_text(encoding="utf-8")
+    assert "openModal.opener?.focus" in ticker and "el.inert = true" in ticker and 'ev.key !== "Tab"' in ticker

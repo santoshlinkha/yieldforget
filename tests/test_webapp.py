@@ -381,3 +381,14 @@ def test_a_key_that_cannot_be_written_is_not_used_either(tmp_path, monkeypatch):
         keys.save("OPENROUTER_API_KEY", "sk-or-v1-synthetic123456", path=env)
     assert "OPENROUTER_API_KEY" not in os.environ and env.read_text(encoding="utf-8") == "OTHER=1\n"
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_the_portfolio_view_separates_stocks_sgov_cash_and_reservations(server):
+    base, tmp_path, _ = server
+    _call(base, "/api/ledger/contribution", {"amount": 50})
+    status, d = _call(base, "/api/portfolio-view")
+    a = d["account"]
+    assert status == 200 and a["reserve_fund"] == "SGOV" and a["reserve_value"] == pytest.approx(20 * 100.0)
+    assert a["stocks"] == pytest.approx(d["value"]) and a["cash_settled"] >= 50
+    assert a["total"] == pytest.approx(a["stocks"] + a["reserve_value"] + a["cash_settled"] + a["cash_unsettled"])
+    assert a["missing_prices"] == []

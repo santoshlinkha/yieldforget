@@ -657,21 +657,71 @@ let state = null, timer = null, pending = 0;
 function busy(on) { pending += on ? 1 : -1; $("loading").classList.toggle("on", pending > 0); }
 function showError(msg) { const e = $("error"); e.textContent = msg || ""; e.classList.toggle("show", !!msg); }
 
+// A newer read of the same endpoint cancels the older one, so a slow, stale answer never overwrites a fresh one.
+// A cancelled read never settles: its caller simply stops (nothing to show, nothing to report).
+const inflight = new Map();
 async function api(path, body) {
-  const res = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  let opts = {};
+  if (body === undefined) {
+    const key = path.split("?")[0];
+    inflight.get(key)?.abort();
+    const ctl = new AbortController();
+    inflight.set(key, ctl);
+    opts = {signal: ctl.signal};
+  } else {
+    opts = {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
+  }
+  let res;
+  try { res = await fetch(path, opts); }
+  catch (e) { if (e.name === "AbortError") return new Promise(() => {}); throw e; }
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
 
 // --- tabs ---
+// Each tab's data is read the first time the tab is shown, not all at start-up (Trade is always read: it is the
+// overview, and it fills the Portfolio tab's record form).
+const TAB_LOADERS = {
+  today: () => { loadRotation(); loadSectorForecast(); loadMarket(); },
+  portfolio: () => loadPortfolio(),
+  scanTab: () => { loadScreen(); loadSignalsBoard(); },
+  forecasts: () => { loadForecasts(); loadLive(); loadHardware(); },
+  decisions: () => { loadDecisions(); loadAiDecisions(); },
+  models: () => { if (!zoo) loadZoo(); },
+  record: () => loadTrackRecord(),
+  settings: () => { loadCapital(); loadKeys(); loadAgents(); },
+};
+const tabsLoaded = new Set();
+let started = false;            // set once start-up has the state the loaders need
 function showTab(id) {
-  if (id === "models" && !zoo) loadZoo();
-  document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === id));
+  document.querySelectorAll("nav button").forEach(b => {
+    const on = b.dataset.tab === id;
+    b.setAttribute("aria-selected", on);
+    b.tabIndex = on ? 0 : -1;
+  });
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.id === id));
   store.set("tab", id);
+  if (started && !tabsLoaded.has(id) && TAB_LOADERS[id]) { tabsLoaded.add(id); TAB_LOADERS[id](); }
 }
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+document.querySelectorAll("nav button").forEach(b => {
+  b.id = "tab-" + b.dataset.tab;
+  b.setAttribute("aria-controls", b.dataset.tab);
+  $(b.dataset.tab)?.setAttribute("role", "tabpanel");
+  $(b.dataset.tab)?.setAttribute("aria-labelledby", b.id);
+  b.onclick = () => showTab(b.dataset.tab);
+});
+// Arrow keys, Home and End move between tabs and show the one reached.
+document.querySelector("nav[role=tablist]").addEventListener("keydown", e => {
+  const tabs = [...document.querySelectorAll("nav button[role=tab]")];
+  const i = tabs.indexOf(document.activeElement);
+  if (i < 0) return;
+  const next = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1}[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  const t = tabs[(next + tabs.length) % tabs.length];
+  t.focus(); showTab(t.dataset.tab);
+});
 
 document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => showTab(b.dataset.goto));
 
@@ -822,8 +872,14 @@ async function loadPortfolio() {
   let d;
   try { d = await api("/api/portfolio-view"); } catch (e) { $("pfTable").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
   if (!$("pfDate").value) $("pfDate").value = d.as_of;
-  $("pfKpis").innerHTML = kpi("Portfolio value", usd(d.value || 0), `${d.holdings.length} stock${d.holdings.length === 1 ? "" : "s"} at the latest close`, "hero") +
-    kpi("Paid", usd(d.cost || 0), "what the units you hold cost") +
+  // The account total first, broken down; "stock holdings" is only the stocks (SGOV and cash are separate).
+  const ac = d.account || {};
+  $("pfKpis").innerHTML = kpi("Account value", ac.total == null ? "–" : usd(ac.total),
+      `stocks ${usd(ac.stocks || 0)} · ${esc(ac.reserve_fund || "SGOV")} ${usd(ac.reserve_value || 0)} · cash ${usd((ac.cash_settled || 0) + (ac.cash_unsettled || 0))}` +
+      ((ac.missing_prices || []).length ? ` · <span class="neg">no price for ${esc(ac.missing_prices.join(", "))}: total is partial</span>` : ""), "hero") +
+    kpi("Stock holdings value", usd(d.value || 0), `${d.holdings.length} stock${d.holdings.length === 1 ? "" : "s"} at the latest close`) +
+    kpi("Cash", usd(ac.cash_available || 0), `available to buy · settled ${usd(ac.cash_settled || 0)} · unsettled ${usd(ac.cash_unsettled || 0)} · reserved ${usd(ac.cash_reserved || 0)}`) +
+    kpi("Open cost basis", usd(d.cost || 0), "what the units you hold cost") +
     kpi("Unrealized", `<span class="${d.unrealized >= 0 ? "pos" : "neg"}">${susd(d.unrealized || 0)}</span>`, d.cost ? spct(d.unrealized / d.cost, 1) : "–") +
     kpi("Realized", `<span class="${d.realized >= 0 ? "pos" : "neg"}">${susd(d.realized || 0)}</span>`, "from what you sold");
   $("pfTable").innerHTML = d.holdings.length ? "<tr><th class='l'>Ticker</th><th>Units</th><th>Avg cost</th><th>Price</th><th>Value</th><th>Profit</th><th class='l'>Since</th></tr>" +
@@ -1911,8 +1967,9 @@ $("agSave").onclick = async () => {
     drawEditors();
     $("watchList").value = (state.watchlist || []).join(", ");
   } catch (e) { showError(e.message); }
-  loadTrade(); loadPortfolio(); loadRotation(); loadSectorForecast(); loadCapital(); loadKeys(); loadTrackRecord(); loadDecisions(); loadAiDecisions(); loadScreen(); loadSignalsBoard(); loadAgents();
-  loadMarket(); loadForecasts(); loadLive(); loadHardware();
+  loadTrade();
+  started = true;
+  showTab(document.querySelector("nav button[aria-selected=true]")?.dataset.tab || "today");
 })();
 </script>
 </body>

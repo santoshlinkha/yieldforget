@@ -411,7 +411,22 @@ class App:
         sold = sum(e["cash"] for e in fills if e["cash"] > 0)
         open_cost = sum(r["cost"] for r in rows.values())
         value = sum(r["value"] or 0.0 for r in rows.values())
+        # The whole account beside the stocks: SGOV, cash by state, and what is set aside, so "value" is never read
+        # as the account total.
+        whole = self.store.ledger.state(None, today)
+        reserve_units = whole.positions.get(RESERVE, 0.0)
+        reserve_px = latest_prices(self.cache_dir, [RESERVE]).get(RESERVE) if reserve_units else None
+        missing = [r["ticker"] for r in rows.values() if r["value"] is None]
+        if reserve_units and not reserve_px:
+            missing.append(RESERVE)
+        reserve_value = reserve_units * reserve_px if reserve_px else 0.0
+        account = {"stocks": round(value, 2), "reserve_fund": RESERVE, "reserve_units": reserve_units,
+                   "reserve_value": round(reserve_value, 2), "cash_settled": round(whole.cash.settled, 2),
+                   "cash_unsettled": round(whole.cash.unsettled, 2), "cash_reserved": round(whole.cash.reserved, 2),
+                   "cash_available": round(whole.cash.available, 2),
+                   "total": round(value + reserve_value + whole.cash.total, 2), "missing_prices": missing}
         return {"as_of": today, "holdings": sorted(rows.values(), key=lambda r: -(r["value"] or 0)),
+                "account": account,
                 "value": value, "cost": open_cost, "unrealized": value - open_cost,
                 "realized": sold - (bought - open_cost), "bought": bought, "sold": sold,
                 "trades": [{k: e[k] for k in ("id", "trade_date", "ticker", "quantity", "price", "cash", "note")}
