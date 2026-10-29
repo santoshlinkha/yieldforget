@@ -431,7 +431,12 @@ class App:
         out["scans"] = {"used": len(self._scanned_today()), "limit": int(gg.get("ai_daily_scans") or 0),
                         "my_picks": gg.get("ai_my_picks") or []}
         scr = self.store.get("global", "ai_screen_state") or {}
-        out["ai_screen"] = scr if scr.get("date") == _today() else None
+        if scr.get("date") == _today():
+            last = latest_prices(self.cache_dir, [p["ticker"] for p in scr.get("picks") or []])
+            scr = {**scr, "picks": [{**p, "ltp": last.get(p["ticker"])} for p in scr.get("picks") or []]}
+            out["ai_screen"] = scr
+        else:
+            out["ai_screen"] = None
         picks = ([out["best"]] if out.get("best") else []) + list(out.get("runners_up") or [])
         if picks:
             out["allocation"] = self._allocation(picks, inc["budget"]["available"])
