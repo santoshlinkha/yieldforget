@@ -1783,7 +1783,26 @@ class App:
             close = bars([r["ticker"] for r in rows], self.cache_dir)["Close"]
         except Exception:   # no prices: the sheet says so per stock
             close = None
-        out = ai_screen.screen(rows, close, day, self.agent_config(g), self.gateway())
+        from datetime import UTC
+
+        now = datetime.now(UTC)
+        cooling = {k: v for k, v in (self.store.get("global", "ai_cooldowns") or {}).items()
+                   if datetime.fromisoformat(v["until"]) > now}
+        errors, out = [], None
+        for cfg in self.agent_attempts(g):
+            prov, model = cfg["llm_provider"], cfg["quick_think_llm"]
+            if prov in cooling or f"{prov}/{model}" in cooling or (model.endswith(":free") and f"{prov}/*:free" in cooling):
+                continue                                   # paused: it would fail the same way
+            try:
+                out = ai_screen.screen(rows, close, day, cfg, self.gateway())
+                break
+            except Exception as exc:  # the next model in the agents' order
+                errors.append(f"{prov}/{model}: {str(exc)[:160]}")
+                held = _cooldown(prov, model, str(exc), now)
+                if held:
+                    cooling[held[0]] = {"until": held[1].isoformat(), "why": held[2]}
+        if out is None:
+            raise ValueError("No AI model could run the screen: " + ("; ".join(errors) or "every model is paused"))
         tickers = [p["ticker"] for p in out["picks"][:self.AI_RUN]]
         job.log.append(f"AI screen ({out['how']}): {', '.join(p['ticker'] for p in out['picks'])}")
         with self.lock:

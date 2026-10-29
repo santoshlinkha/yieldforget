@@ -118,6 +118,8 @@ class Gateway:
 
     def price(self, provider: str, model: str) -> Price:
         p = self.policy.prices.get(f"{provider}/{model}")
+        if p is None and str(model).endswith(":free"):
+            return Price(0.0, 0.0)          # a free model: requests still count, dollars do not
         if p is None:
             raise AIBlocked(f"no price is configured for {provider}/{model}, so its cost cannot be held to the "
                             f"budget; add it under Settings → Agent models before using it")
