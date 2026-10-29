@@ -191,6 +191,10 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .bell-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 .sig-sum { display: grid; gap: 6px; }
 .sig-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+.sig-why { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.sig-why-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+.sig-why .vchecks { margin: 2px 0 8px; }
+.sig-more { margin-top: 8px; }
 .sig-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .sig-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--surface-2); min-width: 0; }
 .sig-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -1238,7 +1242,7 @@ async function loadSignals() {
   if (vd) {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
     const vm = vd.model;
-    h += `<details><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
+    h += `<p class="small" style="margin:4px 0"><b>The tests behind it</b></p><ul class="vchecks">` +
       (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
         : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
       `<p class="small" style="margin:10px 0 4px"><b>Context</b> <span class="muted">(shown, does not change the verdict)</span></p><ul class="vchecks">` +
@@ -1262,6 +1266,7 @@ async function loadSignals() {
         `<td><b>${money2(r.price)}</b></td><td class="neg">${money2(r.stop)}</td><td class="pos">${money2(r.profit)}</td></tr>`).join("") + `</table>` +
       `<p class="small muted">≈ chance the price gets there within ${ep.horizon} sessions. Stop and target are ±${pct(ep.sigma_h, 1)} (one ${ep.horizon}-session volatility). Experimental.</p>`;
   }
+  const useful = h;   // the reasons, the context and the entry levels; the rest is under "More"
   if (row.policy) {   // not validated: one line, what it would choose
     const pol = row.policy;
     h += `<p class="small muted"><b>Trade outcome model:</b> ${pol.available === false ? esc(pol.note || "not available") : `not validated; it would choose: ${esc(POL_NAME[pol.model_choice] || pol.model_choice || "–")}`}.</p>`;
@@ -1281,7 +1286,9 @@ async function loadSignals() {
   } else {
     h += `<p class="small muted">${sg ? esc((sg.reasons || []).join("; ") || sg.status) : "No trend, breakout or crash forecast saved for this stock yet."}</p>`;
   }
-  h = summary + `<details class="sig-more" open><summary class="small"><b>Details</b></summary>${h}</details>`;
+  const extra = h.slice(useful.length);
+  h = summary + `<div class="sig-why"><div class="sig-why-head">Why</div>${useful}</div>` +
+    (extra ? `<details class="sig-more"><summary class="small"><b>More</b> <span class="muted">signal table, trend breakdown, method notes</span></summary>${extra}</details>` : "");
   h += `<div class="row"><button class="ghost sm" id="sigRun">${sg ? "Refresh" : "Compute"} signals for ${esc(symbol)}</button><span class="muted small" id="sigState"></span></div>`;
   $("sig").innerHTML = h;
   $("sigRun").onclick = async () => {
