@@ -370,7 +370,7 @@ details[open] > summary::after { content: "Hide"; }
   <div id="err"></div>
   <div class="grid">
     <div id="colL">
-      <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div id="chart" style="margin-top:12px"></div></div>
+      <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div id="chart" style="margin-top:12px"></div><div id="trendBox" style="margin-top:12px"></div></div>
       <div class="card"><h2>Wall Street analyst ratings</h2><div id="analysts"></div></div>
       <div class="card"><h2>Wall Street EPS and revenue estimates</h2><div id="estimates"></div></div>
       <div class="card"><h2>Quality checklist</h2>
@@ -1258,7 +1258,7 @@ function sigSummary(vd, dec, head, sg, t5) {
   }
   if ((sg && sg.status === "ok") || t5) {
     const f = sg && sg.forecast;
-    h += `<div class="trend-box"><div class="k">Trend forecast</div>` + (t5 ? trendRow(t5) : "") +
+    $("trendBox").innerHTML = `<div class="trend-box"><div class="k">Trend forecast</div>` + (t5 ? trendRow(t5) : "") +
       (f ? trendRow({horizon: sg.horizon, trend: sg.trend, up: f.trend_up, down: f.trend_down, sideways: f.trend_sideways, unclear: f.trend_unclear}) : "") +
       `<div class="muted small">A forecast of the next sessions from the stock models: up or down needs a move of half a volatility or more, steadily; untested.</div></div>`;
   }
