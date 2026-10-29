@@ -31,6 +31,12 @@
   }
 }
 * { box-sizing: border-box; }
+* { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid transparent; border-radius: 999px; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--accent); border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
 .wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
@@ -248,8 +254,9 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 #trend .sig-tile .v { font-size: 18px; font-weight: 700; }
 .rot-group { margin-top: 10px; }
 .rot-gh { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
-.rot-card { border-radius: 8px; padding: 7px 10px; margin-bottom: 6px; background: var(--surface-2); border-left: 3px solid var(--border-strong); }
-.rot-card.in { border-left-color: #059669; } .rot-card.out { border-left-color: #d97706; }
+.rot-card { border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: 8px; padding: 7px 10px; margin-bottom: 6px; background: var(--surface-2); }
+.rot-card.in { border-left-color: #059669; background: color-mix(in srgb, var(--buy) 7%, var(--surface)); }
+.rot-card.out { border-left-color: #d97706; background: color-mix(in srgb, #d97706 7%, var(--surface)); }
 .rot-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .rot-tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 5px; text-transform: uppercase; }
 .rot-card.in .rot-tag { color: #047857; background: #ecfdf5; } .rot-card.out .rot-tag { color: #92400e; background: #fffbeb; }
@@ -1411,7 +1418,10 @@ async function aiPool() {
 }
 async function loadAiPicks() {
   const scr = lastTrade && lastTrade.ai_screen;
-  if (!scr || !(scr.picks || []).length) { $("aiPickBox").innerHTML = ""; return; }
+  if (!scr || !(scr.picks || []).length) {   // not asked today: only the earlier picks still open, if any
+    if ((lastTrade && lastTrade.ai_pick_open || []).length) renderAiPick([], null); else $("aiPickBox").innerHTML = "";
+    return;
+  }
   const chosen = ((lastTrade.ai_pick || {}).tickers || []);
   const picks = chosen.length ? chosen.map(t => scr.picks.find(p => p.ticker === t)).filter(Boolean) : scr.picks.slice(0, 5);
   const seen = [];
@@ -1439,7 +1449,10 @@ async function renderAiPick(seen, scr) {
     const decided = x.r.available ? aiWord(x.r.agent_rating, false) : null;
     const run = (plans[k].runs || [])[0] || {}, row = run.final || run.trader || {}, p = row.plan || {};
     const lv = (row.validation || {}).levels || {}, w = weight[x.ticker];
-    const price = p.entry_price != null ? num(p.entry_price) : p.entry_range_low != null ? `${num(p.entry_range_low)}–${num(p.entry_range_high)}` : "–";
+    // One Buy at price: the agents' entry price, else the low end of their range, else the internal model's.
+    const ba = (row.validation || {}).buy_at || {};
+    const buy = ba.price != null ? ba.price : p.entry_price != null ? p.entry_price : p.entry_range_low;
+    const price = buy != null ? num(buy) + (ba.source === "model" ? `<span class="muted small" title="The agents gave no buy price: the internal model's"> m</span>` : "") : "–";
     const why = x.pick ? [x.pick.why, `Technical: ${x.pick.technical}`, `Sentiment: ${x.pick.sentiment}`, `News: ${x.pick.news}`, `Fundamentals: ${x.pick.fundamentals}`].join("\n") : "";
     return `<tr><td class="num">${x.pick ? x.pick.rank : ""}</td><td class="l" title="${esc(why)}"><b>${tk(x.ticker)}</b></td>` +
       `<td class="l">${decided ? `<a class="ai-box ${decided[1]}" href="/ticker/${encodeURIComponent(x.ticker)}#reports" target="_blank" rel="noopener">${decided[0]}</a>` : ""}</td>` +
@@ -1447,6 +1460,19 @@ async function renderAiPick(seen, scr) {
       `<td class="num">${w != null && a.budget ? usd(w * a.budget) : ""}</td>` +
       `<td class="num"><b>${decided ? price : ""}</b></td><td class="num pos">${decided ? num(lv.price_target) : ""}</td><td class="num neg">${decided ? num(lv.stop_loss) : ""}</td></tr>`;
   });
+  // Earlier AI picks still open: their plan is current and unexpired, and the entry is below today's price.
+  const openRows = () => {
+    const old = (lastTrade && lastTrade.ai_pick_open) || [];
+    if (!old.length) return "";
+    return `<tr class="grp"><td colspan="8" class="l" title="Picked on an earlier ask; the agents' plan is still valid and its Buy at price is below the LTP, so it can still fill">Earlier picks, still valid (Buy at below LTP)</td></tr>` +
+      old.map(o => {
+        const w = aiWord(o.rating, false);
+        return `<tr><td class="num muted small">${esc(String(o.picked || "").slice(5))}</td><td class="l"><b>${tk(o.ticker)}</b></td>` +
+          `<td class="l"><a class="ai-box ${w[1]}" href="/ticker/${encodeURIComponent(o.ticker)}#reports" target="_blank" rel="noopener" title="Plan from ${esc(o.analysis_date || "")}${o.expires ? ", valid until " + esc(o.expires) : ""}">${w[0]}</a></td>` +
+          `<td class="num">${usd(o.ltp)}</td><td class="num"></td><td class="num"><b>${usd(o.entry)}</b></td>` +
+          `<td class="num pos">${num(o.target)}</td><td class="num neg">${num(o.stop)}</td></tr>`;
+      }).join("");
+  };
   const avoids = seen.filter(x => x.r.available && aiWord(x.r.agent_rating, false)[0] === "AVOID").length;
   $("aiRefill").hidden = !avoids;
   $("aiRefill").textContent = `Replace the ${avoids} AVOID${avoids === 1 ? "" : "s"}: the AI picks new stocks`;
@@ -1458,10 +1484,11 @@ async function renderAiPick(seen, scr) {
     `<col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:13%"></colgroup>` +
     `<tr><th class="num" title="The AI's own rank">#</th><th class="l">Ticker</th><th class="l" title="The full team's decision (click for the report)">AI</th>` +
     `<th class="num" title="Last traded price: the latest close">LTP</th><th class="num" title="Dollars from the trading budget (only for a BUY)">Amount</th>` +
-    `<th class="num" title="The agents' entry price (or range)">Buy at</th><th class="num" title="Target price: where the profit is booked (the agents', else the internal model's)">Target</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
-    rows.join("") + `</table></div>` +
-    `<p class="muted small" style="margin:6px 0 0">The AI ranked ${scr.considered} stocks from their facts (${esc(String(scr.model || "").split("/").pop())}); ` +
-    `the full team analysed its top ${seen.length}. Buy at, Sell and Stop are the agents' own plan; Amount only for a BUY. Hover a ticker for its reasons.</p>`;
+    `<th class="num" title="Buy at: the agents' entry price (the low end of a range), else the internal model's">Buy at</th><th class="num" title="Sell price: where the profit is booked (the agents', else the internal model's)">Sell</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
+    rows.join("") + openRows() + `</table></div>` +
+    (scr ? `<p class="muted small" style="margin:6px 0 0">The AI ranked ${scr.considered} stocks from their facts (${esc(String(scr.model || "").split("/").pop())}); ` +
+    `the full team analysed its top ${seen.length}. Buy at, Target and Stop are the agents' own plan; Amount only for a BUY. Hover a ticker for its reasons.</p>`
+      : `<p class="muted small" style="margin:6px 0 0">The AI has not been asked today; these are earlier picks whose plan is still valid.</p>`);
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
@@ -1773,7 +1800,8 @@ async function loadTrackRecord() {
   const pk = firstRows(allPicks, recRows.picks), po = firstRows(allPolicy, recRows.policy), ag = firstRows(allAgents, recRows.agents);
   d = {...d, picks: pk.rows, policy: po.rows, agents: ag.rows};
   moreButton("recPicksMore", "picks", pk.more); moreButton("recPolicyMore", "policy", po.more); moreButton("recAgentsMore", "agents", ag.more);
-  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th></tr>" +
+  $("recPicks").innerHTML = d.picks.length ? "<colgroup><col style='width:12%'><col style='width:12%'><col style='width:13%'><col style='width:14%'><col style='width:11%'><col style='width:8%'><col style='width:30%'></colgroup>" +
+    "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th></tr>" +
     d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
       `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
       `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")

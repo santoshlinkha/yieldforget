@@ -643,6 +643,39 @@ def test_a_budget_refusal_stops_the_run_and_does_not_use_up_the_daily_scans(tmp_
     assert calls == ["AAA"]                                                    # the rest would be refused too
 
 
+def test_earlier_ai_picks_stay_while_their_buy_price_is_below_the_ltp(tmp_path, monkeypatch):
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    app.store.set("global", "ai_pick_state", {"date": "2026-10-27", "tickers": ["AAA", "BBB", "CCC", "DDD", "EEE"]})
+    app.store.set("global", "ai_pick_state", {"date": "2026-10-28", "tickers": ["NOW"]})
+    plans = {"AAA": ("Buy", {"entry_price": 90}, False), "BBB": ("Buy", {"entry_price": 110}, False),
+             "CCC": ("Overweight", {"entry_range_low": 80, "entry_range_high": 95}, False),
+             "DDD": ("Buy", {"entry_price": 90}, True), "EEE": ("Underweight", {"entry_price": 90}, False)}
+    import tradingagents.agents.entry_plan as ep
+    monkeypatch.setattr(ep, "plans_for", lambda con, t: [{"current": True, "trader": None, "final": {
+        "action": plans[t][0], "plan": plans[t][1], "expired": plans[t][2], "analysis_date": "2026-10-27",
+        "validation": {"levels": {"price_target": 120, "stop_loss": 85}}}}])
+    monkeypatch.setattr(srv, "latest_prices", lambda cache, tickers: {t: 100.0 for t in tickers})
+    got = app._open_ai_picks(["NOW"])
+    # AAA and CCC can still fill below the LTP; BBB's buy price is above it, DDD expired, EEE is not a buy.
+    assert [o["ticker"] for o in got] == ["AAA", "CCC"] and got[1]["entry"] == 80 and got[0]["target"] == 120       # a range: its low end
+
+
+def test_a_stock_with_a_valid_plan_is_not_run_again_except_from_its_page(tmp_path, monkeypatch):
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    valid = {"rating": "Buy", "actual_provider": "openrouter", "actual_model": "m", "final_action": "BUY",
+             "fell_back": 0, "as_of": "2026-10-27", "until": "2099-01-01"}
+    monkeypatch.setattr(app, "_valid_plan_run", lambda t: valid)
+    ran = []
+    monkeypatch.setattr(app, "_agents_ran_today", lambda t: None)
+    monkeypatch.setattr(app, "_try_agents", lambda *a, **k: (ran.append(a[1]), {"rating": "Hold", "how": "paid"})[1])
+    monkeypatch.setattr(app, "_record_agent_run", lambda *a, **k: None)
+    g = app.store.settings("global")
+    out = app._run_agents(srv.Job(), "AAA", "2026-10-28", ["market"], g)
+    assert out["reused"] and out["rating"] == "Buy" and out["plan_valid_until"] == "2099-01-01" and ran == []
+    app._run_agents(srv.Job(), "AAA", "2026-10-28", ["market"], g, from_ticker_page=True)
+    assert ran == ["AAA"]                                                     # the stock's own page refreshes it
+
+
 def test_ask_the_ai_to_pick_runs_once_a_calendar_day(tmp_path, monkeypatch):
     srv, app = _agent_app(tmp_path, monkeypatch)
     monkeypatch.setattr(app, "_run_agents", lambda job, t, day, analysts, g: {"rating": "Hold", "how": "agents"})

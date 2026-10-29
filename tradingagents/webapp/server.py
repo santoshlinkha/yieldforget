@@ -427,6 +427,7 @@ class App:
         asked = self.store.get("global", "ai_pick_state") or {}
         done = asked.get("date") == _today() and all(self._agents_ran_today(t) for t in asked.get("tickers") or [])
         out["ai_pick"] = {**asked, "today": done}      # asked today and every stock in it decided
+        out["ai_pick_open"] = self._open_ai_picks(asked.get("tickers") or [])
         gg = self.store.settings("global")
         out["scans"] = {"used": len(self._scanned_today()), "limit": int(gg.get("ai_daily_scans") or 0),
                         "my_picks": gg.get("ai_my_picks") or []}
@@ -1211,9 +1212,11 @@ class App:
             raise ValueError("pick at least one analyst")
         return analysts
 
-    def _run_agents(self, job, ticker: str, day: str, analysts: list[str], g: dict, force: bool = False) -> dict:
+    def _run_agents(self, job, ticker: str, day: str, analysts: list[str], g: dict, force: bool = False,
+                    from_ticker_page: bool = False) -> dict:
         """The agents on one ticker as of ``day``, trying each configured provider in turn (paid: only from a click).
-        A run with the same inputs that already succeeded is not repeated unless ``force``."""
+        A run with the same inputs that already succeeded is not repeated unless ``force``; while the agents' last
+        plan for the stock is still valid (before its expiry) it is not run again, except from the stock's own page."""
         from tradingagents.dataflows.symbols import safe_ticker_component
         from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
         from tradingagents.ledger.db import now_utc
@@ -1231,6 +1234,15 @@ class App:
         job.attempts = []                  # what the page shows: each provider tried, and how it went
         record = {"ticker": ticker, "as_of": day, "analysts": analysts, "evidence": evidence or {},
                   "attempts": attempts, "started_at": now_utc()}
+        if not force and not from_ticker_page:
+            valid = self._valid_plan_run(ticker)
+            if valid:      # its plan still stands: the saved answer, not a new run
+                job.progress = (f"{ticker}: the agents' plan from {valid['as_of']} is valid until {valid['until']}; "
+                                "not run again (run it from the stock's page to refresh it)")
+                return {"ticker": ticker, "rating": valid["rating"], "how": "reused", "reused": True,
+                        "provider": valid["actual_provider"], "model": valid["actual_model"],
+                        "final": {"action": valid["final_action"]}, "fell_back": bool(valid["fell_back"]),
+                        "plan_valid_until": valid["until"]}
         if not force:
             today_run = self._agents_ran_today(ticker)
             if today_run:   # at most one successful run a day per stock: the saved one is the answer
@@ -1281,6 +1293,26 @@ class App:
                 " AND (status = 'ok' OR actual_provider IS NOT NULL)", (start,))}
         except Exception:
             return set()
+
+    def _valid_plan_run(self, ticker: str) -> dict | None:
+        """The latest successful agent run on ``ticker`` while its plan is still valid: the current (not superseded)
+        plan has an expiry date that has not passed. A plan without an expiry is not held as valid."""
+        from tradingagents.agents.entry_plan import plans_for
+
+        try:
+            run = next((r for r in plans_for(self.store.con, ticker) if r.get("current")), None)
+        except Exception:   # an older database without the table
+            return None
+        row = (run or {}).get("final") or (run or {}).get("trader")
+        until = ((row or {}).get("plan") or {}).get("expires_at")
+        if not row or row.get("expired") or not until or str(until)[:10] < _today():
+            return None
+        try:
+            done = self.store.con.execute("SELECT * FROM agent_runs WHERE ticker = ? AND status = 'ok'"
+                                          " ORDER BY finished_at DESC LIMIT 1", (ticker.upper(),)).fetchone()
+        except Exception:
+            return None
+        return {**dict(done), "until": str(until)[:10]} if done else None
 
     def _agents_ran_today(self, ticker: str):
         """Today's successful agent run on ``ticker`` (local calendar day), if any: the agents run once a day."""
@@ -1592,10 +1624,25 @@ class App:
             ref = ref if ref and ref.get("session") else EP.reference_quote(ticker, day, self.cache_dir)
             account = EP.account_view(self.store, ticker, _today(), self.cache_dir)
             return EP.record(self.store, ticker, day, str(folder), source, ref, account, trader or None,
-                             final or None, evidence, sigma_h=self._horizon_sigma(ticker, day))
+                             final or None, evidence, sigma_h=self._horizon_sigma(ticker, day),
+                             model_buy=self._model_buy(ticker, ref.get("price")))
         except Exception as exc:
             logger.warning("entry plans for %s on %s not recorded: %s", ticker, day, exc)
             return {"error": str(exc)[:200]}
+
+    def _model_buy(self, ticker: str, close: float | None, horizon: int = 20) -> float | None:
+        """The internal model's buy price: the limit at its median expected dip from the reference close when it has
+        a forecast for the stock (as the Model's pick shows), else the reference close itself (the next close)."""
+        from tradingagents.stocks import signals
+
+        if not close:
+            return None
+        try:
+            f = (signals.latest(self.store.con, horizon).get(ticker.upper()) or {}).get("forecast") or {}
+        except Exception:   # no saved forecasts
+            f = {}
+        dip = f.get("dd_q50")
+        return float(close) * (1 + float(dip)) if dip is not None and dip < 0 else float(close)
 
     def _horizon_sigma(self, ticker: str, day: str, horizon: int = 20) -> float | None:
         """The stock's volatility over the ``horizon`` sessions, as the internal model's exits use it: the saved
@@ -1788,7 +1835,8 @@ class App:
         day = self._check_day(str(body.get("date") or _today()))
         analysts = self._analysts(body, g)
         force = bool(body.get("force"))
-        return self.analysis.start(lambda job: self._run_agents(job, ticker, day, analysts, g, force))
+        page = body.get("source") == "ticker"     # the stock's own page may refresh a plan that is still valid
+        return self.analysis.start(lambda job: self._run_agents(job, ticker, day, analysts, g, force, page))
 
     # --- AI decisions: the agents' BUY / HOLD / SELL on a shortlist, next to the rules and the economy ---
 
@@ -1984,6 +2032,42 @@ class App:
         return msg.startswith("No AI provider could run") and all(
             any(w in part for w in ("budget", "limit", "paused", "skipped", "credit"))
             for part in re.split(r"; (?=[a-z][\w ]* \()", msg))     # one part per provider: "name (model): why"
+
+    def _open_ai_picks(self, current: list[str]) -> list[dict]:
+        """Earlier AI picks (any ``ai_pick_state`` saved before) still open: the agents' latest plan is a current,
+        unexpired Buy or Overweight whose buy price (the plan's entry price, else the top of its range) is below the
+        LTP (the latest close), so it can still fill. Newest pick first."""
+        from tradingagents.agents.entry_plan import plans_for
+
+        try:
+            saved = [json.loads(r[0]) for r in self.store.con.execute(
+                "SELECT value_json FROM settings_history WHERE scope = 'global' AND key = 'ai_pick_state' ORDER BY id DESC")]
+        except Exception:   # an older database without the history
+            return []
+        picked = {}
+        for state in saved:
+            for t in state.get("tickers") or []:
+                picked.setdefault(str(t).upper(), state.get("date"))
+        candidates = [t for t in picked if t not in {c.upper() for c in current}]
+        prices = latest_prices(self.cache_dir, candidates) if candidates else {}
+        out = []
+        for t in candidates:
+            run = next((r for r in plans_for(self.store.con, t) if r.get("current")), None)
+            row = (run or {}).get("final") or (run or {}).get("trader")
+            if not row or row.get("expired") or str(row.get("action") or "").lower() not in ("buy", "overweight"):
+                continue
+            plan = row.get("plan") or {}
+            entry = (((row.get("validation") or {}).get("buy_at") or {}).get("price") or plan.get("entry_price")
+                     or plan.get("entry_range_low"))
+            ltp = prices.get(t)
+            if entry is None or ltp is None or not float(entry) < ltp:
+                continue
+            lv = (row.get("validation") or {}).get("levels") or {}
+            out.append({"ticker": t, "picked": picked[t], "rating": row.get("action"), "ltp": ltp,
+                        "entry": float(entry), "range": [plan.get("entry_range_low"), plan.get("entry_range_high")],
+                        "target": lv.get("price_target"), "stop": lv.get("stop_loss"), "expires": plan.get("expires_at"),
+                        "analysis_date": row.get("analysis_date")})
+        return out
 
     def _ai_refill(self, job, day: str, analysts: list[str], g: dict) -> dict:
         """Keep the AI's picks the team did not rate AVOID; for the others the AI screens again, leaving out every

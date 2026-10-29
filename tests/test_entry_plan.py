@@ -113,6 +113,19 @@ def test_missing_exits_come_from_the_trader_then_the_internal_model():
     assert none["levels"]["stop_loss"] is None and none["levels"]["price_target"] is None
 
 
+def test_buy_at_is_one_price_the_low_end_of_a_range_else_the_internal_models():
+    import math
+
+    assert EP.validate(plan(), "Buy", REF, ACCOUNT, TODAY)["buy_at"] == {"price": 98.0, "source": "agents"}
+    ranged = EP.validate(plan(entry_price=None), "Buy", REF, ACCOUNT, TODAY)
+    assert ranged["buy_at"] == {"price": 97.0, "source": "agents"}                 # the low end of 97-99
+    bare = plan(entry_price=None, entry_range_low=None, entry_range_high=None, entry_type="limit")
+    v = EP.validate(bare, "Buy", REF, ACCOUNT, TODAY, sigma_h=0.1, model_buy=96.4)
+    assert v["buy_at"] == {"price": 96.4, "source": "model"}
+    assert v["levels"]["price_target"] == round(96.4 * math.exp(0.1), 2) and v["levels"]["source"]["stop_loss"] == "model"
+    assert any("needs a price" in b for b in v["blocks"])           # still flagged: the agents gave no price
+
+
 def test_the_record_gives_the_manager_the_traders_exits_it_left_out(tmp_path):
     from tradingagents.ledger.store import Store
 
@@ -197,7 +210,7 @@ def test_the_manager_reviews_the_plan_and_the_risk_analysts_challenge_it():
                                  entry_plan=EntryPlan.model_validate(plan(entry_price=97.5)))
     out = create_portfolio_manager(_structured_llm(captured, decision))(state)
     assert "approve the trader's entry plan, revise it, or reject it" in captured["prompt"]
-    assert "stop_loss, the exit price" in captured["prompt"]
+    assert "always entry_price (buy), price_target (sell) and stop_loss" in captured["prompt"]
     assert out["final_entry"] == {"rating": "Overweight", "price_target": 110.0, "stop_loss": 93.0, "review": "revised",
                                   "plan": EntryPlan.model_validate(plan(entry_price=97.5)).model_dump(mode="json")}
     llm = MagicMock()

@@ -29,6 +29,12 @@
   --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --chart-grid: #1c2433; --s1: #60a5fa; --s2: #64748b; --shadow: none;
 }
 * { box-sizing: border-box; }
+* { scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border); border: 3px solid transparent; border-radius: 999px; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--accent); border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
 table, .num { font-variant-numeric: tabular-nums; }
@@ -667,10 +673,14 @@ function planSummary(run) {
     return src === "model" ? `<div class="muted small" title="The agents gave no level: the internal model's exit for this entry (one horizon's volatility away)">internal model</div>`
       : src === "trader" ? `<div class="muted small">the trader's</div>` : "";
   };
-  const entry = p.entry_price != null ? money2(p.entry_price)
-    : p.entry_range_low != null && p.entry_range_high != null ? `${esc(p.entry_range_low)} – ${esc(p.entry_range_high)}${cur}` : null;
+  // One Buy at price (the low end of a range), else the internal model's; the range itself beneath it.
+  const ba = v.buy_at || {};
+  const buyPx = ba.price != null ? ba.price : p.entry_price != null ? p.entry_price : p.entry_range_low;
+  const entry = buyPx != null ? money2(buyPx) + (p.entry_range_low != null && p.entry_range_high != null
+      ? `<div class="muted small">range ${esc(p.entry_range_low)} – ${esc(p.entry_range_high)}</div>` : "") +
+      (ba.source === "model" ? `<div class="muted small">internal model</div>` : "") : null;
   const tiles = [
-    ["Entry price", entry ? `<b>${entry}</b>${p.entry_type ? `<div class="muted small">${esc(p.entry_type)} order</div>` : ""}` : null],
+    ["Buy at", entry ? `<b>${entry}</b>${p.entry_type ? `<div class="muted small">${esc(p.entry_type)} order</div>` : ""}` : null],
     ["Sell target (book profit)", money2(lv.price_target) ? `<b class="pos">${money2(lv.price_target)}</b>${fromWhere("price_target")}` : null],
     ["Stop loss (exit)", money2(lv.stop_loss) ? `<b class="neg">${money2(lv.stop_loss)}</b>${fromWhere("stop_loss")}` : `<span class="muted small">not given by the agents</span>`],
     [p.status === "wait" ? "Wait until" : "Entry condition", p.trigger ? bullets(p.trigger) : null, "wide"],
@@ -1537,7 +1547,7 @@ async function pollAnalysis(first) {
 $("agRun").onclick = async () => {
   const analysts = [...$("agAnalysts").querySelectorAll("input:checked")].map(x => x.value);
   if (!confirm(`Run the agents on ${symbol} as of ${$("agDate").value} with ${analysts.length} analyst(s)? This is a paid AI run, held to your budget.`)) return;
-  try { await getJSON("/api/analyze", {ticker: symbol, date: $("agDate").value, analysts}); pollAnalysis(false); }
+  try { await getJSON("/api/analyze", {ticker: symbol, date: $("agDate").value, analysts, source: "ticker"}); pollAnalysis(false); }
   catch (e) { $("agState").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
 };
 

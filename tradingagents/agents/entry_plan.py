@@ -122,7 +122,8 @@ def render_reference(ref: dict | None) -> str:
 TRADER_INSTRUCTION = (
     "Also give entry_plan: status ready (enter from earliest_execution), conditional (only if trigger "
     "happens), wait (not now; trigger = what would make you reconsider) or unavailable. Prices are as-traded "
-    "numbers in the reference currency near the entry reference close, never percentages; give earliest_execution "
+    "numbers in the reference currency near the entry reference close, never percentages; always give one "
+    "entry_price (the buy price, not only a range), the sell target and the stop-loss; give earliest_execution "
     "and expires_at as YYYY-MM-DD and the evidence_ids you relied on. ")
 RISK_INSTRUCTION = ("Challenge the trader's entry plan too: its price or range against the entry reference, "
                     "its trigger, timing and expiry.")
@@ -130,7 +131,7 @@ PM_INSTRUCTION = (
     "- **Entry plan**: approve the trader's entry plan, revise it, or reject it (then status wait or "
     "unavailable, with the reason); fill entry_plan with the final plan and entry_plan_review with "
     "approved / revised / rejected. Same price rules as the trader: as traded, near the entry reference.\n"
-    "- **Exits**: price_target (sell, booking the profit) and stop_loss, the exit price; as prices.")
+    "- **Prices**: always entry_price (buy), price_target (sell) and stop_loss, each one price.")
 
 
 # --- the account ---
@@ -180,13 +181,14 @@ def _day(text) -> date | None:
 
 def validate(plan: dict | None, action: str | None, ref: dict, account: dict, today: date | None = None,
              stop_loss: float | None = None, price_target: float | None = None, sigma_h: float | None = None,
-             source: dict | None = None) -> dict:
+             source: dict | None = None, model_buy: float | None = None) -> dict:
     """Whether ``plan`` can be carried out in this account, and why not. ``action`` is the side it serves
     (the Trader's Buy / Hold / Sell or the Portfolio Manager's rating). Nothing is repaired: each problem
     is a block (the plan cannot be used) or a warning (it can, with care). An exit the agents did not give
     comes from the internal model's barrier rule when ``sigma_h`` (the stock's volatility over the horizon)
     is known: stop at E * exp(-sigma_h), sell target at E * exp(+sigma_h), for the entry E; ``levels.source``
-    says which level came from where."""
+    says which level came from where. ``buy_at`` is one buy price: the plan's entry price, else the low end of
+    its range, else ``model_buy`` (the internal model's)."""
     from tradingagents.ledger.sessions import is_session, next_session, sessions_between
 
     today = today or date.today()
@@ -241,6 +243,10 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
     elif not plan.get("currency"):
         warnings.append(f"no currency given: read as the quote's ({ref.get('currency') or NOT_GIVEN})")
     used = price if price is not None else (high if high is not None else None)
+    ok = lambda v: isinstance(v, (int, float)) and math.isfinite(v) and v > 0  # noqa: E731
+    buy_at, buy_src = ((price, "agents") if ok(price) else (low, "agents") if ok(low)
+                       else (round(model_buy, 2), "model") if model_buy and ok(model_buy) else (None, None))
+    out["buy_at"] = {"price": buy_at, "source": buy_src}
     ref_px = ref.get("price")
     if kind == "market" and used is None:
         used = ref_px
@@ -308,7 +314,7 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
                 stop_loss, source["stop_loss"] = round(used * math.exp(-sigma_h), 2), "model"
             if price_target is None:
                 price_target, source["price_target"] = round(used * math.exp(sigma_h), 2), "model"
-        levels = {"stop_loss": stop_loss, "price_target": price_target, "source": source}
+        levels = {"stop_loss": stop_loss, "price_target": price_target, "source": source, "base": used}
         if stop_loss is not None and stop_loss >= used:
             warnings.append(f"stop-loss {stop_loss} is not below the entry {used}")
         if price_target is not None and price_target <= used:
@@ -319,6 +325,13 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
             levels["loss_at_stop_usd"] = round(out["sizing"]["shares"] * (used - stop_loss), 2)
         out["levels"] = levels
 
+    if out["levels"] is None and buy_at and sigma_h and math.isfinite(sigma_h) and sigma_h > 0:
+        # No price the plan could be sized on: the exits around the Buy at price, from the internal model.
+        src = {"stop_loss": "agents" if stop_loss is not None else "model",
+               "price_target": "agents" if price_target is not None else "model", **(source or {})}
+        out["levels"] = {"stop_loss": stop_loss if stop_loss is not None else round(buy_at * math.exp(-sigma_h), 2),
+                         "price_target": price_target if price_target is not None
+                         else round(buy_at * math.exp(sigma_h), 2), "source": src, "base": buy_at}
     state = "blocked" if blocks else ("expired" if expires and expires < today else
                                       ("conditional" if status == "conditional" else "actionable"))
     return {**out, "state": state, "feasible": not blocks and state != "expired"}
@@ -328,7 +341,7 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
 
 def record(store, ticker: str, analysis_date: str, run_ref: str | None, source: str, ref: dict, account: dict,
            trader: dict | None, final: dict | None, evidence: dict | None = None, today: date | None = None,
-           sigma_h: float | None = None) -> dict:
+           sigma_h: float | None = None, model_buy: float | None = None) -> dict:
     """Validate and save one run's plans: the Trader's proposal and the Portfolio Manager's final plan,
     linked by the approval. ``trader``/``final``: ``{"action"|"rating", "plan", "review", "stop_loss",
     "price_target"}`` (either may be None: a chat answer has no separate trader). An exit the manager leaves
@@ -348,7 +361,8 @@ def record(store, ticker: str, analysis_date: str, run_ref: str | None, source: 
                     stop, came_from["stop_loss"] = trader["stop_loss"], "trader"
                 if target is None and trader.get("price_target") is not None:
                     target, came_from["price_target"] = trader["price_target"], "trader"
-            check = validate(part.get("plan"), side, ref, account, today, stop, target, sigma_h, came_from)
+            check = validate(part.get("plan"), side, ref, account, today, stop, target, sigma_h, came_from,
+                             model_buy)
             review = part.get("review") or ("proposed" if stage == "trader" else None)
             pid = uuid.uuid4().hex[:16]
             plan = part.get("plan")
