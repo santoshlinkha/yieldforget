@@ -142,13 +142,17 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .zoo-chip { display: flex; flex-direction: column; gap: 1px; border: 1px solid var(--border); border-radius: 8px;
   padding: 6px 8px; background: var(--surface); }
 .zoo-chip b { font-size: 16px; }
-.sg-table th { white-space: nowrap; }
-.sg-table td { white-space: nowrap; vertical-align: middle; padding-top: 6px; padding-bottom: 6px; }
+.fit-table { width: 100%; table-layout: fixed; }
+.fit-table th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
+.fit-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-table .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-legend { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 8px 0 0; }
+.col-legend dt { font-weight: 600; } .col-legend dd { margin: 0; color: var(--muted); }
+.sg-table th { white-space: normal; }
+.sg-table td { vertical-align: middle; padding-top: 6px; padding-bottom: 6px; }
 .sg-table th.num, .sg-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .sg-table th.l, .sg-table td.l { text-align: left; }
-.sg-table .sg-name { max-width: 170px; }
 .sg-table .sg-clip { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sg-table .sg-warns { max-width: 230px; }
 .sg-table .sg-warn summary { cursor: pointer; display: flex; gap: 4px; align-items: baseline; list-style: none; }
 .sg-table .sg-warn summary::-webkit-details-marker { display: none; }
 .sg-table .sg-warn summary .sg-clip { flex: 1; min-width: 0; }
@@ -455,6 +459,7 @@ select option { background: var(--surface); color: var(--text); }
         </div>
         <p class="muted small" id="sgStatus" style="margin:0 0 8px"></p>
         <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
+        <details class="small" id="qsLegend" style="margin-top:8px"></details>
         <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
         <details class="small"><summary><b>How the scores and ranks are measured</b></summary>
           <ul class="muted">
@@ -1456,16 +1461,27 @@ $("fcUniverse").onchange = () => { fcView = null; loadForecasts(); };
 if (["quality", "signals", "models"].includes(new URLSearchParams(location.search).get("qv"))) store.set("qsView", new URLSearchParams(location.search).get("qv"));
 let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false, qsView = store.get("qsView", "quality"), sgData = null;
 // Combined score/rank: a screen of facts and opinions (quality checks, analyst consensus, target upside), not a model.
-const QS_COLS = [["rank", "Screen rank"], ["ticker", "Ticker"], ["combined_score", "Screen score (quality + analysts)"],
-  ["quality_rank", "Quality rank"], ["quality_score", "Quality score"], ["moat_passed", "Moat"],
-  ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags (checks)"], ["implied_growth", "Implied growth"],
-  ["forward_pe", "Fwd P/E"], ["analyst_mean", "Consensus"], ["analysts", "Analysts"], ["target_upside", "Target upside"]];
-const SG_COLS = [["rank", "Rank", "Combined rank"], ["ticker", "Ticker"], ["verdict", "Verdict", "BUY / WATCH / HOLD / SELL / AVOID: the ticker page explains each"],
+const QS_COLS = [["rank", "Screen rank", "Order by the screen score (1 = best). A screen of facts and opinions, not a model forecast"],
+  ["ticker", "Ticker", "The stock; its company name below. Click it for the stock's page"],
+  ["combined_score", "Screen score", "0-100: the average of three percentile ranks among the stocks screened: quality score, analyst consensus (stronger buys higher) and price-target upside. Hover a value for its parts"],
+  ["quality_rank", "Quality rank", "Order by the quality score alone (equal scores share a rank)"],
+  ["quality_score", "Quality score", "0-100: the share of the moat and financial-strength checks passed (a 'check' counts half, a 'flag' none; checks without data are left out)"],
+  ["moat_passed", "Moat", "Moat checks passed out of those with data (durable advantages: margins, returns on capital, market position)"],
+  ["strength_flags", "Strength flags", "How many financial-strength checks are flagged (debt, liquidity, cash flow). Fewer is better"],
+  ["valuation_flags", "Valuation flags", "Valuation checks flagged, with the number marked 'check' in brackets (forward P/E against its own history, EV/EBITDA, free-cash-flow yield, implied growth). Fewer is cheaper"],
+  ["implied_growth", "Implied growth", "The yearly growth today's price implies (reverse discounted cash flow). Lower means less is priced in"],
+  ["forward_pe", "Fwd P/E", "Price over next year's expected earnings"],
+  ["analyst_mean", "Consensus", "This month's analyst ratings as one number: 1 strong buy to 5 strong sell"],
+  ["analysts", "Analysts", "How many analysts rate it"],
+  ["target_upside", "Target upside", "The gap from today's price to the analysts' mean price target"]];
+const SG_COLS = [["rank", "Rank", "The screen rank (quality and analysts), the same as the first view"],
+  ["ticker", "Ticker", "The stock; its company name below (hover for the full name)"], ["verdict", "Verdict", "BUY / WATCH / HOLD / SELL / AVOID: the ticker page explains each"],
   ["model_rank", "Model #", "The daily decision's rank among today's S&P 500 stocks (1 = best): the learned ensemble when it is trained, else the decision's own weekly XGBoost fit. It decides the verdict. It is the Decision column on the Models tab, not the Models tab's mean or its XGB (54) column."],
-  ["action", "Action", "The latest daily decision"],
-  ["trend", "Trend", "Over 20 sessions"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
+  ["action", "Action", "What the latest daily decision says for the stock (ENTER, WAIT, HOLD, EXIT, REDUCE; 'paper enter' while the model is experimental). Hover for the reasons"],
+  ["trend", "Trend", "The trend model's call over the next 20 sessions (up, down, sideways, or no clear trend) and its probability"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
   ["lift_down", "Breakdown", "Breakdown lift: P(trading below the 20-day low within 20 sessions, intraday) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss at the 20-session end)"],
-  ["warnings", "Warnings"], ["quality_score", "Quality", "Quality score"],
+  ["warnings", "Warnings", "Signals that stand out against today's other stocks (breakout, breakdown, crash, deep drawdown). The first is shown; click +N for the rest"],
+  ["quality_score", "Quality", "The quality score (0-100), as in the first view"],
   ["analyst_mean", "Cons.", "Analyst consensus, 1 strong buy to 5 strong sell"]];
 const ACT_ORDER = {ENTER: 0, EXIT: 1, REDUCE: 2, HOLD: 3, WAIT: 4};
 const VERDICT_ORDER = {BUY: 0, SELL: 1, HOLD: 2, WATCH: 3, AVOID: 4};
@@ -1496,7 +1512,29 @@ function qsValue(r, k) {
 }
 const qsPct = v => v == null ? "missing" : (100 * v).toFixed(0);
 const qsParts = r => `quality ${qsPct(r.quality_pct)} + consensus ${qsPct(r.analyst_pct)} + target upside ${qsPct(r.upside_pct)} (percentiles), averaged`;
+// Fixed column widths per view: sorting never reshapes the table; it fills its panel and scrolls inside it when the
+// window is narrower than the columns need. Long text is cut with "…" and shown whole on hover.
+const QS_WIDTHS = {
+  quality: {rank: 56, ticker: 190, combined_score: 76, quality_rank: 70, quality_score: 70, moat_passed: 60, strength_flags: 70,
+            valuation_flags: 84, implied_growth: 76, forward_pe: 62, analyst_mean: 118, analysts: 70, target_upside: 74},
+  signals: {rank: 52, ticker: 170, verdict: 112, model_rank: 76, action: 108, trend: 118, lift_up: 80, lift_down: 88,
+            p_large_loss: 66, warnings: 220, quality_score: 64, analyst_mean: 56},
+  models: {rank: 56, ticker: 210, ens: 86, ens_net: 96, ens_spy: 76, agree: 100, best_model: 170, quality_score: 70}};
+function fitScreen(view, cols) {
+  const t = $("qsTable"), w = QS_WIDTHS[view] || {};
+  t.classList.add("fit-table");
+  t.style.minWidth = Object.values(w).reduce((a, b) => a + b, 0) + "px";
+  t.insertAdjacentHTML("afterbegin", "<colgroup>" + cols.map(([c]) => `<col style="width:${w[c] || 90}px">`).join("") + "</colgroup>");
+  t.querySelectorAll("th[data-k]").forEach(th => {
+    const c = cols.find(x => x[0] === th.dataset.k);
+    if (c && c[2]) th.title = c[2];
+  });
+  t.querySelectorAll("td").forEach(td => { if (!td.title && td.textContent.length > 14) td.title = td.textContent.trim(); });
+  $("qsLegend").innerHTML = `<summary>What the columns mean</summary><dl class="col-legend">` +
+    cols.map(([, label, help]) => `<dt>${esc(label)}</dt><dd>${esc(help || "")}</dd>`).join("") + "</dl>";
+}
 function renderScreen() {
+  $("qsTable").classList.remove("fit-table"); $("qsTable").style.minWidth = ""; $("qsLegend").innerHTML = "";
   if (!qsData || !qsData.latest) { $("qsTable").innerHTML = "<tr><td class='muted l'>Not built yet: build it once (a few minutes the first time).</td></tr>"; return; }
   const q = $("qsFilter").value.trim().toLowerCase();
   let rows = qsData.latest.rows.filter(r => !q || `${r.ticker} ${r.name} ${r.sector}`.toLowerCase().includes(q));
@@ -1517,7 +1555,7 @@ function renderScreen() {
   if (qsView === "signals") { renderSignals(shown, arrow); return; }
   if (qsView === "models") { renderModelsView(shown, arrow); return; }
   $("qsTable").innerHTML = "<tr>" + QS_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${c === "ticker" ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
-    shown.map(r => `<tr><td>${r.rank}</td><td class="l" style="max-width:190px"><b>${tk(r.ticker)}</b><div class="muted small">${esc(r.name || "")}${r.note ? ` (${esc(r.note)})` : ""}</div></td>
+    shown.map(r => `<tr><td>${r.rank}</td><td class="l"><b>${tk(r.ticker)}</b><div class="muted small clip" title="${esc(r.name || "")}${r.note ? ` (${esc(r.note)})` : ""}">${esc(r.name || "")}${r.note ? ` (${esc(r.note)})` : ""}</div></td>
       <td title="${qsParts(r)}">${r.combined_score == null ? "–" : r.combined_score.toFixed(1)}</td>
       <td>${r.quality_rank == null ? "–" : r.quality_rank}</td>
       <td title="${r.quality_tests} tests">${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td><td title="${esc(r.moat)}">${r.moat_passed}/${r.moat_scored}</td>
@@ -1526,6 +1564,7 @@ function renderScreen() {
       <td>${r.implied_growth == null ? "–" : pct(r.implied_growth, 1)}</td><td>${r.forward_pe == null ? "–" : (+r.forward_pe).toFixed(1)}</td>
       <td title="${esc(r.analyst_label || "")}">${r.analyst_mean == null ? "–" : `${r.analyst_mean.toFixed(2)} <span class="muted small">${esc(r.analyst_label)}</span>`}</td>
       <td>${r.analysts || "–"}</td><td class="${(r.target_upside || 0) >= 0 ? "pos" : "neg"}">${r.target_upside == null ? "–" : spct(r.target_upside)}</td></tr>`).join("");
+  fitScreen("quality", QS_COLS);
   $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
     const c = th.dataset.k;
     // First click: best first (rank and consensus ascending, the rest descending).
@@ -1535,12 +1574,14 @@ function renderScreen() {
   });
 }
 const liftCell = (v, bad) => v == null ? "–" : `<span class="${v >= 1.2 ? (bad ? "neg" : "pos") : v <= 0.8 ? "muted" : ""}">${v.toFixed(2)}×</span>`;
-const ZV_COLS = [["rank", "Rank", "Combined screen rank"], ["ticker", "Ticker"],
+const ZV_COLS = [["rank", "Rank", "The screen rank (quality and analysts), the same as the first view"],
+  ["ticker", "Ticker", "The stock; its company name below"],
   ["ens", "Ensemble", "The learned-weight ensemble's rank among today's S&P 500 (100 = its top pick); it orders the best buy"],
   ["ens_net", "Expected net", "20 sessions after costs: the historical average of stocks the ensemble ranked like this (out of sample)"],
   ["ens_spy", "vs SPY", "The same, less SPY over the same days"],
   ["agree", "Models in top fifth", "How many of the fitted models put it in their top fifth"],
-  ["best_model", "Most bullish model", "The model that ranks it highest"], ["quality_score", "Quality"]];
+  ["best_model", "Most bullish model", "The fitted model that ranks it highest, with its percentile"],
+  ["quality_score", "Quality", "The quality score (0-100), as in the first view"]];
 function renderModelsView(shown, arrow) {
   $("qsTable").classList.remove("sg-table");
   if (!zoo) { $("qsTable").innerHTML = "<tr><td class='muted l'>Loading the models' run…</td></tr>"; api("/api/model-zoo").then(d => { if (d.available) { zoo = d; renderScreen(); } else $("qsTable").innerHTML = "<tr><td class='muted l'>No run of the models yet: Models tab → Run all models.</td></tr>"; }); return; }
@@ -1548,12 +1589,13 @@ function renderModelsView(shown, arrow) {
     shown.map(r => {
       const z = qsZoo(r) || {}, e = z.ensemble;
       const best = ZOO_FITTED.filter(k => z[k]).sort((a, b) => z[b].pct - z[a].pct)[0];
-      return `<tr><td>${r.rank}</td><td class="l" style="max-width:150px"><b>${tk(r.ticker)}</b><div class="muted small" style="white-space:normal">${esc(r.name || "")}</div></td>
+      return `<tr><td>${r.rank}</td><td class="l"><b>${tk(r.ticker)}</b><div class="muted small clip" title="${esc(r.name || "")}">${esc(r.name || "")}</div></td>
         <td><b>${e ? Math.round(e.pct * 100) : "–"}</b></td><td>${e ? spct(e.forecast) : "–"}</td><td class="muted">${e ? spct(e.excess_vs_spy) : "–"}</td>
         <td>${Object.keys(z).length ? `${ZOO_TOP(z)} of ${ZOO_FITTED.filter(k => z[k]).length}` : "–"}</td>
         <td class="l small">${best ? `${esc(ZOO_SHORT[best])} <span class="muted">${Math.round(z[best].pct * 100)}</span>` : "–"}</td>
         <td>${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td></tr>`;
     }).join("");
+  fitScreen("models", ZV_COLS);
   $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
     const c = th.dataset.k; qsSort = {key: c, dir: qsSort.key === c ? -qsSort.dir : (["ens", "ens_net", "ens_spy", "agree"].includes(c) ? -1 : 1)}; renderScreen();
   });
@@ -1587,6 +1629,7 @@ function renderSignals(shown, arrow) {
         `<td class="num">${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td>` +
         `<td class="num">${r.analyst_mean == null ? "–" : r.analyst_mean.toFixed(2)}</td></tr>`;
     }).join("");
+  fitScreen("signals", SG_COLS);
   $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
     const c = th.dataset.k;
     const natural = ["rank", "verdict", "model_rank", "action", "trend", "analyst_mean", "ticker"].includes(c) ? 1 : -1;
