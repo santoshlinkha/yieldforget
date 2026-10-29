@@ -1423,7 +1423,10 @@ class App:
             return {"available": False, "job": state}
         from tradingagents.model_outputs import OUTPUTS
 
-        described = model_zoo.describe(run)
+        from tradingagents.stocks import daily
+
+        described = model_zoo.describe(run, daily.load(self.store.con))
+        run = {**run, "stocks": described.pop("stocks")}
         base = {"available": True, "job": state, **{k: run[k] for k in ("id", "created_at", "info_cutoff",
                                                                           "tested", "members", "notes", "version")},
                 **described, "ensemble": run.get("ensemble"),

@@ -921,7 +921,7 @@ let fillOp = null;
 
 const ZOO_SHORT = {xgb_rank: "XGB (54)", xgb_rank_all: "XGB (all)", lgbm_lambdarank: "LambdaRank", lgbm_regression: "LGBM reg.",
   ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", chronos2_covariates: "Chronos-2 + market",
-  mamba: "Mamba", ensemble: "Ensemble", momentum_12_1: "Momentum",
+  mamba: "Mamba", ensemble: "Ensemble", decision: "Decision", momentum_12_1: "Momentum",
   low_volatility: "Low vol.", analysts_target_upside: "Target upside", eps_surprise: "EPS surprise"};
 const ZOO_FITTED = ["xgb_rank", "xgb_rank_all", "lgbm_lambdarank", "lgbm_regression", "ridge_pooled", "ridge_per_stock",
   "mamba", "chronos2", "chronos2_covariates"];
@@ -947,7 +947,7 @@ const LIFE = {active_decision: "decides the ranking", fallback_decision: "decide
   challenger: "challenger: shown, decides nothing", baseline: "baseline"};
 function renderZoo() {
   if (!zoo) return;
-  const models = Object.keys(zoo.models).sort((a, b) => (b === "ensemble") - (a === "ensemble")),
+  const models = Object.keys(zoo.models).sort((a, b) => (b === "decision") - (a === "decision") || (b === "ensemble") - (a === "ensemble")),
     q = ($("zooFilter").value || "").trim().toUpperCase();
   const shown = models.filter(k => !zooCols || zooCols.includes(k));
   const ew = zoo.ensemble && zoo.ensemble.weights;
@@ -1297,12 +1297,13 @@ $("fcUniverse").onchange = () => { fcView = null; loadForecasts(); };
 // ?qv=signals opens the stock screen on that column view (and is remembered like a click).
 if (["quality", "signals", "models"].includes(new URLSearchParams(location.search).get("qv"))) store.set("qsView", new URLSearchParams(location.search).get("qv"));
 let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false, qsView = store.get("qsView", "quality"), sgData = null;
-const QS_COLS = [["rank", "Combined rank"], ["ticker", "Ticker"], ["combined_score", "Combined score"],
+// Combined score/rank: a screen of facts and opinions (quality checks, analyst consensus, target upside), not a model.
+const QS_COLS = [["rank", "Screen rank"], ["ticker", "Ticker"], ["combined_score", "Screen score (quality + analysts)"],
   ["quality_rank", "Quality rank"], ["quality_score", "Quality score"], ["moat_passed", "Moat"],
   ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags (checks)"], ["implied_growth", "Implied growth"],
   ["forward_pe", "Fwd P/E"], ["analyst_mean", "Consensus"], ["analysts", "Analysts"], ["target_upside", "Target upside"]];
 const SG_COLS = [["rank", "Rank", "Combined rank"], ["ticker", "Ticker"], ["verdict", "Verdict", "BUY / WATCH / HOLD / SELL / AVOID: the ticker page explains each"],
-  ["model_rank", "Model rank", "The 20-session model's rank among today's S&P 500 stocks (1 = best); it decides the verdict"],
+  ["model_rank", "Model rank", "The daily decision's rank among today's S&P 500 stocks (1 = best): the learned ensemble when it is trained, else the decision's own weekly XGBoost fit. It decides the verdict. It is the Decision column on the Models tab, not the Models tab's mean or its XGB (54) column."],
   ["action", "Action", "The latest daily decision"],
   ["trend", "Trend", "Over 20 sessions"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
   ["lift_down", "Breakdown", "Breakdown lift: P(trading below the 20-day low within 20 sessions, intraday) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss at the 20-session end)"],

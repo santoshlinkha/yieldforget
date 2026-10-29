@@ -25,7 +25,18 @@ def _run(with_ensemble: bool):
 def test_a_run_without_ensemble_scores_says_the_ranker_fell_back():
     d = model_zoo.describe(_run(with_ensemble=False))
     assert d["ranking_source"] == "xgb_rank" and "fallback" in d["ranking_note"]
-    assert d["models"]["ensemble"]["coverage"] == 0 and d["models"]["xgb_rank"]["lifecycle"] == "fallback_decision"
+    # The zoo's XGB column is a separate fit of the recipe, not what decides; the decision's own ranking is its own column.
+    assert d["models"]["ensemble"]["coverage"] == 0 and d["models"]["xgb_rank"]["lifecycle"] == "challenger"
+    run = _run(with_ensemble=False)
+    run["info_cutoff"] = "2026-10-28"
+    decision = {"info_cutoff": "2026-10-28", "model": {"ranker": {"name": "xgb_rank"}},
+                "scores": {"S3": {"score_pct": 0.998, "rank": 1, "of": 10}}}
+    withdec = model_zoo.describe(run, decision)
+    assert withdec["models"]["decision"]["lifecycle"] == "active_decision" and withdec["models"]["decision"]["coverage"] == 1
+    assert withdec["stocks"]["S3"]["decision"] == {"pct": 0.998, "rank": 1, "of": 10, "source": "xgb_rank"}
+    assert "separate from the XGB (54) column" in withdec["models"]["decision"]["label"]
+    stale = model_zoo.describe(run, {**decision, "info_cutoff": "2026-10-27"})       # another close: not mixed in
+    assert "decision" not in stale["models"]
     assert d["models"]["chronos2"]["coverage"] == 9 and d["models"]["chronos2"]["of"] == 10   # partial, shown as such
     with_ens = model_zoo.describe(_run(with_ensemble=True))
     assert with_ens["ranking_source"] == "ensemble" and with_ens["models"]["ensemble"]["lifecycle"] == "active_decision"

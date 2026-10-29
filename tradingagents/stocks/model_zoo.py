@@ -331,25 +331,40 @@ def output_key(name: str) -> str | None:
     return "zoo.forecast_log_excess" if MODELS.get(name, ("", ""))[1] == "return" else None
 
 
-def describe(run: dict) -> dict:
+def describe(run: dict, decision: dict | None = None) -> dict:
     """What a saved run covers, read from the run itself (so older runs are described too): each model's stock
-    count, its output, its lifecycle, and whether the learned ensemble really scored this run."""
+    count, its output, its lifecycle, and whether the learned ensemble really scored this run.
+
+    ``decision``: the latest daily decision. When it is for the same close, its ranking (what the Trade page and the
+    Screener's model rank use) is added to each stock as ``decision``. Without a trained ensemble that ranking is the
+    decision's own weekly XGBoost fit, a separate fit from the ``xgb_rank`` column here."""
     stocks = run.get("stocks") or {}
     n = len(stocks)
+    if decision and decision.get("info_cutoff") == run.get("info_cutoff"):
+        source = ((decision.get("model") or {}).get("ranker") or {}).get("name", "xgb_rank")
+        for t, s in (decision.get("scores") or {}).items():
+            if t in stocks and s.get("score_pct") is not None:
+                stocks[t] = {**stocks[t], "decision": {"pct": s["score_pct"], "rank": s.get("rank"), "of": s.get("of"),
+                                                       "source": source}}
+        run = {**run, "models": {"decision": {"label": "The daily decision's ranking: what the Trade page and the "
+                                                       "Screener's model rank use (" + ("the learned ensemble" if source == "ensemble"
+                                                       else "its own weekly XGBoost fit, separate from the XGB (54) column") + ")",
+                                              "kind": "rank"}, **(run.get("models") or {})}, "stocks": stocks}
     coverage = {k: sum(1 for m in stocks.values() if k in m) for k in run.get("models") or {}}
     ens = coverage.get("ensemble", 0)
     models = {}
     for k, meta in (run.get("models") or {}).items():
         section = MODELS.get(k, ("", "", "", "models"))[3]
-        lifecycle = ("active_decision" if k == "ensemble" and ens else "fallback_decision" if k == "xgb_rank" and not ens
+        lifecycle = ("active_decision" if k == "decision" or (k == "ensemble" and ens)
                      else "baseline" if section == "baselines" else "challenger")
         models[k] = {**meta, "coverage": coverage.get(k, 0), "of": n, "output": output_key(k), "lifecycle": lifecycle,
                      "failed": (run.get("notes") or {}).get(k)}
-    return {"models": models, "stocks_scored": n,
+    return {"models": models, "stocks_scored": n, "stocks": stocks,
             "ranking_source": ("ensemble" if ens else "xgb_rank"),
             "ranking_note": (f"the learned-weight ensemble scored {ens} of {n} stocks and orders the daily decision"
                              if ens else "the learned ensemble has no scores in this run, so the daily decision is "
-                             "ranked by the internal XGBoost ranker (fallback)")}
+                             "ranked by its own weekly XGBoost fit (fallback; the Decision column), not by the XGB (54) "
+                             "column, which is a separate fit of the same recipe")}
 
 
 def ensemble_bundle(cache_dir) -> dict | None:
