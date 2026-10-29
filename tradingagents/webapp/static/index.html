@@ -598,7 +598,7 @@ select option { background: var(--surface); color: var(--text); }
     </section>
 
     <section class="tab" id="settings">
-      <div class="page-head"><div><h2>Settings</h2><p>The money settings, your holdings, the agents' models, and the ETFs to forecast. Kept in portfolio.sqlite3; the ETF list in its file next to the app.</p></div></div>
+      <div class="page-head"><div><h2>Settings</h2><p>The money settings, the agents' models, and the ETFs to forecast (holdings and trades are on the Portfolio tab). Kept in portfolio.sqlite3; the ETF list in its file next to the app.</p></div></div>
       <div class="card" id="capitalCard">
         <h3>Money</h3>
         <p class="muted">The money set aside for buying stocks. The model sizes buys from what is left of it: the budget less what goes into stocks, plus what comes back from sales. Saving a new amount starts the count again from today. It moves no money.</p>
@@ -633,15 +633,6 @@ select option { background: var(--surface); color: var(--text); }
         <p class="small" id="keysMsg"></p>
       </div>
       <div class="grid">
-        <div class="card">
-          <h3>Holdings</h3>
-          <div class="table-wrap"><table class="editor" id="holdings"></table></div>
-          <div class="row"><div style="flex:1"><label for="cash">Settled cash (spendable today)</label><input type="number" id="cash" step="0.01" min="0"></div></div>
-          <div class="row" id="cashModeRow" hidden><div style="flex:1"><label for="cashMode">What is the cash change?</label>
-            <select id="cashMode"><option value="">Choose…</option><option value="flow">Money deposited into or withdrawn from the IRA (excluded from performance)</option><option value="correction">A correction: the books were wrong (an audited adjustment)</option></select></div></div>
-          <div class="row"><button class="ghost" id="addHolding">Add ticker</button><button id="saveHoldings">Save holdings</button></div>
-          <p class="small" id="holdingsMsg" role="status" aria-live="polite"></p>
-        </div>
         <div class="card" id="agentsCard" style="grid-column:1 / -1">
           <h3>Agent models</h3>
           <p class="muted">Which provider and model each agent runs on. Putting the two sides of each debate on different providers (bull vs bear, aggressive vs conservative) stops one model arguing with itself; a third provider can judge. Blank rows use the default. Every model needs a price (dollars per million tokens) so its cost stays within the AI budget; a model with no price is refused before any call is made.</p>
@@ -1753,7 +1744,7 @@ async function loadDecisions() {
   $("dcRun").disabled = j.running;
   if (j.running) setTimeout(loadDecisions, 3000);
   const c = d.capital, st = c.settings;
-  $("dcCapital").innerHTML = `<p class="muted small">Trading budget ${usd(st.trading_budget_usd || 0)}, available ${usd(c.budget.available || 0)} (settings v${st.version}); account value ${usd(c.value || 0)}.</p>`;
+  $("dcCapital").innerHTML = `<p class="muted small">Trading budget ${usd(st.trading_budget_usd || 0)}, available ${usd(c.budget.available || 0)} (settings v${st.version}).</p>`;
   const r = d.latest;
   if (!r) { $("dcHead").innerHTML = "<p class='muted'>No decision yet. Make one (fit models the first time).</p>"; $("dcLots").innerHTML = $("dcEntries").innerHTML = ""; }
   else {
@@ -1818,8 +1809,8 @@ async function loadCapital() {
   const st = c.settings, b = c.budget;
   $("capBudget").value = st.trading_budget_usd;
   $("capStatus").textContent = `settings version ${st.version}`;
-  $("capPlan").textContent = b.started ? `Set on ${b.started}: ${usd(b.set || 0)}; ${usd((b.traded || {}).spent || 0)} into stocks since, ${usd((b.traded || {}).returned || 0)} back; available ${usd(b.available || 0)}. Account value ${usd(c.value || 0)}.`
-    : `No trading budget set yet. Account value ${usd(c.value || 0)}.`;
+  $("capPlan").textContent = b.started ? `Set on ${b.started}: ${usd(b.set || 0)}; ${usd((b.traded || {}).spent || 0)} into stocks since, ${usd((b.traded || {}).returned || 0)} back; available ${usd(b.available || 0)}.`
+    : "No trading budget set yet.";
 }
 $("capSave").onclick = async () => {
   try { await api("/api/capital", {values: {trading_budget_usd: +$("capBudget").value}}); loadCapital(); loadTrade(); }
@@ -1827,61 +1818,11 @@ $("capSave").onclick = async () => {
 };
 
 // --- settings editors ---
-function editorRows(table, rows, cols) {
-  table.innerHTML = "<tr>" + cols.map(c => `<th>${c.label}</th>`).join("") + "<th></th></tr>" +
-    rows.map((r, i) => "<tr>" + cols.map(c => c.type === "select"
-      ? `<td><select data-k="${c.key}">${c.options.map(([v, l]) => `<option value="${v}" ${(r[c.key] || c.options[0][0]) === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>`
-      : `<td><input type="${c.type}" step="any" data-k="${c.key}" value="${esc(r[c.key] ?? "")}"></td>`).join("") +
-      `<td><button class="ghost" data-del="${i}" aria-label="Remove">✕</button></td></tr>`).join("");
-}
-function readRows(table) {
-  const rows = [];
-  table.querySelectorAll("tr").forEach((tr, n) => {
-    if (!n) return; const r = {};
-    tr.querySelectorAll("input").forEach(inp => r[inp.dataset.k] = inp.type === "number" ? (inp.value === "" ? null : +inp.value) : inp.value.trim().toUpperCase());
-    tr.querySelectorAll("select").forEach(sel => r[sel.dataset.k] = sel.value);
-    if (r.ticker) rows.push(r);
-  });
-  return rows;
-}
-const HOLD_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "quantity", label: "Shares", type: "number"}];
 function drawEditors() {
-  editorRows($("holdings"), state.portfolio.positions, HOLD_COLS);
-  $("cash").value = state.cash?.settled ?? 0;
-  $("cashMode").value = "";
-  $("cashModeRow").hidden = true;
   $("groups").innerHTML = Object.entries(state.groups).map(([key, label]) =>
     `<label class="check" style="margin:6px 0"><input type="checkbox" data-group="${key}" ${state.universe.groups.includes(key) ? "checked" : ""}> ${esc(label)}</label>`).join("");
   $("universe").value = state.universe.extra.join(", ");
 }
-document.addEventListener("click", e => {
-  const del = e.target.dataset?.del; if (del === undefined) return;
-  const table = e.target.closest("table");
-  if (table.id !== "holdings") return;
-  state.portfolio.positions = readRows(table); state.portfolio.positions.splice(+del, 1);
-  drawEditors();
-});
-$("addHolding").onclick = () => { state.portfolio.positions = readRows($("holdings")); state.portfolio.positions.push({ticker: "", quantity: 0}); drawEditors(); };
-// A changed cash figure must say what it is: money in or out of the IRA, or a correction of the books.
-$("cash").oninput = () => { $("cashModeRow").hidden = Math.abs((+$("cash").value || 0) - (state.cash?.settled ?? 0)) < 0.005; };
-let holdingsOp = null;
-$("saveHoldings").onclick = async () => {
-  const body = {positions: readRows($("holdings")).filter(r => r.quantity), cash: +$("cash").value || 0,
-                cash_mode: $("cashMode").value || null};
-  const key = JSON.stringify(body);
-  if (!holdingsOp || holdingsOp.key !== key) holdingsOp = {key, id: newOpId()};
-  $("holdingsMsg").textContent = "Saving…";
-  try {
-    const r = await api("/api/portfolio", {...body, op_id: holdingsOp.id});
-    holdingsOp = null;
-    state = await api("/api/state");       // show what the database holds, not what was sent
-    drawEditors(); loadTrade();
-    const c = r.cash_change;
-    $("holdingsMsg").innerHTML = `<span class="pos">✓ Saved.</span> Settled cash is now ${usd(r.saved.cash_settled)}` +
-      (c ? ` (${c.mode === "flow" ? (c.change > 0 ? "deposit" : "withdrawal") : "correction"} of ${usd(Math.abs(c.change))})` : "") +
-      `; ${r.adjustments.length} share adjustment${r.adjustments.length === 1 ? "" : "s"}.`;
-  } catch (e) { $("holdingsMsg").innerHTML = `<span class="neg">Not saved: ${esc(e.message)}</span>`; }
-};
 $("saveUniverse").onclick = async () => {
   const groups = [...document.querySelectorAll("[data-group]")].filter(c => c.checked).map(c => c.dataset.group);
   const extra = $("universe").value.split(/[\s,;]+/).filter(Boolean);
