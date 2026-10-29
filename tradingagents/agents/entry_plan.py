@@ -129,7 +129,8 @@ RISK_INSTRUCTION = ("Challenge the trader's entry plan too: its price or range a
 PM_INSTRUCTION = (
     "- **Entry plan**: approve the trader's entry plan, revise it, or reject it (then status wait or "
     "unavailable, with the reason); fill entry_plan with the final plan and entry_plan_review with "
-    "approved / revised / rejected. Same price rules as the trader: as traded, near the entry reference.")
+    "approved / revised / rejected. Same price rules as the trader: as traded, near the entry reference.\n"
+    "- **Exits**: price_target (sell, booking the profit) and stop_loss, the exit price; as prices.")
 
 
 # --- the account ---
@@ -178,10 +179,14 @@ def _day(text) -> date | None:
 
 
 def validate(plan: dict | None, action: str | None, ref: dict, account: dict, today: date | None = None,
-             stop_loss: float | None = None, price_target: float | None = None) -> dict:
+             stop_loss: float | None = None, price_target: float | None = None, sigma_h: float | None = None,
+             source: dict | None = None) -> dict:
     """Whether ``plan`` can be carried out in this account, and why not. ``action`` is the side it serves
     (the Trader's Buy / Hold / Sell or the Portfolio Manager's rating). Nothing is repaired: each problem
-    is a block (the plan cannot be used) or a warning (it can, with care)."""
+    is a block (the plan cannot be used) or a warning (it can, with care). An exit the agents did not give
+    comes from the internal model's barrier rule when ``sigma_h`` (the stock's volatility over the horizon)
+    is known: stop at E * exp(-sigma_h), sell target at E * exp(+sigma_h), for the entry E; ``levels.source``
+    says which level came from where."""
     from tradingagents.ledger.sessions import is_session, next_session, sessions_between
 
     today = today or date.today()
@@ -295,7 +300,15 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
         out["sizing"] = {"dollars": round(dollars, 2), "shares": round(dollars / used, 6), "price_used": used,
                          "available": round(account["available"], 2), "reserved": round(account["reserved"], 2),
                          "position_cap": round(cap, 2), "settings_version": (account.get("settings") or {}).get("version")}
-        levels = {"stop_loss": stop_loss, "price_target": price_target}
+        source = dict(source or {})
+        for k, v in (("stop_loss", stop_loss), ("price_target", price_target)):
+            source.setdefault(k, "agents" if v is not None else None)
+        if sigma_h and math.isfinite(sigma_h) and sigma_h > 0:
+            if stop_loss is None:
+                stop_loss, source["stop_loss"] = round(used * math.exp(-sigma_h), 2), "model"
+            if price_target is None:
+                price_target, source["price_target"] = round(used * math.exp(sigma_h), 2), "model"
+        levels = {"stop_loss": stop_loss, "price_target": price_target, "source": source}
         if stop_loss is not None and stop_loss >= used:
             warnings.append(f"stop-loss {stop_loss} is not below the entry {used}")
         if price_target is not None and price_target <= used:
@@ -314,10 +327,13 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
 # --- persistence ---
 
 def record(store, ticker: str, analysis_date: str, run_ref: str | None, source: str, ref: dict, account: dict,
-           trader: dict | None, final: dict | None, evidence: dict | None = None, today: date | None = None) -> dict:
+           trader: dict | None, final: dict | None, evidence: dict | None = None, today: date | None = None,
+           sigma_h: float | None = None) -> dict:
     """Validate and save one run's plans: the Trader's proposal and the Portfolio Manager's final plan,
     linked by the approval. ``trader``/``final``: ``{"action"|"rating", "plan", "review", "stop_loss",
-    "price_target"}`` (either may be None: a chat answer has no separate trader). Append-only."""
+    "price_target"}`` (either may be None: a chat answer has no separate trader). An exit the manager leaves
+    out is the trader's; one neither gives comes from the internal model (``sigma_h``, see ``validate``).
+    Append-only."""
     from tradingagents.ledger.db import now_utc, transaction
 
     rows, parent = [], None
@@ -326,7 +342,13 @@ def record(store, ticker: str, analysis_date: str, run_ref: str | None, source: 
             if part is None:
                 continue
             side = part.get("action") or part.get("rating")
-            check = validate(part.get("plan"), side, ref, account, today, part.get("stop_loss"), part.get("price_target"))
+            stop, target, came_from = part.get("stop_loss"), part.get("price_target"), {}
+            if stage == "portfolio_manager" and trader:
+                if stop is None and trader.get("stop_loss") is not None:
+                    stop, came_from["stop_loss"] = trader["stop_loss"], "trader"
+                if target is None and trader.get("price_target") is not None:
+                    target, came_from["price_target"] = trader["price_target"], "trader"
+            check = validate(part.get("plan"), side, ref, account, today, stop, target, sigma_h, came_from)
             review = part.get("review") or ("proposed" if stage == "trader" else None)
             pid = uuid.uuid4().hex[:16]
             plan = part.get("plan")

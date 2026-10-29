@@ -132,8 +132,9 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .cv-wrap .lbl { fill: var(--text); font-size: 11.5px; font-weight: 600; }
 .cv-tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border-strong);
   border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; color: var(--text); }
-.cv-key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12px; color: var(--muted); }
-.cv-key i { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--cv-value); }
+.cv-key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12.5px; color: var(--text); }
+.cv-key i { display: inline-block; width: 20px; height: 0; border-top: 4px solid var(--cv-value); border-radius: 2px; }
+#recCurveKey { display: flex; flex-wrap: wrap; row-gap: 4px; margin: 6px 0 2px; }
 .cv-key i.in { border-top: 2px dashed var(--cv-in); }
 .zoo-fit td { white-space: normal; }
 .zoo-fit th, #zooTable th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -196,8 +197,10 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .runners .rn-tk { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
 .runners .rn-ai { padding: 1px 7px; font-size: 11px; line-height: 1.4; }
 .runners .rn-agents { min-width: 0; }
-.runners .rn-ag { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.runners .rn-ag-body { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.runners .rn-ag { display: flex; align-items: center; justify-content: center; gap: 0; min-width: 0; }
+.runners .rn-ag-body { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.runners .rn-ag-body:empty { display: none; }
+.runners th.c, .runners td.c { text-align: center; }
 .runners .rn-ag .rn-ai { flex: 0 0 auto; }
 .runners .rn-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rn-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 5px;
@@ -684,6 +687,7 @@ details[open] > summary::after { content: "Hide"; }
             <div class="card-head"><h3>AI's pick</h3>
               <button class="ghost small-btn" id="runnersAll" hidden title="The AI's analysts screen every ranked stock from a fact sheet and rank the ten they would buy; the full TradingAgents team then analyses their top five, in that order (once a day)">Ask the AI to pick</button></div>
             <div id="aiPickBox"></div>
+            <button class="ghost small-btn" id="aiRefill" hidden style="margin-top:8px" title="Keep the picks the team did not rate AVOID; the AI picks new stocks itself (none analysed in the last five trading days) and the team analyses them until the AVOIDs are replaced">Replace the AVOIDs</button>
           </div>
           <div class="card agent-room">
             <div class="card-head"><h3>The Trading Floor</h3><span class="muted small">the AI agents at work, live</span></div>
@@ -884,6 +888,7 @@ details[open] > summary::after { content: "Hide"; }
     <section class="tab" id="record">
       <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made and every rating the AI agents gave, followed for 20 trading days after the day they could first be bought. Judged only once the 20 days are over; until then the return so far is shown.</p></div>
         <button class="ghost" id="recRefresh">Refresh</button></div>
+      <p class="small" id="recPaper" style="margin:0 0 8px"></p>
       <div class="kpis" id="recKpis"></div>
       <div class="card">
         <h3>The model's picks</h3>
@@ -1156,13 +1161,6 @@ async function loadTrade() {
     const experimental = t.mode !== "validated";
     // The trading budget split across the 1st pick and the runners-up (Settings: the trading budget).
     const alloc = t.allocation || {weights: {}, dollars: {}};
-    const weightCell = (tkr, long) => {
-      const w = alloc.weights[tkr];
-      if (w == null) return "–";
-      return `<span class="wt"><span class="wt-bar"><i style="width:${Math.round(w * 100)}%"></i></span><b>${Math.round(w * 100)}</b>` +
-        `${alloc.budget ? ` <span class="muted">${usd(alloc.dollars[tkr])}</span>` : ""}</span>` +
-        (long ? `<div class="muted small">of the trading budget${alloc.budget ? ` (${usd(alloc.budget)})` : ""}, split across the 1st pick and runners-up by risk and expected return; untested</div>` : "");
-    };
     const sz = (x && x.size) || {};
     // The tested policy buys at the next session's close, whatever it is: that is the entry. The last close is a
     // dated reference for sizing and for the illustrative dollar levels; stop and target follow the actual fill.
@@ -1182,7 +1180,7 @@ async function loadTrade() {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
       return v == null ? "<td>–</td>" : `<td class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
     };
-    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:10%"><col style="width:16%"><col style="width:12%"><col style="width:10%"><col style="width:12%"><col style="width:12%"><col style="width:16%"><col style="width:12%"></colgroup>` +
+    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:8%"><col style="width:16%"><col style="width:13%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:15%"><col style="width:10%"></colgroup>` +
       `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th title="Sell target">Sell</th><th title="Stop loss">Stop</th><th>Deadline</th><th title="The AI agents' call on today's data; AI: not run today (click to run)">AI</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td>${actBadge(s.action)}${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
         <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td title="${esc(s.deadline || "")}">${esc(String(s.deadline || "–").replace(/^20(\d\d-)/, "$1"))}</td>` +
@@ -1195,12 +1193,15 @@ async function loadTrade() {
     const allPicks = [...(x ? [x] : []), ...t.runners_up];
     $("runnersTable").innerHTML = allPicks.length
       ? `<colgroup><col style="width:11%"><col style="width:15%"><col style="width:15%"><col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:19%"></colgroup>` +
-        `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget, out of 100">Weight</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
-        `<th class="num" title="Sell target: sell when a close reaches this far above the fill">Sell</th><th class="num" title="Stop loss: sell when a close falls this far below the fill">Stop</th><th class="l"><button type="button" class="th-run" id="aiAllPicks" title="Run the AI agents on every pick, one after another (a stock already analysed today is not run again)">Run AI</button></th></tr>` +
+        `<tr><th class="l">Ticker</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
+        `<th class="num" title="Buy at: the patient limit at the model's median dip when it has one (untested), else about the LTP (the tested rule buys at the next close, whatever it is)">Buy at</th>` +
+        `<th class="num" title="Sell target price: from the LTP; the real target is this far above your fill">Sell</th><th class="num" title="Stop loss price: from the LTP; the real stop is this far below your fill">Stop</th><th class="c"><button type="button" class="th-run" id="aiAllPicks" title="Run the AI agents on every pick, one after another (a stock already analysed today is not run again)">Run AI</button></th></tr>` +
         allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l"><b>${tk(x.ticker)}</b></td>` +
-          `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
-          `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
-          `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
+          `<td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
+          `<td class="num"><b>${x.patient && x.patient.price != null ? usd(x.patient.price) : x.last_close != null ? "≈" + usd(x.last_close) : "–"}</b></td>` +
+          `<td class="num pos" title="${spct(x.target_pct, 1)}">${x.last_close != null && x.target_pct != null ? usd(x.last_close * (1 + x.target_pct)) : "–"}</td>` +
+          `<td class="num neg" title="${spct(x.stop_pct, 1)}">${x.last_close != null && x.stop_pct != null ? usd(x.last_close * (1 + x.stop_pct)) : "–"}</td>` +
+          `<td class="c rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = false;
     const asked = (t.ai_pick || {}).today;       // once a day: the button rests until tomorrow
@@ -1411,8 +1412,10 @@ async function aiPool() {
 async function loadAiPicks() {
   const scr = lastTrade && lastTrade.ai_screen;
   if (!scr || !(scr.picks || []).length) { $("aiPickBox").innerHTML = ""; return; }
+  const chosen = ((lastTrade.ai_pick || {}).tickers || []);
+  const picks = chosen.length ? chosen.map(t => scr.picks.find(p => p.ticker === t)).filter(Boolean) : scr.picks.slice(0, 5);
   const seen = [];
-  for (const p of scr.picks.slice(0, 5)) {
+  for (const p of picks) {
     try { seen.push({ticker: p.ticker, pick: p, r: await apiItem("/api/agent-report?ticker=" + encodeURIComponent(p.ticker))}); }
     catch (e) { seen.push({ticker: p.ticker, pick: p, r: {available: false}}); }
   }
@@ -1444,11 +1447,18 @@ async function renderAiPick(seen, scr) {
       `<td class="num">${w != null && a.budget ? usd(w * a.budget) : ""}</td>` +
       `<td class="num"><b>${decided ? price : ""}</b></td><td class="num pos">${decided ? num(lv.price_target) : ""}</td><td class="num neg">${decided ? num(lv.stop_loss) : ""}</td></tr>`;
   });
+  const avoids = seen.filter(x => x.r.available && aiWord(x.r.agent_rating, false)[0] === "AVOID").length;
+  $("aiRefill").hidden = !avoids;
+  $("aiRefill").textContent = `Replace the ${avoids} AVOID${avoids === 1 ? "" : "s"}: the AI picks new stocks`;
+  $("aiRefill").onclick = async () => {
+    try { await api("/api/ai-decisions", {ai_refill: true, analysts: ["market", "social", "news", "fundamentals"], date: lastTrade.data_to}); loadAgentReport(); }
+    catch (e) { showError(e.message); }
+  };
   $("aiPickBox").innerHTML = `<div class="table-wrap"><table class="compact ai-picks"><colgroup><col style="width:6%"><col style="width:12%">` +
     `<col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:13%"></colgroup>` +
     `<tr><th class="num" title="The AI's own rank">#</th><th class="l">Ticker</th><th class="l" title="The full team's decision (click for the report)">AI</th>` +
     `<th class="num" title="Last traded price: the latest close">LTP</th><th class="num" title="Dollars from the trading budget (only for a BUY)">Amount</th>` +
-    `<th class="num" title="The agents' entry price (or range)">Buy at</th><th class="num" title="The agents' sell target">Sell</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
+    `<th class="num" title="The agents' entry price (or range)">Buy at</th><th class="num" title="Target price: where the profit is booked (the agents', else the internal model's)">Target</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
     rows.join("") + `</table></div>` +
     `<p class="muted small" style="margin:6px 0 0">The AI ranked ${scr.considered} stocks from their facts (${esc(String(scr.model || "").split("/").pop())}); ` +
     `the full team analysed its top ${seen.length}. Buy at, Sell and Stop are the agents' own plan; Amount only for a BUY. Hover a ticker for its reasons.</p>`;
@@ -1667,7 +1677,7 @@ function drawCurve(one) {
   }
   const dates = [...new Set(series.flatMap(s => s.pts.map(p => p.date)))].sort(), n = dates.length;
   const at = Object.fromEntries(series.map(s => [s.k, Object.fromEntries(s.pts.map(p => [p.date, p]))]));
-  const W = 640, H = 230, L = 50, R = 150, T = 10, B = 24;
+  const W = 640, H = 230, L = 50, R = 170, T = 10, B = 24;
   const vals = series.flatMap(s => s.pts.map(p => p.per)).concat([1]);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const span = Math.max(hi - lo, 0.02); lo -= span * 0.12; hi += span * 0.12;
@@ -1689,7 +1699,8 @@ function drawCurve(one) {
     `<line x1="${L}" x2="${W - R}" y1="${y(1).toFixed(1)}" y2="${y(1).toFixed(1)}" stroke="var(--cv-in)" stroke-width="1.5" stroke-dasharray="5 4"/>` +
     series.map(s => s.pts.length > 1 ? `<path d="${path(s)}" fill="none" stroke="var(${s.color})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` : dot(s, s.pts[0])).join("") +
     ends.map(e => `<line x1="${x(ix[e.last.date]).toFixed(1)}" x2="${W - R + 4}" y1="${y(e.last.per).toFixed(1)}" y2="${e.y.toFixed(1)}" stroke="var(--border-strong)" stroke-width="1"/>` +
-      `<text class="lbl" x="${W - R + 6}" y="${(e.y + 4).toFixed(1)}">${esc(e.s.label)} ${usd(e.last.per)}</text>`).join("") +
+      `<rect x="${W - R + 6}" y="${(e.y - 3).toFixed(1)}" width="10" height="6" rx="2" fill="var(${e.s.color})"/>` +
+      `<text class="lbl" x="${W - R + 20}" y="${(e.y + 4).toFixed(1)}">${esc(e.s.label)} ${usd(e.last.per)}</text>`).join("") +
     `<g id="cvHover" visibility="hidden"><line id="cvX" y1="${T}" y2="${H - B}" stroke="var(--border-strong)"/><g id="cvDots"></g></g>` +
     `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="cvHit" tabindex="0" aria-label="Move through the days with the arrow keys"/></svg><div class="cv-tip" id="cvTip" hidden></div>`;
   const svg = $("recCurve").querySelector("svg"), tip = $("cvTip");
@@ -1753,6 +1764,8 @@ async function loadTrackRecord() {
     dollarLine("Weighted split ($1 a day across the picks)", one.weighted) +
     dollarLine("Policy model's picks", one.policy) + dollarLine("AI agents' Buy calls", one.agents_buys);
   drawCurve(one);
+  $("recPaper").innerHTML = d.paper_start ? `<b>Paper trade since ${esc(d.paper_start)}</b>: every group counts from the same data date ` +
+    `(the first day all of them were making calls), $1 on each recommendation from the close after it. No real orders.` : "";
   $("recRule").textContent = `${d.outcome ? d.outcome[0].toUpperCase() + d.outcome.slice(1) + ". " : ""}Beat cost: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade). Overlapping holds are not independent: the sample is the number of data dates, not of rows.`;
   const verdict = r => r.verdict === "correct" ? `<span class="pos"><b>✓ ${r.rating ? "right direction" : "beat cost"}</b></span>` : r.verdict === "wrong" ? `<span class="neg"><b>✗ ${r.rating ? "wrong direction" : "below cost"}</b></span>`
     : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;

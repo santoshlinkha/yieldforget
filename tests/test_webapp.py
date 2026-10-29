@@ -604,6 +604,28 @@ def test_non_agent_ai_work_uses_its_own_gemini_key_and_agents_do_not(tmp_path, m
     assert "GEMINI_CONTEXT_API_KEY" in keys.known()                           # settable from Settings
 
 
+def test_replacing_the_avoids_keeps_the_rest_and_the_ai_picks_unanalysed_stocks(tmp_path, monkeypatch):
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    today = srv._today()
+    app.store.set("global", "ai_screen_state", {"date": today, "picks": [{"ticker": t, "rank": i} for i, t in
+                                                                         enumerate(["AAA", "BBB", "CCC"], 1)]})
+    app.store.set("global", "ai_pick_state", {"date": today, "tickers": ["AAA", "BBB", "CCC"]})
+    ratings = {"AAA": "Hold", "BBB": "Underweight", "CCC": "Sell"}
+    monkeypatch.setattr(app, "_agents_ran_today", lambda t: {"rating": ratings[t]} if t in ratings else None)
+    monkeypatch.setattr(app, "_analysed_since", lambda n=5: {"OLD"})
+    seen = {}
+    monkeypatch.setattr(app, "_ai_screen_run", lambda job, day, g, exclude=frozenset(): (
+        seen.setdefault("exclude", set(exclude)),
+        {"picks": [{"ticker": t, "rank": i} for i, t in enumerate(["DDD", "EEE", "FFF"], 1)], "how": "x"})[1])
+    new = {"DDD": "Sell", "EEE": "Buy", "FFF": "Overweight"}
+    monkeypatch.setattr(app, "_run_agents", lambda job, t, day, analysts, g: {"rating": new[t]})
+    out = app._ai_refill(srv.Job(), "2026-10-28", ["market"], app.store.settings("global"))
+    assert seen["exclude"] == {"OLD", "AAA", "BBB", "CCC"}                   # nothing analysed recently comes back
+    assert out["final"] == ["AAA", "EEE", "FFF"] and out["tried"] == {"DDD": "Sell", "EEE": "Buy", "FFF": "Overweight"}
+    assert app.store.get("global", "ai_pick_state")["tickers"] == ["AAA", "EEE", "FFF"]
+    assert [p["ticker"] for p in app.store.get("global", "ai_screen_state")["picks"]] == ["AAA", "DDD", "EEE", "FFF"]
+
+
 def test_ask_the_ai_to_pick_runs_once_a_calendar_day(tmp_path, monkeypatch):
     srv, app = _agent_app(tmp_path, monkeypatch)
     monkeypatch.setattr(app, "_run_agents", lambda job, t, day, analysts, g: {"rating": "Hold", "how": "agents"})

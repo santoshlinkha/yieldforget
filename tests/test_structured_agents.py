@@ -66,7 +66,7 @@ class TestRenderTraderProposal:
         tell it from a level the trader declined to set."""
         p = TraderProposal(action=TraderAction.SELL, reasoning="Guidance cut.")
         md = render_trader_proposal(p)
-        for field in ("Entry Price", "Stop Loss", "Position Sizing"):
+        for field in ("Entry Price", "Stop Loss", "Sell Target", "Position Sizing"):
             assert f"**{field}**: not provided" in md
         assert "FINAL TRANSACTION PROPOSAL: **SELL**" in md
 
@@ -542,6 +542,6 @@ def test_the_trader_names_the_levels_it_did_not_give():
     from tradingagents.agents.schemas import TraderAction, TraderProposal, render_trader_proposal
 
     rendered = render_trader_proposal(TraderProposal(action=TraderAction.HOLD, reasoning="r"))
-    for field in ("Entry Price", "Stop Loss", "Position Sizing"):
+    for field in ("Entry Price", "Stop Loss", "Sell Target", "Position Sizing"):
         assert field in rendered
-    assert rendered.lower().count("not provided") == 3
+    assert rendered.lower().count("not provided") == 4

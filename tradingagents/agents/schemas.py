@@ -241,13 +241,20 @@ class TraderProposal(BaseModel):
             "distance to the price level it implies, or omit it."
         ),
     )
+    price_target: float | None = Field(
+        default=None,
+        description=(
+            "Sell target for booking the profit, as an absolute price in the instrument's quote currency "
+            "(e.g. 205.0), above the entry; never a percentage. Omit it if you cannot state a level."
+        ),
+    )
     position_sizing: str | None = Field(
         default=None,
         description="Optional sizing guidance, e.g. '5% of portfolio'.",
     )
     entry_plan: EntryPlan | None = None
 
-    @field_validator("entry_price", "stop_loss", mode="before")
+    @field_validator("entry_price", "stop_loss", "price_target", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -269,6 +276,7 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
     # to give from one the schema never asked for.
     for label, value in (("Entry Price", proposal.entry_price),
                          ("Stop Loss", proposal.stop_loss),
+                         ("Sell Target", proposal.price_target),
                          ("Position Sizing", proposal.position_sizing)):
         parts.extend(["", f"**{label}**: {value if value is not None and value != '' else 'not provided'}"])
     if proposal.entry_plan is not None:
@@ -319,7 +327,13 @@ class PortfolioDecision(BaseModel):
     )
     price_target: float | None = Field(
         default=None,
-        description="Optional target price in the instrument's quote currency.",
+        description=("The sell target where the profit is booked, as an absolute price in the instrument's quote "
+                     "currency, above the entry. Omit it if you cannot state a level."),
+    )
+    stop_loss: float | None = Field(
+        default=None,
+        description=("The stop-loss exit, as an absolute price in the instrument's quote currency, below the entry; "
+                     "never a percentage. Omit it if you cannot state a level."),
     )
     time_horizon: str | None = Field(
         default=None,
@@ -328,7 +342,7 @@ class PortfolioDecision(BaseModel):
     entry_plan: EntryPlan | None = None
     entry_plan_review: EntryPlanReview | None = None
 
-    @field_validator("price_target", mode="before")
+    @field_validator("price_target", "stop_loss", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -353,6 +367,7 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     # so a reader cannot tell "no target" from "target not reported".
     target = decision.price_target if decision.price_target is not None else "not provided"
     parts.extend(["", f"**Price Target**: {target}"])
+    parts.extend(["", f"**Stop Loss**: {decision.stop_loss if decision.stop_loss is not None else 'not provided'}"])
     parts.extend(["", f"**Time Horizon**: {decision.time_horizon or 'not provided'}"])
     if decision.entry_plan is not None or decision.entry_plan_review is not None:
         review = decision.entry_plan_review.value if decision.entry_plan_review else "not stated"

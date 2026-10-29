@@ -1590,10 +1590,31 @@ class App:
             ref = ref if ref and ref.get("session") else EP.reference_quote(ticker, day, self.cache_dir)
             account = EP.account_view(self.store, ticker, _today(), self.cache_dir)
             return EP.record(self.store, ticker, day, str(folder), source, ref, account, trader or None,
-                             final or None, evidence)
+                             final or None, evidence, sigma_h=self._horizon_sigma(ticker, day))
         except Exception as exc:
             logger.warning("entry plans for %s on %s not recorded: %s", ticker, day, exc)
             return {"error": str(exc)[:200]}
+
+    def _horizon_sigma(self, ticker: str, day: str, horizon: int = 20) -> float | None:
+        """The stock's volatility over the ``horizon`` sessions, as the internal model's exits use it: the saved
+        forecast's sigma_h, else the last year's daily log-return volatility (to ``day``) times sqrt(horizon)."""
+        import numpy as np
+        import pandas as pd
+
+        from tradingagents.research.prices import bars
+        from tradingagents.stocks import signals
+
+        try:
+            s = (signals.latest(self.store.con, horizon).get(ticker.upper()) or {}).get("forecast") or {}
+            if s.get("sigma_h"):
+                return float(s["sigma_h"])
+            close = bars([ticker], self.cache_dir)["Close"][ticker.upper()].dropna()
+            close = close[close.index <= pd.Timestamp(day)].iloc[-253:]
+            r = np.log(close).diff().dropna()
+            return float(r.std() * np.sqrt(horizon)) if len(r) >= 60 else None
+        except Exception as exc:   # no fallback exits then: the levels say "not given"
+            logger.info("no horizon volatility for %s: %s", ticker, exc)
+            return None
 
     def entry_plans(self, ticker: str) -> dict:
         """Every recorded entry plan for a ticker, by run: current, superseded or expired."""
@@ -1612,7 +1633,7 @@ class App:
         import time as _time
 
         import pandas as pd
-        import yfinance as yf
+        from tradingagents.dataflows.vendors.yahoo.history import intraday_close
 
         symbol = symbol.strip().upper()
         if span not in ("1d", "5d") or not re.fullmatch(r"[A-Z0-9.\-^]{1,12}", symbol):
@@ -1622,7 +1643,7 @@ class App:
         if hit and _time.time() - hit[0] < 300:
             return hit[1]
         interval = "5m" if span == "1d" else "30m"
-        frames = {t: yf.Ticker(t).history(period=span, interval=interval)["Close"].dropna() for t in (symbol, "SPY")}
+        frames = {t: intraday_close(t, span, interval) for t in (symbol, "SPY")}
         close = frames[symbol]
         if close.empty:
             raise ValueError("Yahoo has no intraday prices for it now")
@@ -1661,7 +1682,8 @@ class App:
     def entry_alerts(self) -> dict:
         """The watched entry plans against the latest close. The price part of an entry condition is checkable: a range
         is met when the close is inside it, a limit when the close is at or below it, a market entry at once. The
-        agents' free-text trigger is shown, not checked. Closes are daily, so this is checked after each close."""
+        agents' free-text trigger is shown, not checked. Closes are daily, so this is checked after each close.
+        Only stocks you follow are watched: your tracked tickers, what you hold, and any named in entry_alerts."""
         from tradingagents.agents.entry_plan import plans_for
 
         # Every stock with a recent plan; only a current, unexpired buy plan (Buy or Overweight) is watched.
@@ -1671,8 +1693,16 @@ class App:
                 ((date.today() - timedelta(days=30)).isoformat(),))]
         except Exception:   # an older database without the table
             recent = []
+        from tradingagents.stocks.data import parse_tickers
+
+        try:
+            held = {t.upper() for t, q in self.store.ledger.state("combined", _today()).positions.items() if q}
+        except Exception:   # no ledger yet
+            held = set()
+        named = [str(x).upper() for x in (self.store.get("global", "entry_alerts") or [])]
+        mine = set(parse_tickers(" ".join(self.store.get("global", "stock_watchlist") or []))) | held | set(named)
         current = {}
-        for t in dict.fromkeys([*recent, *[str(x).upper() for x in (self.store.get("global", "entry_alerts") or [])]]):
+        for t in [t for t in dict.fromkeys([*recent, *named]) if t in mine]:
             run = next((r for r in plans_for(self.store.con, t) if r.get("current")), None)   # {final, trader, current}
             row = (run or {}).get("final") or (run or {}).get("trader")
             if row and not row.get("expired") and str(row.get("action") or "").lower() in ("buy", "overweight"):
@@ -1698,7 +1728,7 @@ class App:
                         "entry_price": px, "range": [lo, hi] if lo is not None else None,
                         "analysis_date": (run or {}).get("analysis_date"), "expires": plan.get("expires_at"),
                         "has_plan": bool(plan)})
-        return {"watching": watched, "alerts": out, "checked": _today()}
+        return {"watching": watched, "alerts": out, "checked": _today(), "scope": "tracked tickers and holdings"}
 
     def _write_decision(self, ticker: str, day: str, folder: Path, result: dict, cfg: dict | None,
                         models: str | None = None) -> dict:
@@ -1836,13 +1866,14 @@ class App:
         g = self.store.settings("global")
         tickers = [str(t).strip().upper() for t in body.get("tickers") or [] if str(t).strip()]
         by_ai = bool(body.get("ai_screen"))      # the AI screens the market and names the tickers itself
-        if not tickers and not by_ai:
+        refill = bool(body.get("ai_refill"))     # replace the AI's picks the team rated AVOID with the next in its ranking
+        if not tickers and not by_ai and not refill:
             raise ValueError("pick at least one ticker")
         if len(tickers) > 20:
             raise ValueError("at most 20 tickers per run")
         day = self._check_day(str(body.get("date") or self._last_session()))
         analysts = self._analysts(body, g)
-        if body.get("ai_pick"):      # "Ask the AI to pick": once a calendar day, unless some of it failed
+        if body.get("ai_pick") and not refill:      # "Ask the AI to pick": once a calendar day, unless some of it failed
             asked = g.get("ai_pick_state") or {}
             if asked.get("date") == _today() and asked.get("tickers") and \
                     all(self._agents_ran_today(t) for t in asked["tickers"]):
@@ -1851,6 +1882,8 @@ class App:
 
         def work(job):
             done, failed = {}, {}
+            if refill:
+                return self._ai_refill(job, day, analysts, g)
             if by_ai:
                 tickers[:] = self._ai_screen(job, day, g)
             for i, t in enumerate(tickers, 1):
@@ -1880,10 +1913,33 @@ class App:
 
     def _ai_screen(self, job, day: str, g: dict) -> list[str]:
         """The AI's own first screen of the Screener's ranked stocks, saved; returns its top ``AI_RUN`` to analyse."""
+        out = self._ai_screen_run(job, day, g)
+        tickers = [p["ticker"] for p in out["picks"][:self.AI_RUN]]
+        with self.lock:
+            self.store.set("global", "ai_screen_state", {**out, "date": _today()})
+            self.store.set("global", "ai_pick_state", {"date": _today(), "tickers": tickers,
+                                                      "asked_at": datetime.now().isoformat(timespec="minutes")})
+        return tickers
+
+    def _analysed_since(self, sessions: int = 5) -> set[str]:
+        """The stocks the agents analysed successfully in the last ``sessions`` trading days (weekdays)."""
+        import pandas as pd
+
+        since = (pd.Timestamp(date.today()) - pd.offsets.BDay(sessions)).strftime("%Y-%m-%d")
+        try:
+            return {r[0].upper() for r in self.store.con.execute(
+                "SELECT DISTINCT ticker FROM agent_runs WHERE status = 'ok' AND finished_at >= ?", (since,))}
+        except Exception:   # an older database without the table
+            return set()
+
+    def _ai_screen_run(self, job, day: str, g: dict, exclude: set[str] = frozenset()) -> dict:
+        """The AI ranks the Screener's ranked stocks (less ``exclude``) from their facts, with the first model that
+        is not paused; not saved."""
         from tradingagents.research.prices import bars
         from tradingagents.stocks import ai_screen
 
-        rows = [r for r in ((self.screen_state()["latest"] or {}).get("rows") or []) if r.get("rank")]
+        rows = [r for r in ((self.screen_state()["latest"] or {}).get("rows") or [])
+                if r.get("rank") and r["ticker"].upper() not in exclude]
         if not rows:
             raise ValueError("the Screener has no ranked stocks yet: build it first")
         job.progress, job.fraction = f"AI screen: the analysts rank {len(rows)} stocks from their fact sheet", 0.02
@@ -1911,13 +1967,63 @@ class App:
                     cooling[held[0]] = {"until": held[1].isoformat(), "why": held[2]}
         if out is None:
             raise ValueError("No AI model could run the screen: " + ("; ".join(errors) or "every model is paused"))
-        tickers = [p["ticker"] for p in out["picks"][:self.AI_RUN]]
         job.log.append(f"AI screen ({out['how']}): {', '.join(p['ticker'] for p in out['picks'])}")
+        return out
+
+    AVOID = ("underweight", "sell")
+
+    def _ai_refill(self, job, day: str, analysts: list[str], g: dict) -> dict:
+        """Keep the AI's picks the team did not rate AVOID; for the others the AI screens again, leaving out every
+        stock the agents analysed in the last five trading days, and the team analyses its new ranking in order until
+        there are as many as before (or the ranking runs out). The daily limit applies."""
+        from tradingagents.ledger.ai_gateway import AIBlocked
+
+        scr = self.store.get("global", "ai_screen_state") or {}
+        asked = self.store.get("global", "ai_pick_state") or {}
+        if scr.get("date") != _today() or not asked.get("tickers"):
+            raise ValueError("ask the AI to pick first: there is no AI screen from today to continue")
+        current = list(asked["tickers"])
+        ratings = {t: str((self._agents_ran_today(t) or {"rating": ""})["rating"] or "").lower() for t in current}
+        keep = [t for t in current if ratings[t] and ratings[t] not in self.AVOID]
+        dropped = [t for t in current if t not in keep]
+        target = len(current)
+        job.log.append(f"keeping {', '.join(keep) or 'none'}; replacing {', '.join(dropped) or 'none'}")
+        if len(keep) >= target:
+            return {"ticker": None, "kept": keep, "tried": {}, "final": current, "date": day}
+        skip = self._analysed_since(5) | set(current)
+        job.log.append(f"the AI screens again without the {len(skip)} stocks analysed in the last five trading days")
+        fresh = self._ai_screen_run(job, day, g, exclude=skip)
+        candidates = [p["ticker"] for p in fresh["picks"]]
+        # The panel reads its rows from the screen: the kept picks first, then the new ranking, numbered in that order.
+        old = {p["ticker"]: p for p in scr.get("picks") or []}
+        merged = [old[t] for t in keep if t in old] + fresh["picks"]
         with self.lock:
-            self.store.set("global", "ai_screen_state", {**out, "date": _today()})
-            self.store.set("global", "ai_pick_state", {"date": _today(), "tickers": tickers,
-                                                      "asked_at": datetime.now().isoformat(timespec="minutes")})
-        return tickers
+            self.store.set("global", "ai_screen_state", {**scr, "picks": [{**p, "rank": i} for i, p in enumerate(merged, 1)],
+                                                         "refill": {"excluded": sorted(skip), "how": fresh.get("how"),
+                                                                    "model": fresh.get("model")}})
+        tried = {}
+        for i, t in enumerate(candidates, 1):
+            if len(keep) >= target:
+                break
+            job.log.append(f"{i}/{len(candidates)} {t}: started")
+            try:
+                out = self._run_agents(job, t, day, analysts, g)
+            except AIBlocked as exc:
+                job.log.append(f"{t}: stopped: {exc}")
+                break
+            except Exception as exc:
+                job.log.append(f"{t}: failed: {str(exc)[:200]}")
+                continue
+            tried[t] = out["rating"]
+            job.log.append(f"{t}: {out['rating']}")
+            if str(out["rating"]).lower() not in self.AVOID:
+                keep.append(t)
+        # Fewer than before when the ranking ran out: the AVOIDs it could not replace stay, at the end.
+        final = keep + dropped[: max(0, target - len(keep))]
+        with self.lock:
+            self.store.set("global", "ai_pick_state", {**asked, "tickers": final, "refilled": tried,
+                                                      "refilled_at": datetime.now().isoformat(timespec="minutes")})
+        return {"ticker": None, "kept": keep, "tried": tried, "final": final, "date": day}
 
     def request_log(self, ticker: str, day: str, run: str | None = None) -> dict:
         """Every model request of a saved agent run and its reply (read from the run's folder); ``run`` names an
@@ -2558,7 +2664,8 @@ def make_handler(app: App):
                     self._json(_finite(app.zoo_view(query.get("ticker"))))
                 elif url.path == "/api/track-record":
                     from tradingagents.stocks import track_record
-                    self._json(_finite(track_record.build(app.store.con, app.cache_dir, config=app.config)))
+                    self._json(_finite(track_record.build(app.store.con, app.cache_dir, config=app.config,
+                                                          start=app.store.get("global", "track_record_start"))))
                 elif url.path == "/api/agent-report":
                     self._json(app.latest_agent_report(query.get("ticker", "")))
                 elif url.path == "/report":

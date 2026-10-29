@@ -66,6 +66,11 @@ def _ticker(symbol: str):
     return yf.Ticker(normalize_symbol(symbol))
 
 
+def intraday_close(symbol: str, period: str, interval: str) -> pd.Series:
+    """Intraday closes from Yahoo (display only; not stored)."""
+    return _ticker(symbol).history(period=period, interval=interval)["Close"].dropna()
+
+
 def upgrades(symbol: str, cache_dir=None) -> pd.DataFrame:
     """Dated analyst actions, oldest first, indexed by their time (no time zone)."""
     from tradingagents.dataflows.vendors.yahoo.common import yf_retry

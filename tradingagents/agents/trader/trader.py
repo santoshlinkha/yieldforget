@@ -54,7 +54,8 @@ def create_trader(llm):
                     # Entry/stop are numeric price fields. Asking for concrete
                     # levels invites a percentage ("15%"), which is not a price
                     # and fails the structured parse (#1288).
-                    + "State entry price and stop-loss as absolute price levels in the "
+                    + "State entry price, the sell target (where the profit is booked) and the stop-loss "
+                    "exit as absolute price levels in the "
                     "instrument's quote currency (for example 189.5), never a percentage "
                     "or a range; convert a percentage distance to the price level it "
                     "implies, or omit the field if you cannot state a number. "
@@ -80,7 +81,8 @@ def create_trader(llm):
                     "recommendation of Overweight is a Buy and Underweight is a Sell, "
                     "sized by how strong the case is; conflict alone is not a Hold.\n"
                     "- **Reasoning**: why, against the plan and the price structure\n"
-                    "- **Entry Price**, **Stop Loss**, **Position Sizing**: when you can state them"
+                    "- **Entry Price**, **Sell Target** (profit booking), **Stop Loss** (exit), "
+                    "**Position Sizing**: when you can state them"
                 ),
             },
         ]
@@ -89,7 +91,7 @@ def create_trader(llm):
         proposal = invoke_structured(structured_llm, messages, "Trader")
         trader_plan = render_trader_proposal(proposal) if proposal is not None else llm.invoke(messages).content
         entry = ({"action": proposal.action.value, "stop_loss": proposal.stop_loss,
-                  "entry_price": proposal.entry_price,
+                  "entry_price": proposal.entry_price, "price_target": proposal.price_target,
                   "plan": proposal.entry_plan.model_dump(mode="json") if proposal.entry_plan else None}
                  if proposal is not None else {})
 

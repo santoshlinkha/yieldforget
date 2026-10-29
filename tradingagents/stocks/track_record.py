@@ -195,7 +195,18 @@ def _day_weights(picks: list[dict], close: pd.DataFrame) -> dict[str, float]:
     return out
 
 
-def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | None = None) -> dict:
+def paper_start(groups: list[list[dict]], start: str | None = None) -> str | None:
+    """A paper trade: every group counts from the same data date, ``start`` when given, else the latest of the
+    groups' first recommendations (the first day all of them were making calls), so none is compared over days
+    the others did not trade."""
+    if start:
+        return start
+    firsts = [min(r["data_to"] for r in g) for g in groups if g]
+    return max(firsts) if firsts else None
+
+
+def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | None = None,
+          start: str | None = None) -> dict:
     from tradingagents.research.prices import bars
 
     gone = hidden(con)
@@ -212,6 +223,9 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
                 row["key"] = f"agent|{row['data_to']}|{row['ticker']}|{row['rating']}"
                 if row["key"] not in gone:
                     agents.append(row)
+    since = paper_start([picks, policy, agents], start)
+    if since:
+        picks, policy, agents = ([r for r in g if r["data_to"] >= since] for g in (picks, policy, agents))
     tickers = sorted({p["ticker"] for p in picks + policy} | {a["ticker"] for a in agents} | {"SPY"})
     frames = bars(tickers, cache_dir) if len(tickers) > 1 else {"Close": pd.DataFrame(), "Low": pd.DataFrame()}
     close, low = frames["Close"], frames.get("Low", pd.DataFrame())
@@ -332,6 +346,7 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
 
     return {"picks": picks, "policy": policy, "agents": sorted(agents, key=lambda a: a["data_to"], reverse=True),
             "one_dollar": dollars,
+            "paper_start": since,
             "hidden": len(gone),
             "summary": {"best_buy": summary(picks, lambda r: r["place"] == 1), "all_picks": summary(picks),
                         "policy": summary(policy), "agents": summary(agents, costs=False)},

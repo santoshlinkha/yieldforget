@@ -278,3 +278,13 @@ def test_the_cumulative_value_curve_follows_each_dollar_from_entry_to_exit(tmp_p
     sold = next(c for c in curve if c["date"] == str(idx[21].date()))
     assert sold["value"] == pytest.approx(1.08) and curve[-1]["value"] == pytest.approx(1.08)  # +10% less 2%
     assert all(c["invested"] == 1.0 for c in curve)
+
+
+def test_the_track_record_is_a_paper_trade_from_one_start_date():
+    from tradingagents.stocks.track_record import paper_start
+
+    picks = [{"data_to": "2026-09-01"}, {"data_to": "2026-10-01"}]
+    agents = [{"data_to": "2026-10-20"}]
+    assert paper_start([picks, [], agents]) == "2026-10-20"        # the first day every group made calls
+    assert paper_start([picks, agents], "2026-09-15") == "2026-09-15"
+    assert paper_start([[], []]) is None

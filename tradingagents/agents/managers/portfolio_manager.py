@@ -86,6 +86,7 @@ Write these sections, in this order, starting with the rating on its own line:
             final_trade_decision = render_pm_decision(decision)
             final_rating = decision.rating.value
             final_entry = {"rating": final_rating, "price_target": decision.price_target,
+                           "stop_loss": decision.stop_loss,
                            "review": decision.entry_plan_review.value if decision.entry_plan_review else None,
                            "plan": decision.entry_plan.model_dump(mode="json") if decision.entry_plan else None}
         else:

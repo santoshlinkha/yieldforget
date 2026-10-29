@@ -102,6 +102,34 @@ def test_wait_keeps_its_condition_and_an_old_plan_expires():
     assert EP.validate(None, "Buy", REF, ACCOUNT, TODAY)["state"] == "unavailable"
 
 
+def test_missing_exits_come_from_the_trader_then_the_internal_model():
+    import math
+
+    v = EP.validate(plan(), "Buy", REF, ACCOUNT, TODAY, stop_loss=94.0, price_target=None, sigma_h=0.1)
+    used = 98.0
+    assert v["levels"]["stop_loss"] == 94.0 and v["levels"]["source"]["stop_loss"] == "agents"
+    assert v["levels"]["price_target"] == round(used * math.exp(0.1), 2) and v["levels"]["source"]["price_target"] == "model"
+    none = EP.validate(plan(), "Buy", REF, ACCOUNT, TODAY)          # no volatility known: nothing invented
+    assert none["levels"]["stop_loss"] is None and none["levels"]["price_target"] is None
+
+
+def test_the_record_gives_the_manager_the_traders_exits_it_left_out(tmp_path):
+    from tradingagents.ledger.store import Store
+
+    store = Store(tmp_path / "book")
+    trader = {"action": "Buy", "plan": plan(), "stop_loss": 94.0, "price_target": 112.0}
+    final = {"rating": "Buy", "plan": plan(), "review": "approved", "stop_loss": None, "price_target": None}
+    out = EP.record(store, "AAA", "2026-10-23", None, "test", REF, ACCOUNT, trader, final, today=TODAY, sigma_h=0.1)
+    lv = out["plans"][1]["validation"]["levels"]
+    assert (lv["stop_loss"], lv["price_target"]) == (94.0, 112.0)
+    assert lv["source"] == {"stop_loss": "trader", "price_target": "trader"}
+
+
+def test_the_trader_states_a_sell_target():
+    p = TraderProposal.model_validate({"action": "Buy", "reasoning": "r", "price_target": "$112.50"})
+    assert p.price_target == 112.5 and "**Sell Target**: 112.5" in render_trader_proposal(p)
+
+
 # --- the reference quote ---
 
 def _closes(days, values):
@@ -165,11 +193,12 @@ def test_the_manager_reviews_the_plan_and_the_risk_analysts_challenge_it():
              "sentiment_report": "", "news_report": "", "fundamentals_report": ""}
     captured = {}
     decision = PortfolioDecision(rating=PortfolioRating.OVERWEIGHT, executive_summary="s", investment_thesis="t",
-                                 price_target=110.0, entry_plan_review="revised",
+                                 price_target=110.0, stop_loss=93.0, entry_plan_review="revised",
                                  entry_plan=EntryPlan.model_validate(plan(entry_price=97.5)))
     out = create_portfolio_manager(_structured_llm(captured, decision))(state)
     assert "approve the trader's entry plan, revise it, or reject it" in captured["prompt"]
-    assert out["final_entry"] == {"rating": "Overweight", "price_target": 110.0, "review": "revised",
+    assert "stop_loss, the exit price" in captured["prompt"]
+    assert out["final_entry"] == {"rating": "Overweight", "price_target": 110.0, "stop_loss": 93.0, "review": "revised",
                                   "plan": EntryPlan.model_validate(plan(entry_price=97.5)).model_dump(mode="json")}
     llm = MagicMock()
     llm.invoke.side_effect = lambda prompt: captured.__setitem__("risk", prompt) or MagicMock(content="careful")
@@ -221,5 +250,5 @@ def test_the_measured_prompt_additions_stay_small():
     added = {name: len(enc.encode(text)) for name, text in
              (("trader", EP.TRADER_INSTRUCTION), ("risk", EP.RISK_INSTRUCTION), ("pm", EP.PM_INSTRUCTION),
               ("reference", EP.render_reference(REF)))}
-    assert added["trader"] < 100 and added["risk"] < 40 and added["pm"] < 80 and added["reference"] < 60, added
+    assert added["trader"] < 100 and added["risk"] < 40 and added["pm"] < 100 and added["reference"] < 60, added
     print(json.dumps(added))

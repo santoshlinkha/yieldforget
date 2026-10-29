@@ -138,7 +138,7 @@ def test_a_per_step_answer_becomes_the_api_runs_final_state():
         time_horizon="3-6 months"))
     assert state["risk_debate_state"]["neutral_history"] == "\nNeutral Analyst: NEUTRAL"
     d = manual.decision_from_steps(meta)
-    assert d["rating"] == "Overweight" and d["trader"] == {"action": "Buy", "entry_price": 570.5, "stop_loss": 520.0,
+    assert d["rating"] == "Overweight" and d["trader"] == {"action": "Buy", "entry_price": 570.5, "stop_loss": 520.0, "price_target": None,
                                                           "position_sizing": "3% of portfolio"}
 
 

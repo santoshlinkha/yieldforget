@@ -234,9 +234,10 @@ ANSWER_FORMAT = {
     "rating": "Buy | Overweight | Hold | Underweight | Sell (the portfolio manager's)",
     "executive_summary": "two to four sentences",
     "investment_thesis": "the evidence that decided it",
-    "price_target": "number or null",
+    "price_target": "number or null (the sell price where the profit is booked)",
+    "stop_loss": "number or null (the exit price if it goes wrong)",
     "time_horizon": "e.g. 3-6 months, or null",
-    "trader": {"action": "Buy | Hold | Sell", "entry_price": "number or null",
+    "trader": {"action": "Buy | Hold | Sell", "entry_price": "number or null", "price_target": "number or null",
                "stop_loss": "number or null", "position_sizing": "text or null"},
 }
 

@@ -158,11 +158,12 @@ def decision_from_steps(meta: dict) -> dict | None:
     if pm is None:
         return None
     d = {"rating": pm.rating.value, "executive_summary": pm.executive_summary,
-         "investment_thesis": pm.investment_thesis, "price_target": pm.price_target, "time_horizon": pm.time_horizon,
+         "investment_thesis": pm.investment_thesis, "price_target": pm.price_target, "stop_loss": pm.stop_loss,
+         "time_horizon": pm.time_horizon,
          "insufficient_evidence": False}
     if tr is not None:
         d["trader"] = {"action": tr.action.value, "entry_price": tr.entry_price, "stop_loss": tr.stop_loss,
-                       "position_sizing": tr.position_sizing}
+                       "price_target": tr.price_target, "position_sizing": tr.position_sizing}
     return d
 
 

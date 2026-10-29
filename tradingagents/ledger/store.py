@@ -57,6 +57,7 @@ GLOBAL_DEFAULTS = {
     "ai_my_picks": [],
     # Tickers whose agents' entry plan should notify the owner when its entry price condition is met.
     "entry_alerts": [],
+    "track_record_start": None,          # the paper trade's first data date (None: the first day every group made calls)
     # TimesFM 3.0: research only, scored in the Models view once the owner accepts its non-commercial license.
     "timesfm3": {"enabled": False, "license_accepted": None},
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).
