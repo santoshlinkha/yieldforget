@@ -143,7 +143,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
   padding: 6px 8px; background: var(--surface); }
 .zoo-chip b { font-size: 16px; }
 .fit-table { width: 100%; table-layout: fixed; }
-.fit-table th { white-space: normal; vertical-align: bottom; line-height: 1.25; overflow-wrap: anywhere; font-size: 11.5px; }
+.fit-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; line-height: 1.25; font-size: 11.5px; }
 .fit-table td { font-size: 12.5px; padding-left: 6px; padding-right: 6px; }
 .fit-table th { padding-left: 6px; padding-right: 6px; }
 .sort-mark { display: inline-block; width: 1em; text-align: center; }
@@ -152,7 +152,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .col-legend-box { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; background: var(--surface-2); }
 .col-legend { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 8px 0 0; }
 .col-legend dt { font-weight: 600; } .col-legend dd { margin: 0; color: var(--muted); }
-.sg-table th { white-space: normal; }
+.sg-table th { white-space: nowrap; }
 .sg-table td { vertical-align: middle; padding-top: 6px; padding-bottom: 6px; }
 .sg-table th.num, .sg-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .sg-table th.l, .sg-table td.l { text-align: left; }
@@ -1539,19 +1539,19 @@ $("fcUniverse").onchange = () => { fcView = null; loadForecasts(); };
 if (["quality", "signals", "models"].includes(new URLSearchParams(location.search).get("qv"))) store.set("qsView", new URLSearchParams(location.search).get("qv"));
 let qsData = null, qsSort = {key: "rank", dir: 1}, qsAll = false, qsView = store.get("qsView", "quality"), sgData = null;
 // Combined score/rank: a screen of facts and opinions (quality checks, analyst consensus, target upside), not a model.
-const QS_COLS = [["rank", "Screen rank", "Order by the screen score (1 = best). A screen of facts and opinions, not a model forecast"],
+const QS_COLS = [["rank", "Rank", "Order by the screen score (1 = best). A screen of facts and opinions, not a model forecast"],
   ["ticker", "Ticker", "The stock; its company name below. Click it for the stock's page"],
-  ["combined_score", "Screen score", "0-100: the average of three percentile ranks among the stocks screened: quality score, analyst consensus (stronger buys higher) and price-target upside. Hover a value for its parts"],
-  ["quality_rank", "Quality rank", "Order by the quality score alone (equal scores share a rank)"],
-  ["quality_score", "Quality score", "0-100: the share of the moat and financial-strength checks passed (a 'check' counts half, a 'flag' none; checks without data are left out)"],
+  ["combined_score", "Score", "0-100: the average of three percentile ranks among the stocks screened: quality score, analyst consensus (stronger buys higher) and price-target upside. Hover a value for its parts"],
+  ["quality_rank", "Q. rank", "Order by the quality score alone (equal scores share a rank)"],
+  ["quality_score", "Quality", "0-100: the share of the moat and financial-strength checks passed (a 'check' counts half, a 'flag' none; checks without data are left out)"],
   ["moat_passed", "Moat", "Moat checks passed out of those with data (durable advantages: margins, returns on capital, market position)"],
-  ["strength_flags", "Strength flags", "How many financial-strength checks are flagged (debt, liquidity, cash flow). Fewer is better"],
-  ["valuation_flags", "Valuation flags", "Valuation checks flagged, with the number marked 'check' in brackets (forward P/E against its own history, EV/EBITDA, free-cash-flow yield, implied growth). Fewer is cheaper"],
-  ["implied_growth", "Implied growth", "The yearly growth today's price implies (reverse discounted cash flow). Lower means less is priced in"],
+  ["strength_flags", "Strength", "How many financial-strength checks are flagged (debt, liquidity, cash flow). Fewer is better"],
+  ["valuation_flags", "Valuation", "Valuation checks flagged, with the number marked 'check' in brackets (forward P/E against its own history, EV/EBITDA, free-cash-flow yield, implied growth). Fewer is cheaper"],
+  ["implied_growth", "Impl. growth", "The yearly growth today's price implies (reverse discounted cash flow). Lower means less is priced in"],
   ["forward_pe", "Fwd P/E", "Price over next year's expected earnings"],
   ["analyst_mean", "Consensus", "This month's analyst ratings as one number: 1 strong buy to 5 strong sell"],
   ["analysts", "Analysts", "How many analysts rate it"],
-  ["target_upside", "Target upside", "The gap from today's price to the analysts' mean price target"]];
+  ["target_upside", "Upside", "The gap from today's price to the analysts' mean price target"]];
 const SG_COLS = [["rank", "Rank", "The screen rank (quality and analysts), the same as the first view"],
   ["ticker", "Ticker", "The stock; its company name below (hover for the full name)"], ["verdict", "Verdict", "BUY / WATCH / HOLD / SELL / AVOID: the ticker page explains each"],
   ["model_rank", "Model #", "The daily decision's rank among today's S&P 500 stocks (1 = best): the learned ensemble when it is trained, else the decision's own weekly XGBoost fit. It decides the verdict. It is the Decision column on the Models tab, not the Models tab's mean or its XGB (54) column."],
@@ -1593,18 +1593,12 @@ const qsParts = r => `quality ${qsPct(r.quality_pct)} + consensus ${qsPct(r.anal
 // Fixed column widths per view: sorting never reshapes the table; it fills its panel and scrolls inside it when the
 // window is narrower than the columns need. Long text is cut with "…" and shown whole on hover.
 const QS_WIDTHS = {
-  quality: {rank: 56, ticker: 150, combined_score: 76, quality_rank: 70, quality_score: 70, moat_passed: 60, strength_flags: 70,
-            valuation_flags: 84, implied_growth: 76, forward_pe: 62, analyst_mean: 118, analysts: 70, target_upside: 74},
-  signals: {rank: 52, ticker: 140, verdict: 112, model_rank: 76, action: 108, trend: 118, lift_up: 80, lift_down: 88,
-            p_large_loss: 66, warnings: 220, quality_score: 64, analyst_mean: 56},
-  models: {rank: 56, ticker: 180, ens: 86, ens_net: 96, ens_spy: 76, agree: 100, best_model: 170, quality_score: 70}};
-// The column explanations sit above the table; Hide / Show is remembered on this browser.
-function showLegend(on) {
-  $("qsLegend").hidden = !on;
-  $("qsLegendToggle").textContent = on ? "Hide" : "Show";
-  $("qsLegendToggle").setAttribute("aria-expanded", on);
-}
-$("qsLegendToggle").onclick = () => { const on = $("qsLegend").hidden; store.set("qsLegendShown", on); showLegend(on); };
+  quality: {rank: 54, ticker: 176, combined_score: 64, quality_rank: 68, quality_score: 66, moat_passed: 56,
+            strength_flags: 74, valuation_flags: 80, implied_growth: 96, forward_pe: 66, analyst_mean: 112, analysts: 70,
+            target_upside: 66},
+  signals: {rank: 52, ticker: 164, verdict: 104, model_rank: 72, action: 100, trend: 106, lift_up: 78, lift_down: 88,
+            p_large_loss: 64, warnings: 210, quality_score: 66, analyst_mean: 56},
+  models: {rank: 54, ticker: 220, ens: 82, ens_net: 76, ens_spy: 64, agree: 78, best_model: 170, quality_score: 66}};
 function fitScreen(view, cols) {
   const t = $("qsTable"), w = QS_WIDTHS[view] || {};
   t.classList.add("fit-table");
@@ -1665,10 +1659,10 @@ const liftCell = (v, bad) => v == null ? "–" : `<span class="${v >= 1.2 ? (bad
 const ZV_COLS = [["rank", "Rank", "The screen rank (quality and analysts), the same as the first view"],
   ["ticker", "Ticker", "The stock; its company name below"],
   ["ens", "Ensemble", "The learned-weight ensemble's rank among today's S&P 500 (100 = its top pick); it orders the best buy"],
-  ["ens_net", "Expected net", "20 sessions after costs: the historical average of stocks the ensemble ranked like this (out of sample)"],
+  ["ens_net", "Exp. net", "20 sessions after costs: the historical average of stocks the ensemble ranked like this (out of sample)"],
   ["ens_spy", "vs SPY", "The same, less SPY over the same days"],
-  ["agree", "Models in top fifth", "How many of the fitted models put it in their top fifth"],
-  ["best_model", "Most bullish model", "The fitted model that ranks it highest, with its percentile"],
+  ["agree", "Top fifth", "How many of the fitted models put it in their top fifth"],
+  ["best_model", "Most bullish", "The fitted model that ranks it highest, with its percentile"],
   ["quality_score", "Quality", "The quality score (0-100), as in the first view"]];
 function renderModelsView(shown, arrow) {
   $("qsTable").classList.remove("sg-table");
