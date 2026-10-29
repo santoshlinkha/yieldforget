@@ -1271,12 +1271,14 @@ class App:
         return [(c["llm_provider"], c["deep_think_llm"], sorted((c.get("agent_models") or {}).items())) for c in attempts]
 
     def _scanned_today(self) -> set[str]:
-        """The stocks the agents were started on today (local calendar day), whatever the outcome."""
+        """The stocks the agents ran on today (local calendar day), whatever the outcome; a run no model took up
+        (every provider paused or refused by the budget) did not scan the stock and does not count."""
         start = datetime.combine(date.today(), datetime.min.time()).astimezone().astimezone(
             __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         try:
             return {r[0].upper() for r in self.store.con.execute(
-                "SELECT DISTINCT ticker FROM agent_runs WHERE started_at >= ?", (start,))}
+                "SELECT DISTINCT ticker FROM agent_runs WHERE started_at >= ?"
+                " AND (status = 'ok' OR actual_provider IS NOT NULL)", (start,))}
         except Exception:
             return set()
 
@@ -1897,6 +1899,9 @@ class App:
                 except Exception as exc:  # one ticker's failure stays with that ticker
                     failed[t] = str(exc)[:300]
                     job.log.append(f"{t}: failed: {str(exc)[:200]}")
+                    if self._out_of_budget(exc):   # the same refusal awaits every further ticker
+                        job.log.append("stopped: every model is paused or over the budget")
+                        break
                     continue
                 done[t] = out["rating"]
                 job.log.append(f"{t}: {out['rating']} ({'reused' if out['how'] == 'cache' else 'new'})")
@@ -1972,6 +1977,14 @@ class App:
 
     AVOID = ("underweight", "sell")
 
+    @staticmethod
+    def _out_of_budget(exc: Exception) -> bool:
+        """Every provider failed for a reason the next stock shares: a paused model or the dollar/request budget."""
+        msg = str(exc)
+        return msg.startswith("No AI provider could run") and all(
+            any(w in part for w in ("budget", "limit", "paused", "skipped", "credit"))
+            for part in re.split(r"; (?=[a-z][\w ]* \()", msg))     # one part per provider: "name (model): why"
+
     def _ai_refill(self, job, day: str, analysts: list[str], g: dict) -> dict:
         """Keep the AI's picks the team did not rate AVOID; for the others the AI screens again, leaving out every
         stock the agents analysed in the last five trading days, and the team analyses its new ranking in order until
@@ -2013,6 +2026,9 @@ class App:
                 break
             except Exception as exc:
                 job.log.append(f"{t}: failed: {str(exc)[:200]}")
+                if self._out_of_budget(exc):
+                    job.log.append("stopped: every model is paused or over the budget, so the next stocks would fail too")
+                    break
                 continue
             tried[t] = out["rating"]
             job.log.append(f"{t}: {out['rating']}")

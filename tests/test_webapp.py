@@ -626,6 +626,23 @@ def test_replacing_the_avoids_keeps_the_rest_and_the_ai_picks_unanalysed_stocks(
     assert [p["ticker"] for p in app.store.get("global", "ai_screen_state")["picks"]] == ["AAA", "DDD", "EEE", "FFF"]
 
 
+def test_a_budget_refusal_stops_the_run_and_does_not_use_up_the_daily_scans(tmp_path, monkeypatch):
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    refused = ValueError("No AI provider could run the agents: openrouter (x:free): skipped, free daily limit reached; "
+                         "openrouter (haiku): analysis needs about 0.75 of the daily usd budget; 0.71 is left; "
+                         "google (g): skipped, out of credit")
+    assert app._out_of_budget(refused)
+    assert not app._out_of_budget(ValueError("No AI provider could run the agents: openrouter (x): HTTP 500"))
+    calls = []
+    monkeypatch.setattr(app, "_run_agents", lambda job, t, day, analysts, g: (calls.append(t), (_ for _ in ()).throw(refused)))
+    app.start_ai_decisions({"tickers": ["AAA", "BBB", "CCC"], "date": app._last_session()})
+    for _ in range(100):
+        if not app.analysis.running:
+            break
+        time.sleep(0.05)
+    assert calls == ["AAA"]                                                    # the rest would be refused too
+
+
 def test_ask_the_ai_to_pick_runs_once_a_calendar_day(tmp_path, monkeypatch):
     srv, app = _agent_app(tmp_path, monkeypatch)
     monkeypatch.setattr(app, "_run_agents", lambda job, t, day, analysts, g: {"rating": "Hold", "how": "agents"})

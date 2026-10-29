@@ -231,6 +231,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .ev-row.low .ev-bar i { background: #cbd5e1; }
 .fc-table { width: 100%; }
 .fc-table td, .fc-table th { padding: 6px 8px; }
+.fc-warning { margin-bottom: 8px; }
 .sig-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .sig-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--surface-2); min-width: 0; }
 .sig-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -880,7 +881,7 @@ async function load() {
         fc.models.map(x => `<tr title="${esc(x.model)}, trained on ${x.universe === "stock" ? "stocks" : "ETFs"}${x.on_demand ? ", run now" : ""}"><td class="l"><b>${x.horizon} days</b></td>` +
           `<td class="${x.mean >= 0 ? "pos" : "neg"}"><b>${spct(x.mean, 1)}</b></td><td class="muted">${spct(x.q05, 0)} to ${spct(x.q95, 0)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + `</table>`;
       const flags = [...new Set(fc.models.flatMap(x => x.flags || []))];
-      if (flags.length) h += `<div class="note small"><details><summary><span><b>Some forecasts come from a model trained on a different kind of asset</b></span></summary><div style="margin-top:4px">${esc(flags.join("; "))}.</div></details></div>`;
+      if (flags.length) h += `<div class="note small fc-warning"><details><summary><span><b>Some forecasts come from a model trained on a different kind of asset</b></span></summary><div style="margin-top:4px">${esc(flags.join("; "))}.</div></details></div>`;
       h += `<details class="small how-read"><summary><span class="muted">How to read this</span></summary>` +
         `<p class="muted small">Mean and range: log return over cash from the latest close; the range is the 5th to 95th percentile. Chance up: the chance the total return (cash yield included) is above zero, which is not the chance of beating cash. Hover a row for the model behind it.</p>` +
         `<p class="muted small">From data to ${esc(fc.models[0].info_cutoff)}. In backtests these models ranked funds better than chance but did not beat the standard rule in the portfolio after costs.</p></details>`;
