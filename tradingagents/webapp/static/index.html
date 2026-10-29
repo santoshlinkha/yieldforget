@@ -565,11 +565,11 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         </div>
         <p class="muted small" id="sgStatus" style="margin:0 0 8px"></p>
         <div class="small col-legend-box" id="qsLegendBox">
-          <div class="row" style="margin:0;align-items:center;gap:8px"><b>What the columns mean</b><button type="button" class="ghost small-btn" id="qsLegendToggle" aria-expanded="true" aria-controls="qsLegend">Hide</button></div>
+          <div class="row" style="margin:0;align-items:center;gap:8px;justify-content:flex-start"><button type="button" class="ghost small-btn" id="qsLegendToggle" aria-expanded="true" aria-controls="qsLegend">Hide</button><b>What the columns mean</b></div>
           <div id="qsLegend"></div>
         </div>
         <div class="small col-legend-box" id="qsHowBox">
-          <div class="row" style="margin:0;align-items:center;gap:8px"><b>How the scores and ranks are measured</b><button type="button" class="ghost small-btn" id="qsHowToggle" aria-expanded="true" aria-controls="qsHow">Hide</button></div>
+          <div class="row" style="margin:0;align-items:center;gap:8px;justify-content:flex-start"><button type="button" class="ghost small-btn" id="qsHowToggle" aria-expanded="true" aria-controls="qsHow">Hide</button><b>How the scores and ranks are measured</b></div>
           <ul class="muted" id="qsHow">
             <li><b>Quality score (0–100)</b>: the share of the ticker page's tests the stock passes: the moat checks (gross margin, return on capital, margin stability, free cash flow, and so on) plus the financial strength items (debt to equity, interest coverage, current ratio) and the profitability items (FCF, ROIC above 15%, margin trends). A pass counts 1, a "check" ½, a flag 0; tests without data are left out. Example: 13 of 14 tests passed = 92.9.</li>
             <li><b>Quality rank</b>: position by quality score alone, 1 = highest. Equal scores share a rank (many stocks score 100).</li>
