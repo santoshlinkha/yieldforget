@@ -258,7 +258,7 @@ def test_missing_downside_estimate_blocks_entry_unless_the_rule_says_otherwise(q
                           "in_index": [True], "risk_informative": [True]}, index=["AAA"])
     r = {**daily.DEFAULT_RULES, "max_names": 5, "max_position_share": 0.25, "min_order": 1.0, "max_large_loss_prob": 0.15}
     args = (set(), set())
-    kw = dict(validated=True, cutoff=None, execute="2026-10-26")
+    kw = {"validated": True, "cutoff": None, "execute": "2026-10-26"}
     ira = {"total": 6000.0, "by_ticker": {}}
     lines = daily.entries(today, *args, r, 1000.0, 1000.0, ira, pd.Series({"AAA": 10.0}), **kw)
     assert lines[0]["action"] == "WAIT" and any("no downside estimate" in b for b in lines[0]["blocked"])

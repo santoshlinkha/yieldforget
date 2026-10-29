@@ -60,10 +60,16 @@ def save(env: str, value: str, path: Path | None = None) -> dict:
     lines = [line for line in lines if not re.match(rf"\s*(export\s+)?{re.escape(env)}\s*=", line)]
     if value:
         lines.append(f"{env}={value}")
+    tmp = path.with_suffix(".env.tmp") if path.suffix else path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    # Only once the file holds it: a failed save leaves this process as it was.
+    if value:
         os.environ[env] = value
     else:
         os.environ.pop(env, None)
-    tmp = path.with_suffix(".env.tmp") if path.suffix else path.with_name(path.name + ".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(path)
     return {"env": env, "set": bool(value), "masked": mask(value) if value else None}

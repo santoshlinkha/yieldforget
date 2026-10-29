@@ -141,8 +141,9 @@ def test_cash_edits_are_saved_and_say_whether_they_are_flows_or_corrections(tmp_
 
 
 def _ny(y, m, d, h, mi=0):
-    import pytz
     from datetime import datetime
+
+    import pytz
     return pytz.timezone("America/New_York").localize(datetime(y, m, d, h, mi))
 
 

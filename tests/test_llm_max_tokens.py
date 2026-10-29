@@ -115,3 +115,13 @@ def test_env_override_sets_config(monkeypatch):
     config = _config_with_env(monkeypatch, TRADINGAGENTS_MAX_TOKENS="8192")
     assert config["max_tokens"] == "8192"
     assert _coerce_max_tokens(config["max_tokens"]) == 8192
+
+
+@pytest.mark.unit
+def test_azure_forwards_the_output_cap_to_the_model(monkeypatch):
+    from tradingagents.llm_clients.azure_client import AzureOpenAIClient
+
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://synthetic.openai.azure.com/")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2025-03-01-preview")
+    llm = AzureOpenAIClient("gpt-synthetic", api_key="x", max_tokens=123).get_llm()
+    assert getattr(llm, "max_tokens", None) == 123

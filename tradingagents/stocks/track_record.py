@@ -228,7 +228,7 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
         raw = np.array([r["return"] for r in done])
         cost = np.array([float(r.get("cost_rt") or 0.0) for r in done]) if costs else np.zeros(len(done))
         net = raw - cost
-        spy = [(n, r["spy"]) for n, r in zip(net, done) if r.get("spy") is not None]
+        spy = [(n, r["spy"]) for n, r in zip(net, done, strict=True) if r.get("spy") is not None]
         by_date = pd.Series(net, index=[r["data_to"] for r in done]).groupby(level=0).mean()
         se = float(by_date.std(ddof=1) / np.sqrt(len(by_date))) if len(by_date) > 1 else None
         return {"judged": len(done), "correct": sum(r["verdict"] == "correct" for r in done),

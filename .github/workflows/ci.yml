@@ -35,6 +35,63 @@ jobs:
       - name: Run test suite
         run: pytest -q
 
+  # The app is used on Windows: file replacement, credential files, session clocks and shell commands differ there.
+  test-windows:
+    name: tests (Windows, py3.13)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install (with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run test suite
+        run: pytest -q
+
+  # The model tests skip without the research extras; run them once, on CPU.
+  test-research:
+    name: tests (research extras, CPU, py3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install (dev + research, CPU torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,research]"
+      - name: Run test suite
+        run: pytest -q
+
+  # Inline page scripts must at least parse; a syntax error blanks the whole page.
+  page-scripts:
+    name: page scripts parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: node --check every inline <script>
+        run: |
+          python3 - <<'EOF'
+          import pathlib, re, subprocess, sys, tempfile
+          bad = 0
+          for page in pathlib.Path("tradingagents/webapp/static").glob("*.html"):
+              for i, js in enumerate(re.findall(r"<script>(.*?)</script>", page.read_text(encoding="utf-8"), re.S)):
+                  f = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
+                  f.write(js); f.close()
+                  r = subprocess.run(["node", "--check", f.name], capture_output=True, text=True)
+                  print(page.name, i, "ok" if r.returncode == 0 else r.stderr)
+                  bad += r.returncode != 0
+          sys.exit(bad)
+          EOF
+
   smoke-install:
     name: clean-install smoke
     runs-on: ubuntu-latest

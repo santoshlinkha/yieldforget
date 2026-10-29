@@ -98,7 +98,7 @@ def _policy_outcomes(todo: pd.DataFrame, engine: dict) -> dict:
                                         "ticker": rows["ticker"].to_numpy(), "sigma": rows["sigma"].astype(float)}),
                policy, rows["cost_rt"].fillna(0.004).to_numpy(dtype=float))
     out = {}
-    for key, r in zip(zip(rows["decision_id"], rows["ticker"]), t.itertuples()):
+    for key, r in zip(zip(rows["decision_id"], rows["ticker"], strict=True), t.itertuples(), strict=True):
         if r.complete:
             out[key] = (float(r.net), str(pd.Timestamp(r.exit_date).date()), str(r.reason))
     return out

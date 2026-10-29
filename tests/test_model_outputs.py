@@ -18,7 +18,7 @@ REQUIRED_FAMILIES = {"forecast_engine", "stock_signals", "daily_decision", "mode
 
 
 def test_every_family_has_a_lifecycle_consumer_evidence_and_known_outputs():
-    assert REQUIRED_FAMILIES <= set(MO.FAMILIES)
+    assert set(MO.FAMILIES) >= REQUIRED_FAMILIES
     for f in MO.FAMILIES.values():
         assert f.lifecycle in MO.LIFECYCLES and f.evidence in MO.EVIDENCE and f.consumer and f.source
         assert all(o in MO.OUTPUTS for o in f.outputs), f.key
@@ -61,9 +61,10 @@ def test_the_trade_page_leads_with_the_tested_entry_not_a_last_close_limit():
 
 
 def test_a_procedure_id_ignores_refits_and_dollars_but_not_gates():
-    base = dict(recipe={"model": "xgb_rank", "params": {"depth": 3}}, ranking="ensemble", ensemble={"members": ["a"]},
-                calibration={"kind": "logistic"}, gates={"min_p_win": 0.5}, ordering="score_pct", sizing={"cap": 0.25},
-                costs={"rt": "spread"}, execution={"entry": "next_close"})
+    base = {"recipe": {"model": "xgb_rank", "params": {"depth": 3}}, "ranking": "ensemble",
+            "ensemble": {"members": ["a"]}, "calibration": {"kind": "logistic"}, "gates": {"min_p_win": 0.5},
+            "ordering": "score_pct", "sizing": {"cap": 0.25}, "costs": {"rt": "spread"},
+            "execution": {"entry": "next_close"}}
     a = MO.procedure_id(**base)
     assert MO.procedure_id(**base) == a
     assert MO.procedure_id(**{**base, "gates": {"min_p_win": 0.55}}) != a

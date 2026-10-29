@@ -18,7 +18,7 @@ open the evening before, and their calendar lives with the futures code.
 from __future__ import annotations
 
 from datetime import date, time, timedelta
-from functools import lru_cache
+from functools import cache
 
 EXTRA_CLOSURES = {
     *(date(2001, 9, d) for d in (11, 12, 13, 14)),   # September 11
@@ -62,7 +62,7 @@ def _observed(day: date, saturday_rule: bool = True) -> date | None:
     return day
 
 
-@lru_cache(maxsize=None)
+@cache
 def holidays(year: int) -> frozenset[date]:
     days = {
         _observed(date(year, 1, 1), saturday_rule=False),       # New Year's Day
@@ -86,7 +86,7 @@ EARLY_CLOSE = time(13, 0)
 EXTRA_EARLY_CLOSES: set[date] = set()   # announced one-off half days, beyond the rules below
 
 
-@lru_cache(maxsize=None)
+@cache
 def early_closes(year: int) -> frozenset[date]:
     """Sessions that close at 1:00 pm New York: the day before Independence Day, the day after
     Thanksgiving and Christmas Eve, each when it is itself a session."""

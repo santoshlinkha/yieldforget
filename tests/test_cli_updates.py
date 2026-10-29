@@ -242,6 +242,8 @@ def _dist(direct=None, installer="pip"):
 
 
 @pytest.mark.unit
+@pytest.mark.skipif(os.name == "nt", reason="a file:// clone path and the POSIX shell command are POSIX-only; "
+                    "Windows is covered by test_no_command_is_offered_on_windows")
 def test_the_upgrade_command_follows_the_install(tmp_path, monkeypatch):
     clone = tmp_path / "TradingAgents"
     (clone / ".git").mkdir(parents=True)
@@ -315,6 +317,7 @@ def test_remote_text_cannot_carry_c1_or_direction_controls():
 
 @pytest.mark.unit
 def test_a_uv_git_install_is_upgraded_with_uv(monkeypatch):
+    monkeypatch.setattr(updates.os, "name", "posix")   # the POSIX command form; Windows gets none
     monkeypatch.delenv("TRADINGAGENTS_IN_DOCKER", raising=False)
     monkeypatch.setattr(updates.sys, "executable", "/venv/bin/python")
     vcs = updates.upgrade_command(_dist({"url": "https://github.com/TauricResearch/TradingAgents.git",

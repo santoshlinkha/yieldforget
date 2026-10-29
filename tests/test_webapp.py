@@ -361,3 +361,23 @@ def test_an_abandoned_run_cannot_overwrite_the_new_runs_progress_or_log():
             break
         time.sleep(0.05)
     assert job.result == "fresh"
+
+
+def test_a_key_that_cannot_be_written_is_not_used_either(tmp_path, monkeypatch):
+    import os
+    import pathlib
+
+    from tradingagents.webapp import keys
+
+    env = tmp_path / ".env"
+    env.write_text("OTHER=1\n", encoding="utf-8")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    def locked(self, target):
+        raise PermissionError("the .env file is open elsewhere")
+
+    monkeypatch.setattr(pathlib.Path, "replace", locked)
+    with pytest.raises(PermissionError):
+        keys.save("OPENROUTER_API_KEY", "sk-or-v1-synthetic123456", path=env)
+    assert "OPENROUTER_API_KEY" not in os.environ and env.read_text(encoding="utf-8") == "OTHER=1\n"
+    assert not list(tmp_path.glob("*.tmp"))
