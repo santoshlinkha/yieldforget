@@ -1021,8 +1021,8 @@ async function loadTrade() {
     $("runnersTable").className = "compact runners";
     $("runnersTable").innerHTML = t.runners_up.length
       ? `<colgroup><col style="width:13%"><col style="width:12%"><col style="width:12%"><col style="width:15%"><col style="width:13%"><col style="width:12%"><col style="width:23%"></colgroup>` +
-        `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="The reference close (not an order price): the buy is at the next close">Last sell stop</th>` +
-        `<th class="num" title="Sell when a close reaches this far above the fill">Sell target</th><th class="num" title="Sell when a close falls this far below the fill">Stop loss</th><th class="l">AI agents</th></tr>` +
+        `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
+        `<th class="num" title="Sell target: sell when a close reaches this far above the fill">Sell</th><th class="num" title="Stop loss: sell when a close falls this far below the fill">Stop</th><th class="l">AI agents</th></tr>` +
         t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td>` +
           `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
