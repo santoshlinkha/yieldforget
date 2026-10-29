@@ -256,3 +256,22 @@ def test_one_dollar_on_every_recommendation_adds_up_net_of_costs(tmp_path, monke
     assert f["trades"] == 2 and f["invested"] == 2.0 and f["profit"] == pytest.approx(-0.02)
     assert f["value"] == pytest.approx(1.98) and one["best_buy"]["finished"]["profit"] == pytest.approx(0.09)
     assert one["all_picks"]["running"][-1] == {"date": str(idx[0].date()), "invested": 2.0, "profit": -0.02}
+
+
+def test_the_cumulative_value_curve_follows_each_dollar_from_entry_to_exit(tmp_path, monkeypatch):
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    close = pd.DataFrame({"AAA": np.r_[100.0, 100.0, np.full(28, 110.0)], "SPY": 100.0}, index=idx)
+    picks = [{"key": "p|AAA", "ticker": "AAA", "data_to": str(idx[0].date()), "horizon": 20, "place": 1,
+              "cost_rt": 0.02, "role": "best"}]
+    monkeypatch.setattr(T, "_picks", lambda con: [dict(p) for p in picks])
+    monkeypatch.setattr(T, "_policy_picks", lambda con: [])
+    monkeypatch.setattr(T, "hidden", lambda con: set())
+    monkeypatch.setattr("tradingagents.research.prices.bars", lambda tickers, cache: {"Close": close, "Low": close})
+    curve = T.build(None, tmp_path)["one_dollar"]["best_buy"]["curve"]
+    assert curve[0] == {"date": str(idx[1].date()), "invested": 1.0, "value": pytest.approx(0.99)}  # bought: half the cost
+    assert curve[1]["value"] == pytest.approx(1.09)                       # held at 110, entry half of the cost paid
+    sold = next(c for c in curve if c["date"] == str(idx[21].date()))
+    assert sold["value"] == pytest.approx(1.08) and curve[-1]["value"] == pytest.approx(1.08)  # +10% less 2%
+    assert all(c["invested"] == 1.0 for c in curve)

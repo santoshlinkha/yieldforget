@@ -2105,12 +2105,16 @@ def make_handler(app: App):
             logger.info(fmt, *args)
 
         def _send(self, status, body: bytes, content_type: str):
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+                # The page cancelled this read (a newer one replaced it): nothing to answer.
+                self.close_connection = True
 
         def _json(self, payload, status=HTTPStatus.OK):
             self._send(status, json.dumps(_finite(payload), default=str, allow_nan=False).encode(), "application/json")

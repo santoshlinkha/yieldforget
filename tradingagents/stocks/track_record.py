@@ -249,6 +249,7 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
         chosen = [r for r in rows if (key is None or key(r)) and follows(r) and r.get("return") is not None
                   and r.get("status") in ("done", "open")]
         net = lambda r: r["return"] - (float(r.get("cost_rt") or 0.0) if costs else 0.0)  # noqa: E731
+        held = lambda r: r["return"] - (float(r.get("cost_rt") or 0.0) / 2 if costs else 0.0)  # noqa: E731
         done = [r for r in chosen if r["status"] == "done"]
         still = [r for r in chosen if r["status"] == "open"]
         by_day = {}
@@ -263,14 +264,45 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
         return {"each_usd": 1.0, "finished": {"trades": len(done), "invested": float(len(done)),
                                               "profit": round(sum(net(r) for r in done), 4),
                                               "value": round(len(done) + sum(net(r) for r in done), 4)},
+                # Still held: valued at the latest close less the entry half of the cost (the exit half is not paid
+                # yet), the same rule as the curve.
                 "open": {"trades": len(still), "invested": float(len(still)),
-                         "profit": round(sum(net(r) for r in still), 4),
-                         "value": round(len(still) + sum(net(r) for r in still), 4)},
+                         "profit": round(sum(held(r) for r in still), 4),
+                         "value": round(len(still) + sum(held(r) for r in still), 4)},
                 "costs": "estimated round trip deducted" if costs else "none", "running": running}
+
+    def value_curve(rows, key=None, costs=True, follows=lambda r: True) -> list[dict]:
+        """Day by day: dollars put in ($1 on each recommendation from its entry close) and what they are worth. A
+        position held is valued at that day's close less half the round-trip cost (the entry half); once sold at its
+        20th close it is worth 1 + its return less the whole cost from then on."""
+        chosen = [r for r in rows if (key is None or key(r)) and follows(r) and r.get("entry_date")
+                  and r.get("status") in ("done", "open") and r["ticker"] in close]
+        if not chosen or close.empty:
+            return []
+        days = close.index
+        invested = pd.Series(0.0, index=days)
+        value = pd.Series(0.0, index=days)
+        for r in chosen:
+            cost = float(r.get("cost_rt") or 0.0) if costs else 0.0
+            e, last = pd.Timestamp(r["entry_date"]), pd.Timestamp(r["last_date"])
+            px = close[r["ticker"]].ffill()
+            invested[days >= e] += 1.0
+            held = (days >= e) & (days <= last)
+            value[held] += (px[held] / r["entry"]).to_numpy() - cost / 2
+            if r["status"] == "done":
+                value[days == last] += -cost / 2                 # sold that close: the exit half of the cost
+                value[days > last] += 1.0 + r["return"] - cost
+        on = invested > 0
+        return [{"date": str(d.date()), "invested": round(float(i), 2), "value": round(float(v), 4)}
+                for d, i, v in zip(days[on], invested[on], value[on], strict=True)]
 
     buys = lambda r: r.get("rating") in UP  # noqa: E731   (the agents' Buy/Overweight calls: $1 bought on each)
     dollars = {"best_buy": one_dollar(picks, lambda r: r["place"] == 1), "all_picks": one_dollar(picks),
                "policy": one_dollar(policy), "agents_buys": one_dollar(agents, costs=False, follows=buys)}
+    curves = {"best_buy": value_curve(picks, lambda r: r["place"] == 1), "all_picks": value_curve(picks),
+              "policy": value_curve(policy), "agents_buys": value_curve(agents, costs=False, follows=buys)}
+    for k, c in curves.items():
+        dollars[k]["curve"] = c
 
     return {"picks": picks, "policy": policy, "agents": sorted(agents, key=lambda a: a["data_to"], reverse=True),
             "one_dollar": dollars,

@@ -13,7 +13,7 @@
   --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #586377; --faint: #94a3b8;
   --border: #e5e7eb; --border-strong: #d1d5db;
   --brand-bg: #0b1220; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-  --accent: #2563eb; --on-accent: #ffffff; --accent-soft: #eff4ff; --buy: #047857; --sell: #dc2626;
+  --accent: #2563eb; --on-accent: #ffffff; --cv-value: #2563eb; --cv-in: #586377; --accent-soft: #eff4ff; --buy: #047857; --sell: #dc2626;
   --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d; --ok-bg: #ecfdf5; --ok: #065f46; --ok-line: #6ee7b7;
   --chart-grid: #eef0f3; --s1: #2563eb; --s2: #f97316; --s3: #a16207; --s4: #059669;
   --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
@@ -24,7 +24,7 @@
     --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
     --border: #1f2937; --border-strong: #334155;
     --brand-bg: #060a13; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-    --accent: #60a5fa; --on-accent: #0b1220; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
+    --accent: #60a5fa; --on-accent: #0b1220; --cv-value: #3b82f6; --cv-in: #64748b; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
     --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --ok-bg: #0f2a20; --ok: #6ee7b7; --ok-line: #1f6b4f;
     --chart-grid: #1c2433; --s1: #60a5fa; --s2: #fb923c; --s3: #facc15; --s4: #34d399;
     --shadow: none;
@@ -123,6 +123,16 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .side { font-weight: 700; font-size: 10.5px; letter-spacing: .06em; padding: 3px 8px; border-radius: 5px; }
 .side.buy { background: color-mix(in srgb, var(--buy) 14%, transparent); color: var(--buy); }
 .side.sell { background: color-mix(in srgb, var(--sell) 14%, transparent); color: var(--sell); }
+.cv-wrap { position: relative; margin: 8px 0 4px; }
+.cv-wrap svg { width: 100%; height: auto; display: block; overflow: visible; }
+.cv-wrap .grid { stroke: var(--chart-grid); stroke-width: 1; }
+.cv-wrap .axis { fill: var(--muted); font-size: 11px; }
+.cv-wrap .lbl { fill: var(--text); font-size: 11.5px; font-weight: 600; }
+.cv-tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; color: var(--text); }
+.cv-key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12px; color: var(--muted); }
+.cv-key i { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--cv-value); }
+.cv-key i.in { border-top: 2px dashed var(--cv-in); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
 .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -518,6 +528,15 @@ select option { background: var(--surface); color: var(--text); }
         <h3>The model's picks</h3>
         <p class="muted small" id="recRule"></p>
         <div class="table-wrap"><table id="recDollar" class="compact" style="margin-bottom:12px"></table></div>
+        <div id="recCurveBox">
+          <div class="row" style="align-items:center;gap:10px;margin:0">
+            <b>Cumulative value of $1 on each recommendation</b>
+            <div class="seg" role="group" aria-label="Which recommendations" id="recCurveSeg"></div>
+          </div>
+          <div><span class="cv-key"><i></i>Worth (each day's close)</span><span class="cv-key"><i class="in"></i>Put in ($1 per recommendation bought)</span></div>
+          <div class="cv-wrap" id="recCurve"></div>
+          <details class="small"><summary>Show as a table</summary><div class="table-wrap"><table class="compact" id="recCurveTable"></table></div></details>
+        </div>
         <div class="table-wrap"><table id="recPicks" class="compact"></table></div><div id="recPicksMore"></div>
       </div>
       <div class="card">
@@ -1056,6 +1075,64 @@ function showUndo(text, key) {
     loadTrackRecord();
   };
 }
+// The cumulative value of $1 on every recommendation, day by day: what was put in and what it was worth.
+let curveKind = store.get("curveKind", "best_buy");
+const CURVE_KINDS = {best_buy: "Best buy", all_picks: "Every pick", policy: "Policy model", agents_buys: "Agents' Buy calls"};
+function drawCurve(one) {
+  const kinds = Object.keys(CURVE_KINDS).filter(k => (one[k]?.curve || []).length);
+  if (!kinds.includes(curveKind)) curveKind = kinds[0] || "best_buy";
+  $("recCurveSeg").innerHTML = Object.entries(CURVE_KINDS).map(([k, l]) =>
+    `<button data-curve="${k}" aria-pressed="${k === curveKind}" ${kinds.includes(k) ? "" : "disabled"}>${l}</button>`).join("");
+  $("recCurveSeg").querySelectorAll("button").forEach(b => b.onclick = () => { curveKind = b.dataset.curve; store.set("curveKind", curveKind); drawCurve(one); });
+  const pts = (one[curveKind] || {}).curve || [];
+  if (!pts.length) { $("recCurve").innerHTML = '<p class="muted small">Nothing bought yet: the first recommendation is bought at the close after its data date.</p>'; $("recCurveTable").innerHTML = ""; return; }
+  const W = 640, H = 220, L = 46, R = 92, T = 10, B = 24, n = pts.length;
+  const ys = pts.flatMap(p => [p.value, p.invested]);
+  let lo = Math.min(0, ...ys), hi = Math.max(...ys);
+  if (hi - lo < 1) hi = lo + 1;
+  const pad = (hi - lo) * 0.08; hi += pad;
+  const x = i => L + (n === 1 ? (W - L - R) / 2 : i / (n - 1) * (W - L - R));
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const step = (hi - lo) / 4, ticks = [0, 1, 2, 3, 4].map(i => lo + i * step);
+  const path = key => pts.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join("");
+  const last = pts[n - 1], dates = [0, Math.floor((n - 1) / 2), n - 1].filter((v, i, a) => a.indexOf(v) === i);
+  // End labels sit at each line's end; nudged apart when the two ends are close.
+  let yv = y(last.value), yi = y(last.invested);
+  if (Math.abs(yv - yi) < 14) { if (yv <= yi) { yv -= 7; yi += 7; } else { yv += 7; yi -= 7; } }
+  $("recCurve").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(CURVE_KINDS[curveKind])}: put in ${usd(last.invested)}, worth ${usd(last.value)} on ${esc(last.date)}">` +
+    ticks.map(t => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/><text class="axis" x="${L - 6}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">$${t.toFixed(t < 10 ? 2 : 0)}</text>`).join("") +
+    dates.map(i => `<text class="axis" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}">${esc(pts[i].date.slice(5))}</text>`).join("") +
+    `<path d="${path("invested")}" fill="none" stroke="var(--cv-in)" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round"/>` +
+    `<path d="${path("value")}" fill="none" stroke="var(--cv-value)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<text class="lbl" x="${W - R + 6}" y="${(yv + 4).toFixed(1)}">Worth ${usd(last.value)}</text>` +
+    `<text class="axis" x="${W - R + 6}" y="${(yi + 4).toFixed(1)}">Put in ${usd(last.invested)}</text>` +
+    `<g id="cvHover" visibility="hidden"><line id="cvX" y1="${T}" y2="${H - B}" stroke="var(--border-strong)"/>` +
+    `<circle id="cvDotV" r="4" fill="var(--cv-value)" stroke="var(--surface)" stroke-width="2"/><circle id="cvDotI" r="4" fill="var(--cv-in)" stroke="var(--surface)" stroke-width="2"/></g>` +
+    `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="cvHit" tabindex="0" aria-label="Move through the days with the arrow keys"/></svg><div class="cv-tip" id="cvTip" hidden></div>`;
+  const svg = $("recCurve").querySelector("svg"), tip = $("cvTip");
+  const show = i => {
+    const p = pts[i], pl = p.value - p.invested;
+    $("cvHover").setAttribute("visibility", "visible");
+    $("cvX").setAttribute("x1", x(i)); $("cvX").setAttribute("x2", x(i));
+    $("cvDotV").setAttribute("cx", x(i)); $("cvDotV").setAttribute("cy", y(p.value));
+    $("cvDotI").setAttribute("cx", x(i)); $("cvDotI").setAttribute("cy", y(p.invested));
+    tip.innerHTML = `<b>${esc(p.date)}</b><br>Worth ${usd(p.value)} · put in ${usd(p.invested)}<br><span class="${pl >= 0 ? "pos" : "neg"}">${susd(pl)} (${p.invested ? spct(pl / p.invested, 1) : "–"})</span>`;
+    tip.hidden = false;
+    const box = svg.getBoundingClientRect(), px = x(i) / W * box.width;
+    tip.style.left = Math.min(Math.max(px - tip.offsetWidth / 2, 0), box.width - tip.offsetWidth) + "px";
+    tip.style.top = (y(Math.max(p.value, p.invested)) / H * box.height - tip.offsetHeight - 10) + "px";
+    cvAt = i;
+  };
+  const hide = () => { $("cvHover").setAttribute("visibility", "hidden"); tip.hidden = true; };
+  let cvAt = n - 1;
+  const hit = $("cvHit");
+  hit.onmousemove = ev => { const box = svg.getBoundingClientRect(), vx = (ev.clientX - box.left) / box.width * W;
+    show(Math.max(0, Math.min(n - 1, Math.round(n === 1 ? 0 : (vx - L) / (W - L - R) * (n - 1))))); };
+  hit.onmouseleave = hide; hit.onblur = hide; hit.onfocus = () => show(cvAt);
+  hit.onkeydown = ev => { const d = {ArrowRight: 1, ArrowLeft: -1}[ev.key]; if (d) { ev.preventDefault(); show(Math.max(0, Math.min(n - 1, cvAt + d))); } };
+  $("recCurveTable").innerHTML = "<tr><th class='l'>Date</th><th>Put in</th><th>Worth</th><th>Profit / loss</th></tr>" +
+    pts.slice().reverse().map(p => `<tr><td class="l">${esc(p.date)}</td><td>${usd(p.invested)}</td><td>${usd(p.value)}</td><td class="${p.value - p.invested >= 0 ? "pos" : "neg"}">${susd(p.value - p.invested)}</td></tr>`).join("");
+}
 // Each table shows its latest 5 data dates; "Load more" adds 5 more.
 const recDays = {picks: 5, policy: 5, agents: 5};
 function recentDays(rows, n) {
@@ -1094,6 +1171,7 @@ async function loadTrackRecord() {
     `<tr><th class="l">Recommendations</th><th>Finished</th><th>Put in</th><th>Worth now</th><th>Profit / loss</th><th>Still open</th><th>Open P/L (latest close)</th></tr>` +
     dollarLine("Best buy each day", one.best_buy) + dollarLine("Every pick (best + runners-up)", one.all_picks) +
     dollarLine("Policy model's picks", one.policy) + dollarLine("AI agents' Buy calls", one.agents_buys);
+  drawCurve(one);
   $("recRule").textContent = `${d.outcome ? d.outcome[0].toUpperCase() + d.outcome.slice(1) + ". " : ""}Beat cost: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade). Overlapping holds are not independent: the sample is the number of data dates, not of rows.`;
   const del = r => `<td><button class="ghost small-btn rec-del" data-key="${esc(r.key)}" title="Hide this row (the saved decision is kept; Show hidden rows brings it back)" aria-label="Hide row">Hide</button></td>`;
   const verdict = r => r.verdict === "correct" ? `<span class="pos"><b>✓ ${r.rating ? "right direction" : "beat cost"}</b></span>` : r.verdict === "wrong" ? `<span class="neg"><b>✗ ${r.rating ? "wrong direction" : "below cost"}</b></span>`
