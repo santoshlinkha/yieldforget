@@ -54,7 +54,7 @@ def test_the_etf_backtest_trades_the_session_after_its_plan():
     assert np.isfinite(lagged).all()
 
 
-def test_a_past_cutoff_never_reuses_a_model_fitted_later_that_week(tmp_path):
+def test_models_are_refitted_every_20_sessions_and_never_used_before_their_fit(tmp_path):
     import pickle
 
     from tradingagents.stocks import daily
@@ -62,15 +62,21 @@ def test_a_past_cutoff_never_reuses_a_model_fitted_later_that_week(tmp_path):
     from tradingagents.stocks.targets import Thresholds
 
     policy = POLICIES["barrier_20"]
-    friday, wednesday = pd.Timestamp("2026-10-23"), pd.Timestamp("2026-10-21")
-    key = daily.bundle_key(friday, policy, P.features_for(), Thresholds())
-    assert key == daily.bundle_key(wednesday, policy, P.features_for(), Thresholds())    # same ISO week
+    fitted, earlier = pd.Timestamp("2026-10-23"), pd.Timestamp("2026-10-21")
+    key = daily.bundle_key(fitted, policy, P.features_for(), Thresholds())
+    assert key == daily.bundle_key(earlier, policy, P.features_for(), Thresholds())    # one recipe, any day
     (tmp_path / "decision_models").mkdir()
-    (tmp_path / "decision_models" / f"{key}.pkl").write_bytes(pickle.dumps({"meta": {"cutoff": "2026-10-23"}}))
-    bundle, art = daily.fit_bundle(None, None, friday, policy, tmp_path, train=False)
-    assert art["reused"] and bundle["meta"]["cutoff"] == "2026-10-23"
-    with pytest.raises(ValueError, match="not fitted"):
-        daily.fit_bundle(None, None, wednesday, policy, tmp_path, train=False)
+    (tmp_path / "decision_models" / f"{key}_2026-10-23.pkl").write_bytes(pickle.dumps({"meta": {"cutoff": "2026-10-23"}}))
+    bundle, art = daily.fit_bundle(None, None, fitted, policy, tmp_path, train=False)
+    assert art["reused"] and art["fitted_on"] == "2026-10-23"
+    # 19 sessions later it is still used; at 20 it is due.
+    nineteen, twenty = pd.Timestamp("2026-11-19"), pd.Timestamp("2026-11-20")
+    assert daily.fit_bundle(None, None, nineteen, policy, tmp_path, train=False)[1]["fitted_on"] == "2026-10-23"
+    with pytest.raises(ValueError, match="20 or more sessions"):
+        daily.fit_bundle(None, None, twenty, policy, tmp_path, train=False)
+    assert daily.fit_bundle(None, None, twenty, policy, tmp_path, train=False, every=30)[1]["reused"]
+    with pytest.raises(ValueError, match="not fitted"):                        # a fit after the cutoff knows the future
+        daily.fit_bundle(None, None, earlier, policy, tmp_path, train=False)
 
 
 def test_as_of_data_drops_every_row_after_the_cutoff():

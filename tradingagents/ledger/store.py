@@ -31,6 +31,10 @@ SLEEVE_DEFAULTS = {
                 "forecast_model": "xgb_quantile"},
 }
 GLOBAL_DEFAULTS = {
+    # Every morning (while the app runs): the forecasts, every model's scores and the daily decision for the latest
+    # close, once per close. Models are refitted only when their last fit is ``retrain_every_sessions`` or more
+    # trading sessions old.
+    "schedule": {"enabled": True, "morning_at": "07:30", "retrain_every_sessions": 20},
     "ai_budget": {"daily_usd": 1.0, "monthly_usd": 10.0, "daily_requests": 200, "monthly_requests": 2000},
     "ai_prices": {},          # "provider/model": {"input": $/M, "output": $/M, "cached_input": $/M}
     "ai_analysts": ["market"],

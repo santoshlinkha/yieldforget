@@ -192,7 +192,7 @@ def evidence(con, policy_name: str, features: list[str], thresholds: Thresholds,
             "chosen_rule": sim.get("chosen")}
 
 
-# --- the model bundle: fitted once per week of data, reused for every decision and every sizing ---
+# --- the model bundle: fitted every ``retrain_every_sessions`` sessions, reused for every decision in between ---
 
 def model_code_hash() -> str:
     """A hash of the source that shapes the fitted models (not of decision or sizing code), so a change to
@@ -209,10 +209,31 @@ def model_code_hash() -> str:
 
 
 def bundle_key(cutoff: pd.Timestamp, policy, features, thresholds) -> str:
-    week = f"{cutoff.isocalendar().year}-W{cutoff.isocalendar().week:02d}"
-    text = json.dumps({"week": week, "policy": policy.version(), "features": features, "thresholds": thresholds.version(),
+    """The recipe's key (policy, features, thresholds, model code): bundles of one recipe differ only in the close
+    they were fitted on, which is in their file name."""
+    text = json.dumps({"policy": policy.version(), "features": features, "thresholds": thresholds.version(),
                        "version": BUNDLE_VERSION, "model_code": model_code_hash()}, sort_keys=True)
     return hashlib.sha256(text.encode()).hexdigest()[:20]
+
+
+def due_for_refit(fitted_on, cutoff, every: int) -> bool:
+    """Whether models fitted on the close ``fitted_on`` are ``every`` or more sessions older than ``cutoff``."""
+    from tradingagents.ledger.sessions import sessions_between
+
+    return sessions_between(pd.Timestamp(fitted_on).date(), pd.Timestamp(cutoff).date()) >= every
+
+
+def latest_fit(folder: Path, key: str, cutoff) -> tuple[Path, str] | None:
+    """The newest ``<key>_<date>.pkl`` fitted on the cutoff or earlier (never a later one: it would know the future)."""
+    found = []
+    for path in Path(folder).glob(f"{key}_*.pkl"):
+        day = path.stem[len(key) + 1:]
+        if len(day) == 10 and day <= str(pd.Timestamp(cutoff).date()):
+            found.append((day, path))
+    if not found:
+        return None
+    day, path = max(found)
+    return path, day
 
 
 def as_of_data(data, cutoff: pd.Timestamp):
@@ -226,34 +247,32 @@ def as_of_data(data, cutoff: pd.Timestamp):
 
 
 def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progress=None, train=True,
-               prices=None) -> tuple[dict, dict]:
-    """The fitted models for this week's data, policy, features and thresholds (training cache).
+               prices=None, every: int = 20) -> tuple[dict, dict]:
+    """The fitted models for this recipe (policy, features, thresholds, model code), refitted every ``every`` sessions.
 
-    A cached bundle is reused only when it was fitted with data through the cutoff or earlier; a bundle from
-    later in the same week would carry what happened after the cutoff, so that cutoff gets its own fit.
-    ``prices`` is ``(executable prices, dividends)`` already cut at the cutoff."""
+    The newest bundle fitted on the cutoff or earlier is reused while it is fewer than ``every`` sessions old; a
+    bundle fitted after the cutoff is never used (it would know what came later). ``prices`` is
+    ``(executable prices, dividends)`` already cut at the cutoff."""
     from tradingagents.research.features import decision_dates
 
     from . import study as S
 
     say = progress or (lambda *_: None)
     feats, th = P.features_for(), Thresholds()
-    key = bundle_key(cutoff, policy, feats, th)
+    recipe = bundle_key(cutoff, policy, feats, th)
     folder = Path(cache_dir) / "decision_models"
-    for name in (key, f"{key}_{cutoff.date()}"):
-        path = folder / f"{name}.pkl"
-        if path.exists():
-            blob = path.read_bytes()
-            bundle = pickle.loads(blob)  # noqa: S301  (the app's own training cache)
-            if str(bundle.get("meta", {}).get("cutoff", "9999")) <= str(cutoff.date()):
-                return bundle, {"key": name, "sha256": hashlib.sha256(blob).hexdigest(), "reused": True}
+    found = latest_fit(folder, recipe, cutoff)
+    if found and not due_for_refit(found[1], cutoff, every):
+        blob = found[0].read_bytes()
+        bundle = pickle.loads(blob)  # noqa: S301  (the app's own training cache)
+        return bundle, {"key": found[0].stem, "sha256": hashlib.sha256(blob).hexdigest(), "reused": True,
+                        "fitted_on": found[1], "refit_every_sessions": every}
+    key = f"{recipe}_{cutoff.date()}"
     path = folder / f"{key}.pkl"
-    if path.exists():      # the week's bundle is from a later cutoff: this cutoff is fitted on its own
-        key = f"{key}_{cutoff.date()}"
-        path = folder / f"{key}.pkl"
     if not train:
-        raise ValueError("the decision models for this week, data and code are not fitted yet: run `stocks today --train` "
-                         "(or POST /api/decisions/run with {\"train\": true})")
+        why = (f"the decision models were fitted on {found[1]}, {every} or more sessions ago" if found else
+               "the decision models for this data and code are not fitted yet")
+        raise ValueError(f"{why}: run `stocks today --train` (or POST /api/decisions/run with {{\"train\": true}})")
     t0 = time.time()
     dates = decision_dates(data.close.index[data.close.index <= cutoff], start="2006-01-01", every=S.EVERY)
     say("building the training panel")
@@ -279,7 +298,7 @@ def fit_bundle(data, macro, cutoff, policy, cache_dir: Path, device="cpu", progr
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(blob)       # this week's key points at it too
         return bundle, {"key": key, "sha256": hashlib.sha256(blob).hexdigest(), "reused": True,
-                        "same_data_as": seen["bundle_key"], "fingerprint": fp}
+                        "same_data_as": seen["bundle_key"], "fingerprint": fp, "fitted_on": str(cutoff.date())}
     edges = S.fold_edges(panel.index.get_level_values("date"))
     say("cross-fitting the ranker")
     oof = S.crossfit_primary(panel, feats, edges, [lambda: Ranker(device)])
@@ -584,9 +603,11 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     say("Reading the economic data known at the close", 0.34)
     macro = M.features(pd.DatetimeIndex([cutoff]), cache_dir)
     say("Loading this week's fitted models" + (" (fitting them if missing: several minutes)" if train else ""), 0.37)
+    every = int((store.get("global", "schedule") or {}).get("retrain_every_sessions") or 20)
     bundle, art = fit_bundle(data, M.features(P.decision_dates_for(sessions, cutoff), cache_dir) if train else None,
                              cutoff, policy, cache_dir, device,
-                             lambda text: say(f"Fitting the models: {text}", fit_frac.get(text)), train, prices=(px, div))
+                             lambda text: say(f"Fitting the models: {text}", fit_frac.get(text)), train, prices=(px, div),
+                             every=every)
     say("Scoring every stock on today's close", 0.78)
     at = P.build(data, policy.horizon, dates=pd.DatetimeIndex([cutoff]), macro=macro)
     today = score_today(bundle, at.xs(cutoff, level="date", drop_level=False))
