@@ -199,6 +199,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .plan-sum { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .plan-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; margin-bottom: 4px; }
 .plan-kv td { padding: 3px 6px; border: 0; font-size: 13px; }
+.track-btn.on { color: var(--accent, #2563eb); background: var(--accent-soft, #eff4ff); border-color: transparent; }
 .bell-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 .sig-sum { display: grid; gap: 6px; }
 .sig-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
@@ -409,7 +410,7 @@ details[open] > summary::after { content: "Hide"; }
       <div class="card" id="newsCard"><h2>News</h2><p class="muted small">Newest first. Headlines from Yahoo Finance, kept by this app as they appear; nothing is summarized by AI.</p><ul class="news" id="news"></ul></div>
     </div>
     <div id="colR">
-      <div class="card"><h2>In your account</h2><div id="mine"></div></div>
+      <div class="card"><div class="card-head"><h2 style="margin:0">In your account</h2><span id="trackBox"></span></div><div id="mine"></div></div>
       <div class="card"><h2>Verdict, signals and action</h2><div id="sig"><p class="muted">Loading…</p></div></div>
       <div class="card"><h2>Agents' entry plan</h2><div id="eplan"><p class="muted">Loading…</p></div></div>
       <div class="card"><h2>Saved analysis reports</h2>
@@ -760,6 +761,19 @@ async function wireBell() {
   };
 }
 function showErr(e) { $("eplan").insertAdjacentHTML("afterbegin", `<p class="neg small">${esc(e.message)}</p>`); }
+// Track / Untrack: follow this stock on the Portfolio page (the models' watchlist, also scored every morning).
+async function drawTrack() {
+  let d = {tickers: []};
+  try { d = await getJSON("/api/tracked"); } catch (e) { return; }
+  const on = d.tickers.includes(symbol);
+  $("trackBox").innerHTML = `<button class="ghost small-btn track-btn${on ? " on" : ""}" id="trackBtn" aria-pressed="${on}" ` +
+    `title="${on ? "Stop tracking it on the Portfolio page" : "Follow it on the Portfolio page (also scored by the models every morning)"}">${on ? "✓ Tracking" : "+ Track"}</button>`;
+  $("trackBtn").onclick = async () => {
+    const list = on ? d.tickers.filter(t => t !== symbol) : [...d.tickers, symbol];
+    try { await getJSON("/api/stocks/watchlist", {tickers: list}); } catch (e) { return; }
+    drawTrack();
+  };
+}
 async function loadEntryPlans() {
   let r;
   try { r = await getJSON("/api/entry-plans?ticker=" + encodeURIComponent(symbol)); }
@@ -843,6 +857,7 @@ async function load() {
     if (m.plan) h += `<p>Latest plan: now ${pct(m.plan.current)}, target <b>${pct(m.plan.target)}</b>${Math.abs(m.plan.trade) >= 0.01 ? `, ${m.plan.trade > 0 ? "buy" : "sell"} ${money(Math.abs(m.plan.trade))}` : ""}.</p><p class="muted small">${esc(m.plan.reason)}</p>`;
     if (m.official.length) h += `<details><summary class="small">In ${m.official.length} official recommendation(s)</summary><table>${m.official.map(o => `<tr><td class="l">${esc(o.session)}</td><td>${pct(o.target)}</td><td>${esc(o.status)}</td></tr>`).join("")}</table></details>`;
     $("mine").innerHTML = h;
+    drawTrack();
   }
 
   const fc = d.forecast;

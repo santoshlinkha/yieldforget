@@ -871,6 +871,12 @@ details[open] > summary::after { content: "Hide"; }
         <p class="small" id="pfMsg"></p>
       </div>
       <div class="card"><h3>Holdings</h3><div class="table-wrap"><table id="pfTable" class="compact"></table></div></div>
+      <div class="card">
+        <div class="card-head"><h3>Tracked tickers</h3>
+          <div class="row" style="margin:0;gap:6px"><input type="text" id="trkAdd" placeholder="Add tickers: AAPL, COST" style="width:200px"><button class="ghost small-btn" id="trkAddBtn">Track</button></div></div>
+        <p class="muted small" style="margin:0 0 8px">Stocks you follow without holding them. They are also scored by the models every morning.</p>
+        <div class="table-wrap"><table id="trkTable" class="compact"></table></div>
+      </div>
       <div class="card"><h3>Trades</h3><div class="table-wrap"><table id="pfTrades" class="compact"></table></div></div>
     </section>
 
@@ -1081,7 +1087,7 @@ async function api(path, body) {
 const TAB_LOADERS = {
   today: () => {},
   trend: () => { loadMarket(); loadRotation(); loadSectorForecast(); },
-  portfolio: () => loadPortfolio(),
+  portfolio: () => { loadPortfolio(); loadTracked(); },
   scanTab: () => { loadScreen(); loadSignalsBoard(); },
   forecasts: () => { loadForecasts(); loadLive(); loadHardware(); },
   decisions: () => { loadDecisions(); loadAiDecisions(); },
@@ -1286,6 +1292,32 @@ async function checkEntryAlerts() {
 }
 checkEntryAlerts();
 setInterval(checkEntryAlerts, 5 * 60 * 1000);
+// --- tracked tickers: follow stocks you do not hold (the models' watchlist) ---
+async function saveTracked(list) {
+  await api("/api/stocks/watchlist", {tickers: list});
+  loadTracked();
+}
+async function loadTracked() {
+  let d;
+  try { d = await apiItem("/api/tracked"); } catch (e) { $("trkTable").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
+  const mv = v => v == null ? "–" : `<span class="${v >= 0 ? "pos" : "neg"}">${spct(v, 1)}</span>`;
+  $("trkTable").innerHTML = d.rows.length
+    ? `<tr><th class="l">Ticker</th><th class="l">Company</th><th>LTP</th><th>1 day</th><th>1 month</th><th class="l">Model</th><th class="l">AI</th><th></th></tr>` +
+      d.rows.map(r => `<tr><td class="l"><b>${tk(r.ticker)}</b></td><td class="l muted small">${esc(r.name || "")}</td>` +
+        `<td>${r.last == null ? "–" : usd(r.last)}</td><td>${mv(r.d1)}</td><td>${mv(r.m1)}</td>` +
+        `<td class="l">${r.verdict ? `<span class="vb ${word(r.verdict)}">${word(r.verdict)}</span>` : ""}</td>` +
+        `<td class="l">${r.rating ? `<span class="vb ${aiWord(r.rating, false)[0]}">${aiWord(r.rating, false)[0]}</span>` : ""}</td>` +
+        `<td><button class="ghost small-btn" data-untrack="${esc(r.ticker)}" title="Stop tracking ${esc(r.ticker)}">✕</button></td></tr>`).join("")
+    : `<tr><td class="muted l">No tracked tickers yet: add some above.</td></tr>`;
+  $("trkTable").querySelectorAll("[data-untrack]").forEach(b => b.onclick = () => saveTracked(d.tickers.filter(t => t !== b.dataset.untrack)));
+  $("trkAddBtn").onclick = () => {
+    const add = $("trkAdd").value.toUpperCase().split(/[\s,;]+/).filter(Boolean);
+    if (!add.length) return;
+    $("trkAdd").value = "";
+    saveTracked([...new Set([...d.tickers, ...add])]).catch(e => showError(e.message));
+  };
+  $("trkAdd").onkeydown = e => { if (e.key === "Enter") $("trkAddBtn").click(); };
+}
 // --- the TradingAgents team on the model's pick: run it, watch it, read its full report ---
 let agentTicker = null, agentDay = null, agentPolling = false, agentWasRunning = false, lastPicks = [], lastTrade = null;
 async function loadAgentReport() {

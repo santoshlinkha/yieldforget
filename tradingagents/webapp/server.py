@@ -1633,6 +1633,31 @@ class App:
         self._INTRADAY[key] = (_time.time(), out)
         return out
 
+    def tracked(self) -> dict:
+        """The tickers you track (the watchlist the models also score): the latest close, 1-day and 1-month moves, the
+        model's verdict and the agents' latest call. Reads only; prices from the local store."""
+        from tradingagents.research.prices import bars
+        from tradingagents.stocks.data import parse_tickers
+
+        tickers = parse_tickers(" ".join(self.store.get("global", "stock_watchlist") or []))
+        if not tickers:
+            return {"tickers": [], "rows": []}
+        try:
+            close = bars(tickers, self.cache_dir)["Close"]
+        except Exception:   # no prices yet: the rows say so
+            close = None
+        board = {r["ticker"]: r for r in self.signals()["rows"]}
+        rows = []
+        for t in tickers:
+            s = close[t].dropna() if close is not None and t in close else None
+            ret = (lambda n: float(s.iloc[-1] / s.iloc[-1 - n] - 1) if s is not None and len(s) > n else None)
+            b = board.get(t) or {}
+            rows.append({"ticker": t, "name": describe(t), "last": float(s.iloc[-1]) if s is not None and len(s) else None,
+                         "as_of": str(s.index[-1].date()) if s is not None and len(s) else None,
+                         "d1": ret(1), "m1": ret(21), "verdict": (b.get("verdict") or {}).get("action"),
+                         "rating": (b.get("rating") or {}).get("rating")})
+        return {"tickers": tickers, "rows": rows}
+
     def entry_alerts(self) -> dict:
         """The watched entry plans against the latest close. The price part of an entry condition is checkable: a range
         is met when the close is inside it, a limit when the close is at or below it, a market entry at once. The
@@ -2579,6 +2604,8 @@ def make_handler(app: App):
                     self._json(app.analysis_state())
                 elif url.path == "/api/intraday":
                     self._json(app.intraday(query.get("symbol", ""), query.get("span", "1d")))
+                elif url.path == "/api/tracked":
+                    self._json(app.tracked())
                 elif url.path == "/api/entry-alerts":
                     self._json(app.entry_alerts())
                 elif url.path == "/api/entry-plans":

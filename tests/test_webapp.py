@@ -717,3 +717,20 @@ def test_a_watched_entry_plan_is_met_by_its_price_condition(tmp_path, monkeypatc
     monkeypatch.setattr(srv, "latest_prices", lambda cache, tickers: {"AAA": 98.0, "BBB": 51.0, "CCC": 11.0})
     got = {x["ticker"]: x["met"] for x in app.entry_alerts()["alerts"]}
     assert got == {"AAA": True, "BBB": False, "CCC": True}       # inside the range; above the limit; market entry
+
+
+def test_tracked_tickers_show_their_price_moves_and_calls(tmp_path, monkeypatch):
+    import numpy as np
+    import pandas as pd
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    app.store.set("global", "stock_watchlist", ["AAA"])
+    idx = pd.bdate_range("2026-08-01", periods=40)
+    close = pd.DataFrame({"AAA": np.linspace(100, 139, 40)}, index=idx)
+    import tradingagents.research.prices as prices
+    monkeypatch.setattr(prices, "bars", lambda tickers, cache: {"Close": close})
+    monkeypatch.setattr(app, "signals", lambda *a, **k: {"rows": [{"ticker": "AAA", "verdict": {"action": "WAIT"},
+                                                                   "rating": {"rating": "Hold"}}]})
+    row = app.tracked()["rows"][0]
+    assert row["last"] == 139.0 and row["d1"] == pytest.approx(139 / 138 - 1) and row["m1"] == pytest.approx(139 / 118 - 1)
+    assert row["verdict"] == "WAIT" and row["rating"] == "Hold"
