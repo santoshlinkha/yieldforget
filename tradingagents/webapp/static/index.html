@@ -197,6 +197,10 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .trade-top > div > .card { flex: 1 1 auto; margin-bottom: 16px; }
 .trade-top > div > .card:last-child { margin-bottom: 16px; }
 .trade-bottom > .card { margin-bottom: 16px; height: auto; }
+.trend-row { grid-template-columns: 1fr 1fr; align-items: stretch; }
+.trend-row > .card { margin-bottom: 16px; min-width: 0; }
+#trend .trend-row #secBox { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (max-width: 900px) { .trend-row { grid-template-columns: 1fr; } }
 #today .card, #trend .card { min-width: 0; overflow: hidden; }
 #today .table-wrap, #trend .table-wrap { overflow-x: hidden; }
 #today .table-wrap.scroll-x, #trend .table-wrap.scroll-x { overflow-x: auto; }
@@ -503,42 +507,45 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       <div class="page-head"><div><h2>Trend</h2><p>The market and its sectors: where prices are moving, which sectors are rotating in or out and why, and the market's breadth. Context for the trade, not part of the model's decision.</p></div>
         <span class="muted small" id="mkAsOf">Loading market data…</span></div>
         <div class="tiles" id="mkTiles"></div>
-        <div class="card"><div class="econ" id="aiEcon"><p class="muted">Loading…</p></div></div>
-        <div class="split">
-          <div>
-            <div class="card">
-              <div class="card-head">
-                <h3>Why it's happening</h3>
-                <span><span class="muted" id="mkStatus"></span> <button class="ghost" id="mkExplain">Explain today's moves</button></span>
-              </div>
-              <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
+        <!-- Rows of two equal panels, each pair the same height. -->
+        <div class="split trend-row">
+          <div class="card"><div class="econ" id="aiEcon"><p class="muted">Loading…</p></div></div>
+          <div class="card">
+            <div class="card-head">
+              <h3>Why it's happening</h3>
+              <span><span class="muted" id="mkStatus"></span> <button class="ghost" id="mkExplain">Explain today's moves</button></span>
             </div>
-            <div class="card">
-              <h3>S&amp;P 500 under the surface</h3>
-              <p class="muted" id="mkBreadth"></p>
-              <div class="movers">
-                <div><h4>Best, last month</h4><ol id="mkLeaders"></ol></div>
-                <div><h4>Worst, last month</h4><ol id="mkLaggards"></ol></div>
-              </div>
-            </div>
-            <div class="card">
-              <h3>Returns</h3>
-              <p class="muted">Yields and the VIX change in points; everything else in percent.</p>
-              <div class="table-wrap"><table id="mkTable" class="compact"></table></div>
+            <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
+          </div>
+        </div>
+        <div class="split trend-row">
+          <div class="card">
+            <div class="card-head"><h3>Sector rotation</h3><span class="muted" id="rotAsOf">Loading…</span></div>
+            <p class="muted">Sectors move through four stages against the market: Improving → Leading → Weakening → Lagging. The alerts are the early stages, ahead of the turn, with what moved them.</p>
+            <div id="rotAlerts"></div>
+            <details class="small" style="margin-top:10px"><summary><b>Every sector</b></summary>
+              <div class="table-wrap scroll-x"><table id="rotTable" class="compact"></table></div></details>
+            <p class="muted small" id="rotMethod"></p>
+          </div>
+          <div class="card"><div id="secBox"></div></div>
+        </div>
+        <div class="split trend-row">
+          <div class="card"><h3>Sectors, last month</h3><div class="bars" id="mkSectors"></div></div>
+          <div class="card"><h3>Disruptive themes, last month</h3><p class="muted">Median move of each theme's stocks and funds.</p><div class="bars" id="mkThemes"></div></div>
+        </div>
+        <div class="split trend-row">
+          <div class="card">
+            <h3>S&amp;P 500 under the surface</h3>
+            <p class="muted" id="mkBreadth"></p>
+            <div class="movers">
+              <div><h4>Best, last month</h4><ol id="mkLeaders"></ol></div>
+              <div><h4>Worst, last month</h4><ol id="mkLaggards"></ol></div>
             </div>
           </div>
-          <div>
-            <div class="card">
-              <div class="card-head"><h3>Sector rotation</h3><span class="muted" id="rotAsOf">Loading…</span></div>
-              <p class="muted">Sectors move through four stages against the market: Improving → Leading → Weakening → Lagging. The alerts are the early stages, ahead of the turn, with what moved them.</p>
-              <div id="rotAlerts"></div>
-              <div id="secBox"></div>
-              <details class="small" style="margin-top:10px"><summary><b>Every sector</b></summary>
-                <div class="table-wrap scroll-x"><table id="rotTable" class="compact"></table></div></details>
-              <p class="muted small" id="rotMethod"></p>
-            </div>
-            <div class="card"><h3>Sectors, last month</h3><div class="bars" id="mkSectors"></div></div>
-            <div class="card"><h3>Disruptive themes, last month</h3><p class="muted">Median move of each theme's stocks and funds.</p><div class="bars" id="mkThemes"></div></div>
+          <div class="card">
+            <h3>Returns</h3>
+            <p class="muted">Yields and the VIX change in points; everything else in percent.</p>
+            <div class="table-wrap"><table id="mkTable" class="compact"></table></div>
           </div>
         </div>
     </section>
