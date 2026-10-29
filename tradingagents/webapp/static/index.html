@@ -213,6 +213,17 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .trade-top > div > .card { flex: 1 1 auto; margin-bottom: 16px; }
 .trade-top > div > .card:last-child { margin-bottom: 16px; }
 .trade-bottom > .card { margin-bottom: 16px; height: auto; }
+.runners .rank1 { padding: 1px 7px; font-size: 10px; box-shadow: none; vertical-align: 1px; }
+.runners tr.first-pick td { background: color-mix(in srgb, #12b386 7%, transparent); }
+.ai-pick .order-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ai-others { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.live-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.live-dot { width: 9px; height: 9px; border-radius: 50%; background: #12b386; box-shadow: 0 0 0 0 rgba(18, 179, 134, .6);
+  animation: live-pulse 1.6s infinite; }
+@keyframes live-pulse { 70% { box-shadow: 0 0 0 8px rgba(18, 179, 134, 0); } 100% { box-shadow: 0 0 0 0 rgba(18, 179, 134, 0); } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+.live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
+.live-steps li { margin: 2px 0; }
 #sellBox .sell-fit { width: 100%; table-layout: fixed; }
 .wt { display: inline-flex; align-items: center; gap: 6px; }
 .wt-bar { width: 46px; height: 6px; border-radius: 3px; background: var(--chart-grid); overflow: hidden; display: inline-block; }
@@ -515,9 +526,10 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       <div class="split trade-top">
         <div>
           <div class="card">
-            <div class="card-head"><h3>Best stock to buy</h3><span class="muted small" id="buyMeta"></span></div>
+            <div class="card-head"><h3>Model's picks</h3><span class="muted small" id="buyMeta"></span></div>
             <div id="buyBox"><p class="muted">Loading…</p></div>
-            <div id="agentBox"></div>
+            <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
+            <p class="muted small" id="runnersNote" style="margin:6px 0 0"></p>
           </div>
         </div>
         <div>
@@ -526,10 +538,13 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
             <div id="sellBox"></div>
           </div>
           <div class="card">
-            <h3>Runners-up</h3>
-            <div class="row" style="margin:0 0 6px;justify-content:space-between;align-items:flex-start"><p class="muted small" id="runnersNote" style="margin:0">The next stocks that pass the model's gates, in its order, in case the first is not wanted.</p>
-              <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on each runner-up, one after another (free models first)">Run the AI agents on all</button></div>
-            <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
+            <div class="card-head"><h3>AI's pick</h3>
+              <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on each of the model's picks, one after another (free models first; each stock at most once a day)">Ask the AI to pick</button></div>
+            <div id="aiPickBox"><p class="muted small">Loading…</p></div>
+          </div>
+          <div class="card">
+            <h3>AI agents live</h3>
+            <div id="agentBox"></div>
           </div>
         </div>
       </div>
@@ -995,17 +1010,8 @@ async function loadTrade() {
     const sz = (x && x.size) || {};
     // The tested policy buys at the next session's close, whatever it is: that is the entry. The last close is a
     // dated reference for sizing and for the illustrative dollar levels; stop and target follow the actual fill.
-    $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side ${experimental ? "paper" : "buy"}">${experimental ? "1<sup>st</sup> Pick" : "BUY"}</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
-        <button class="ghost small-btn" id="boughtBest" title="Record your actual fill (Portfolio tab)">I bought this</button></div>
-      <table class="compact" style="margin-top:10px">
-       <tr><th class="l">Entry</th><td><b>at the close of ${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever that close is <span class="muted">(the policy the model was tested on; no limit price)</span></td></tr>
-       <tr><th class="l">Weight</th><td>${weightCell(x.ticker, true)}</td></tr>
-       <tr><th class="l">Reference close</th><td>${usd(x.last_close)} <span class="muted">on ${esc(x.reference_date || t.data_to)} (not an order price)</span></td></tr>
-       <tr><th class="l">Sell target</th><td class="pos">${spct(x.target_pct, 1)} from the fill <span class="muted">(${usd(x.target)} if filled at the reference close)</span></td></tr>
-       <tr><th class="l">Stop loss</th><td class="neg">${spct(x.stop_pct, 1)} from the fill <span class="muted">(${usd(x.stop)} if filled at the reference close)</span></td></tr>
-       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (each checked on a close)</td></tr></table>` +
-      (x.patient ? `<details class="small" style="margin-top:6px"><summary>Untested alternative: a patient limit</summary><p class="muted">Limit ${usd(x.patient.price)}, the signal model's median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not the chance of a fill. Returns after such fills were never evaluated. Stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)}.</p></details>` : "")
-      : "") + (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
+    $("buyBox").innerHTML = (x ? `<p class="small" style="margin:0 0 8px">Buy at the close of <b>${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever it is (the rule the model was tested on). Sell when a close reaches <span class="pos">Sell</span> or <span class="neg">Stop</span>, or ${x.horizon} sessions after buying.</p>` : "") +
+      (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
     // Net: the profit or loss so far in dollars (shares × (last close − your fill)), before the sale's cost.
     const netCell = s => {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
@@ -1019,25 +1025,27 @@ async function loadTrade() {
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
     // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
     $("runnersTable").className = "compact runners";
-    $("runnersTable").innerHTML = t.runners_up.length
-      ? `<colgroup><col style="width:13%"><col style="width:14%"><col style="width:14%"><col style="width:13%"><col style="width:11%"><col style="width:11%"><col style="width:24%"></colgroup>` +
+    const allPicks = [...(x ? [x] : []), ...t.runners_up];
+    $("runnersTable").innerHTML = allPicks.length
+      ? `<colgroup><col style="width:17%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:11%"><col style="width:11%"><col style="width:22%"></colgroup>` +
         `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
         `<th class="num" title="Sell target: sell when a close reaches this far above the fill">Sell</th><th class="num" title="Stop loss: sell when a close falls this far below the fill">Stop</th><th class="l">AI agents</th></tr>` +
-        t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td>` +
+        allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l">${i === 0 ? '<span class="side paper rank1">1<sup>st</sup></span> ' : ""}<b>${tk(x.ticker)}</b></td>` +
           `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
           `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
-    $("runnersAll").hidden = !t.runners_up.length;
+    $("runnersAll").hidden = !allPicks.length;
     $("runnersAll").onclick = async () => {
-      try { await api("/api/ai-decisions", {tickers: t.runners_up.map(x => x.ticker), analysts: ["market", "social", "news", "fundamentals"], date: t.data_to}); }
+      try { await api("/api/ai-decisions", {tickers: allPicks.map(x => x.ticker), analysts: ["market", "social", "news", "fundamentals"], date: t.data_to}); }
       catch (e) { showError(e.message); }
-      agentTicker = t.runners_up[0].ticker; loadAgentReport(); runnerAgents(t.runners_up);
+      agentTicker = allPicks[0].ticker; loadAgentReport(); runnerAgents(allPicks);
     };
-    runnerAgents(t.runners_up);
+    lastPicks = allPicks;
+    runnerAgents(allPicks);
     // The fill is whatever the next close was: ask for it rather than pre-filling the reference close.
     if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfSide").value = "buy"; $("pfPrice").value = ""; $("pfPrice").placeholder = "your actual fill price"; $("pfDate").value = x.entry?.session || ""; $("pfUnits").focus(); };
-    $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted.";
+    $("runnersNote").textContent = allPicks.length ? "Every stock that passes the model's gates, in its order; the weights split the trading budget across them." : "";
   }
 
   const pol = t.policy || {};
@@ -1052,7 +1060,7 @@ async function loadTrade() {
         [...(pol.held || []), ...(pol.top || [])].map(rowP).join("") + "</table>" : "<p class='muted small'>No stock clears the buy margin and the risk budget: cash.</p>");
   }
 
-  agentTicker = agentTicker && t.runners_up.some(x => x.ticker === agentTicker) ? agentTicker : (t.best ? t.best.ticker : null);
+  agentTicker = agentTicker && [t.best, ...t.runners_up].some(x => x && x.ticker === agentTicker) ? agentTicker : (t.best ? t.best.ticker : null);
   agentDay = t.data_to;
   document.querySelectorAll("[data-agents]").forEach(b => b.onclick = () => { agentTicker = b.dataset.agents; loadAgentReport(); runAgents(); });
   loadAgentReport();
@@ -1060,16 +1068,23 @@ async function loadTrade() {
   loadRecord();
 }
 // --- the TradingAgents team on the model's pick: run it, watch it, read its full report ---
-let agentTicker = null, agentDay = null, agentPolling = false;
+let agentTicker = null, agentDay = null, agentPolling = false, agentWasRunning = false, lastPicks = [];
 async function loadAgentReport() {
   const box = $("agentBox");
   if (!agentTicker) { box.innerHTML = ""; return; }
   let r = {available: false}, j = {};
   try { [r, j] = await Promise.all([api("/api/agent-report?ticker=" + encodeURIComponent(agentTicker)), api("/api/analyze")]); } catch (e) { /* shown as no report */ }
-  const mine = j.running && (j.progress || "").startsWith(agentTicker + " ");
-  let h = `<div style="margin:16px 0 4px;padding-top:12px;border-top:1px solid var(--border)"><b style="font-size:15px">AI agents' view of ${tk(agentTicker)}</b>` +
+  const runningOn = j.running ? String(j.progress || "").split(" ")[0] : null;
+  let h = "";
+  if (j.running) {
+    // Live: the stock being analysed, the step it is on, and the last steps as they happen.
+    const evs = (j.events || []).slice(-8).reverse();
+    h += `<div class="live-head"><span class="live-dot"></span><b>Running the AI agents on ${tk(runningOn)}</b></div>` + jobLine(j, "analysis") +
+      (evs.length ? `<ol class="live-steps">${evs.map(e => `<li><span class="muted">${esc(e.at)}</span> ${esc(e.text)}</li>`).join("")}</ol>` : "");
+  }
+  h += `<div style="margin:${j.running ? "12px" : "0"} 0 4px${j.running ? ";padding-top:10px;border-top:1px solid var(--border)" : ""}"><b style="font-size:15px">${tk(agentTicker)}</b>` +
     `<div class="muted small">TradingAgents team: four analysts, a bull/bear debate, a trader, a risk debate and a portfolio manager</div></div>`;
-  if (j.running) h += jobLine(j, "analysis") + (mine ? "" : `<p class="muted small">Another analysis is running; wait for it to finish.</p>`);
+  if (j.running) h += "";
   else h += `<div class="row" style="margin:4px 0 8px"><button id="runAgentsBtn">${r.available ? "Run again" : "Run the AI agents"} on ${esc(agentTicker)}</button>` +
     `<span class="muted small">all four analysts, as of ${esc(agentDay || "the last close")}; free models first (Gemini, then OpenRouter), a few minutes</span></div>` +
     (j.error && (j.attempts || []).length ? `<details class="small"><summary><span class="neg">Last run failed</span> · ${esc(shortFail(j.attempts, j.error))} ` +
@@ -1104,6 +1119,8 @@ async function loadAgentReport() {
     catch (e) { $("agentFullBody").textContent = e.message; }
   };
   if (j.running && !agentPolling) { agentPolling = true; setTimeout(() => { agentPolling = false; loadAgentReport(); }, 2000); }
+  if (agentWasRunning && !j.running && lastPicks.length) runnerAgents(lastPicks);   // just finished: refresh the AI's pick
+  agentWasRunning = !!j.running;
 }
 // The agents' latest call on a stock: their own rating and what it means as an action, the day it was for and the
 // model that ran it; a later run that failed is said under it (the reason in a few words).
@@ -1120,14 +1137,38 @@ function agentCell(r) {
   return h;
 }
 async function runnerAgents(list) {
+  const seen = [];
   for (const x of list) {
     const cell = document.querySelector(`[data-agentcell="${x.ticker}"]`);
-    if (!cell) continue;
     try {
       const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
-      cell.innerHTML = agentCell(r);
-    } catch (e) { cell.textContent = "–"; }
+      if (cell) cell.innerHTML = agentCell(r);
+      seen.push({ticker: x.ticker, r});
+    } catch (e) { if (cell) cell.textContent = "–"; }
   }
+  renderAiPick(seen);
+}
+const AI_RANK = {buy: 5, overweight: 4, hold: 3, underweight: 2, sell: 1};
+// The AI's pick: of the model's picks the agents have read, the one they rate highest (ties: the model's order).
+function renderAiPick(seen) {
+  const rated = seen.filter(s => s.r.available && s.r.agent_rating)
+    .map((s, i) => ({...s, i, score: AI_RANK[String(s.r.agent_rating).toLowerCase()] || 0}));
+  if (!rated.length) {
+    $("aiPickBox").innerHTML = `<p class="muted small">The agents have not read the model's picks yet. <b>Ask the AI to pick</b> runs them on each (a few minutes a stock; each at most once a day).</p>`;
+    return;
+  }
+  const best = rated.slice().sort((a, b) => b.score - a.score || a.i - b.i)[0], r = best.r;
+  const act = r.agent_action || "", cls = /BUY/.test(act) ? "pos" : /SELL|AVOID/.test(act) ? "neg" : "";
+  const short = m => String(m || "").split("/").pop().replace(":free", "");
+  const buys = best.score >= 4;
+  $("aiPickBox").innerHTML =
+    `<div class="ai-pick"><div class="order-head"><span class="side ${buys ? "buy" : "paper"}">${buys ? "AI's pick" : "No AI buy"}</span>` +
+    `<strong style="font-size:20px">${tk(best.ticker)}</strong><span class="rn-badge ${cls}">${esc(r.agent_rating)}${act ? ` → ${esc(act)}` : ""}</span></div>` +
+    `<p class="muted small" style="margin:6px 0">${buys ? "The strongest call" : "None of the picks is rated Buy or Overweight; the strongest call"} of the ${rated.length} the agents read, as of ${esc(r.date)}${r.agent_models ? ` · ${esc(short(r.agent_models))}` : ""}.` +
+    ` <button class="ghost small-btn" data-agentshow="${esc(best.ticker)}">Read it</button></p>` +
+    `<div class="ai-others small">${rated.filter(x => x !== best).map(x => `<span>${esc(x.ticker)} <span class="muted">${esc(x.r.agent_rating)}</span></span>`).join("")}</div></div>` +
+    `<p class="muted small" style="margin:6px 0 0">The agents' view is context; the model's numbers decide.</p>`;
+  document.querySelectorAll("[data-agentshow]").forEach(b => b.onclick = () => { agentTicker = b.dataset.agentshow; loadAgentReport(); });
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
