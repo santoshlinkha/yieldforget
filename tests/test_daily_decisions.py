@@ -248,3 +248,19 @@ def test_companies_added_in_settings_compete_with_the_index_members():
     assert [x["ticker"] for x in without] == ["AAA"]                     # outside the index: not a candidate
     lines = daily.entries(*args, validated=True, cutoff=None, execute="2026-10-26", extra={"PLTR"})
     assert [x["ticker"] for x in lines] == ["PLTR", "AAA"]              # ranked with the members, by score
+
+
+@pytest.mark.parametrize("q10", [np.nan, np.inf])
+def test_missing_downside_estimate_blocks_entry_unless_the_rule_says_otherwise(q10):
+    today = pd.DataFrame({"expected_net": [0.05], "net_sd": [0.1], "net_q10": [q10], "expected_excess": [0.02],
+                          "p_win": [0.7], "p_risk": [0.05], "sigma": [0.02], "cost_rt": [0.003], "score_pct": [0.99],
+                          "in_index": [True], "risk_informative": [True]}, index=["AAA"])
+    r = {**daily.DEFAULT_RULES, "max_names": 5, "max_position_share": 0.25, "min_order": 1.0, "max_large_loss_prob": 0.15}
+    args = (set(), set())
+    kw = dict(validated=True, cutoff=None, execute="2026-10-26")
+    ira = {"total": 6000.0, "by_ticker": {}}
+    lines = daily.entries(today, *args, r, 1000.0, 1000.0, ira, pd.Series({"AAA": 10.0}), **kw)
+    assert lines[0]["action"] == "WAIT" and any("no downside estimate" in b for b in lines[0]["blocked"])
+    lines = daily.entries(today, *args, {**r, "require_downside_estimate": False}, 1000.0, 1000.0, ira,
+                          pd.Series({"AAA": 10.0}), **kw)
+    assert lines[0]["action"] == "ENTER" and any("require_downside_estimate" in n for n in lines[0]["notes"])

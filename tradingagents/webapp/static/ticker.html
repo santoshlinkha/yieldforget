@@ -10,22 +10,22 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #64748b; --faint: #94a3b8;
+  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #586377; --faint: #94a3b8;
   --border: #e5e7eb; --brand-bg: #0b1220; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-  --accent: #2563eb; --buy: #059669; --sell: #dc2626; --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d;
+  --accent: #2563eb; --on-accent: #ffffff; --buy: #047857; --sell: #dc2626; --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d;
   --chart-grid: #eef0f3; --s1: #2563eb; --s2: #94a3b8;
   --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06); --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
-    --border: #1f2937; --brand-bg: #060a13; --accent: #60a5fa; --buy: #34d399; --sell: #f87171;
+    --border: #1f2937; --brand-bg: #060a13; --accent: #60a5fa; --on-accent: #0b1220; --buy: #34d399; --sell: #f87171;
     --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --chart-grid: #1c2433; --s1: #60a5fa; --s2: #64748b; --shadow: none;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
-  --border: #1f2937; --brand-bg: #060a13; --accent: #60a5fa; --buy: #34d399; --sell: #f87171;
+  --border: #1f2937; --brand-bg: #060a13; --accent: #60a5fa; --on-accent: #0b1220; --buy: #34d399; --sell: #f87171;
   --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --chart-grid: #1c2433; --s1: #60a5fa; --s2: #64748b; --shadow: none;
 }
 * { box-sizing: border-box; }
@@ -74,7 +74,7 @@ th:first-child, td:first-child, th.l, td.l { text-align: left; }
 .note { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
 .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .tabs button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
-.tabs button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tabs button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .chips button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; background: var(--c); margin-right: 6px; vertical-align: middle; }
@@ -115,7 +115,7 @@ h3.sec:first-of-type { border-top: 0; padding-top: 0; margin-top: 4px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --accent-soft: #172554; --border-strong: #334155; --focus: rgba(96, 165, 250, .3); } }
 :root[data-theme="dark"] { color-scheme: dark; --accent-soft: #172554; --border-strong: #334155; --focus: rgba(96, 165, 250, .3); }
 button { font: inherit; font-size: 13px; font-weight: 600; line-height: 1.2; padding: 8px 14px; border-radius: 8px; cursor: pointer;
-  border: 1px solid var(--accent); background: var(--accent); color: #fff; display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; gap: 6px;
   transition: filter .12s, background .12s, box-shadow .12s, transform .05s; }
 button:hover { filter: brightness(1.07); }
 button:active { transform: translateY(1px); }
@@ -591,9 +591,9 @@ async function load() {
       `${spct(r.growth_above_cash)} above cash (${pct(r.cash)}). Volatility ${pct(r.volatility, 0)}, worst drop ${pct(r.worst_drop, 0)}` +
       `${r.assumed_drop ? " (assumed: under 10 years of history)" : ""}.</p>`;
     if (fc.models.length) {
-      h += `<table><tr><th class="l">Horizon</th><th>Mean</th><th title="5th to 95th percentile">Range</th><th title="Chance of beating cash">Up</th></tr>` +
+      h += `<table><tr><th class="l">Horizon</th><th>Mean</th><th title="5th to 95th percentile">Range</th><th title="Chance the total return, including the cash yield, is above zero. Not the chance of beating cash.">P(total &gt; 0)</th></tr>` +
         fc.models.map(x => `<tr><td class="l">${x.horizon} days<div class="muted small">${esc(x.model)}, ${x.universe === "stock" ? "stocks" : "ETFs"}${x.on_demand ? ", now" : ""}</div></td><td>${spct(x.mean, 1)}</td><td><div>${spct(x.q05, 0)}</div><div>${spct(x.q95, 0)}</div></td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + "</table>" +
-        `<p class="muted small">Range: the 5th to 95th percentile. Up: the chance of beating cash.</p>`;
+        `<p class="muted small">Mean and range: log return over cash from the latest close; the range is the 5th to 95th percentile. P(total &gt; 0): the chance the total return (cash yield included) is above zero, which is not the chance of beating cash.</p>`;
       const flags = [...new Set(fc.models.flatMap(x => x.flags || []))];
       if (flags.length) h += `<p class="note small">${esc(flags.join("; "))}.</p>`;
       h += `<p class="muted small">Log return above cash over the horizon, from data to ${esc(fc.models[0].info_cutoff)}. In backtests these models ranked funds better than chance but did not beat the standard rule in the portfolio after costs.</p>`;
@@ -965,7 +965,7 @@ async function loadSignals() {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
     const vm = vd.model;
     h += `<div class="vbox"><span class="verdict big ${vd.action}" title="The action the evidence gate allows">${vd.action}</span><div class="why">${vd.label !== vd.action ? `<div class="small"><b>Model view: ${esc(vd.label)}</b>. The model is experimental, so its BUY is not acted on.</div>` : ""}<b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.` +
-      (vm ? `<div class="small muted" style="margin-top:4px">Model rank <b>#${vm.rank}</b> of ${vm.of} ${vm.kind === "fund" ? "funds" : "S&amp;P 500 stocks"} · expected ${spct(vm.expected_net, 2)}${vm.kind === "fund" ? " above cash" : " after costs"} over ${vm.horizon} sessions · P(profit) ${pct(vm.p_win, 0)}</div>` : "") + `</div></div>` +
+      (vm ? `<div class="small muted" style="margin-top:4px">Model rank <b>#${vm.rank}</b> of ${vm.of} ${vm.kind === "fund" ? "funds" : "S&amp;P 500 stocks"} · ${esc(vm.measures?.expected?.label || "expected")} ${spct(vm.expected_net, 2)} over ${vm.horizon} sessions · ${esc(vm.measures?.probability?.label || "P(profit)")} ${pct(vm.p_win, 0)}</div>` : "") + `</div></div>` +
       `<details${vd.verdict === "WATCH" || vd.label !== vd.action ? " open" : ""}><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
       (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
         : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +

@@ -42,6 +42,7 @@ import pandas as pd
 from . import panel as P
 from .adapters import Ranker, TradeQuality, apply_map, member_pct, score_to_net
 from .positions import POLICIES, Book, Lot, executable_prices
+from .sizing import position_size
 from .targets import Thresholds
 
 BUNDLE_VERSION = "decision-v1"
@@ -51,7 +52,10 @@ DEFAULT_RULES = {"min_expected_net": 0.005, "min_p_win": 0.5, "combined_name_cap
                  "max_drawdown_limit": -0.35,
                  # When the risk model gives every member the same probability it cannot rank risk: "skip" (pass the
                  # gate, said on every line and on the Trade page; the default) or "block" (nothing passes it).
-                 "risk_gate_when_uninformative": "skip"}
+                 "risk_gate_when_uninformative": "skip",
+                 # A buy needs a finite downside estimate (the 10th percentile of net P&L). False lets one through
+                 # without it, and every such line says so.
+                 "require_downside_estimate": True}
 RISK_MIN_SPREAD = 0.005    # P(large loss) spread (max - min over today's members) below which it is uninformative
 
 
@@ -398,6 +402,12 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
                 model_blocks.append(why)
         elif risk > r["max_large_loss_prob"]:
             model_blocks.append(f"P(large loss at the exit close) {risk:.0%} above {r['max_large_loss_prob']:.0%}")
+        q10 = row.get("net_q10")
+        if q10 is None or not np.isfinite(q10):
+            if r.get("require_downside_estimate", True):
+                model_blocks.append("no downside estimate (10th percentile of net P&L) for this stock")
+            else:
+                model_notes.append("no downside estimate; passed anyway (setting require_downside_estimate = false)")
         if not np.isfinite(row["expected_net"]) or row["expected_net"] < r["min_expected_net"]:
             model_blocks.append(f"expected net P&L {row['expected_net']:+.2%} below {r['min_expected_net']:+.2%}")
         if not np.isfinite(row["p_win"]) or row["p_win"] < r["min_p_win"]:
@@ -407,7 +417,7 @@ def entries(today: pd.DataFrame, held: set, exiting: set, r: dict, sleeve_value:
             model_blocks.append("no current price")
         if t in held:
             account_blocks.append("already held")
-        dollars = min(r["max_position_share"] * sleeve_value, budget / max(slots, 1)) if slots else 0.0
+        dollars = position_size(r, sleeve_value, budget, slots)
         if not slots:
             account_blocks.append(f"name limit: {r['max_names']} names including holdings")
         if dollars < r["min_order"]:

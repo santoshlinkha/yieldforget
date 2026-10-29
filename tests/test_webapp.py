@@ -88,7 +88,8 @@ def _ai_rows(tmp_path):
 def test_page_loads_and_polling_never_call_a_model(server):
     base, tmp_path, _ = server
     for path in ("/api/state", "/api/ledger", "/api/ai", "/api/recommendations", "/api/ratings", "/api/capital",
-                 "/api/market/explain", "/api/trade", "/api/income", "/api/model-record", "/api/decisions"):
+                 "/api/market/explain", "/api/trade", "/api/income", "/api/model-record", "/api/decisions",
+                 "/api/model-outputs"):
         status, _ = _call(base, path)
         assert status == 200, path
     for gone in ("/api/tracker", "/api/backtest"):

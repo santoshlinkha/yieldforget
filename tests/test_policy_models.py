@@ -130,3 +130,14 @@ def test_agents_get_model_evidence_only_when_it_is_validated_and_never_a_conclus
     assert not any(w in text.lower() for w in ("you should", "recommend", "must buy", "conclude"))
     unvalidated = {"policy": {**dec["policy"], "status": {"validated": False}}}
     assert agent_evidence(unvalidated, "AAA") == "" and agent_evidence(None, "AAA") == ""
+
+
+@pytest.mark.parametrize("q10", [None, float("nan"), float("inf"), float("-inf")])
+def test_a_buy_needs_a_finite_downside_estimate_unless_the_bypass_is_on_and_shown(q10):
+    blind = {"next_close": {"mean_excess": 0.02, "q10_excess": q10}, "limit_dip": {"mean_excess": 0.01, "q10_excess": q10}}
+    d = decide(blind, False, 0.002, VALID, LayerConfig())
+    assert d["action"] == "cash" and not any(o.get("eligible") for o in d["options"] if o["action"] != "cash")
+    assert all("no downside estimate" in " ".join(o["blocked"]) for o in d["options"] if o["action"] != "cash")
+    bypass = decide(blind, False, 0.002, VALID, LayerConfig(allow_missing_downside=True))
+    assert bypass["action"] == "next_close"
+    assert next(o for o in bypass["options"] if o["action"] == "next_close")["risk_bypass"]

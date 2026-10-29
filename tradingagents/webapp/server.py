@@ -44,6 +44,7 @@ from tradingagents.ledger.accounting import SLEEVES
 from tradingagents.ledger.ai_gateway import Budget, Gateway, Policy, Price
 from tradingagents.ledger.db import transaction
 from tradingagents.ledger.store import Store
+from tradingagents.model_outputs import measures
 from tradingagents.optimizer.ai_views import collect_ratings
 from tradingagents.optimizer.data import fetch_closes, latest_prices
 from tradingagents.optimizer.market import market_brief, market_overview, market_tickers, save_json
@@ -764,8 +765,11 @@ class App:
             r["screen"] = row and {k: row.get(k) for k in ("quality_score", "quality_rank", "analyst_mean",
                                                             "analyst_label", "target_upside", "rank")}
             r["rating"] = ratings.get(t)
-            # The stock model's score when it has one, else the fund models' rank among funds.
+            # The stock model's score when it has one, else the fund models' rank among funds; ``measures`` says
+            # what its expected_net and p_win are, which differ between the two (model_outputs.measures).
             score = scores.get(t) or funds.get(t)
+            if score:
+                score = {**score, "measures": measures(score.get("kind") or "stock")}
             # Nothing on record (a cash fund, or a ticker no model covers): no verdict rather than a guess.
             known = (row or r["signal"] or r["decision"] or t in held or score) and t not in daily.CASH_FUNDS
             r["verdict"] = verdict(t in held, r["decision"], r["signal"], row, ratings.get(t), score=score,
@@ -800,7 +804,11 @@ class App:
         rows.sort(key=lambda r: (-r["combined"]["mean"], -r["combined"]["p_gain"], r["ticker"]))
         n = len(rows)
         out = {r["ticker"]: {"kind": "fund", "rank": i + 1, "of": n, "rank_pct": round(1 - i / max(n - 1, 1), 4),
+                             # expected_net/p_win keep the verdict's field names; for a fund they are the forecast's
+                             # log return over cash and P(total return > 0): see model_outputs.measures("fund").
                              "expected_net": round(r["combined"]["mean"], 5), "p_win": round(r["combined"]["p_gain"], 4),
+                             "expected_log_excess_vs_cash": round(r["combined"]["mean"], 5),
+                             "p_total_positive": round(r["combined"]["p_gain"], 4),
                              "p_risk": None, "cost_rt": None, "models": r["combined"].get("models")}
                for i, r in enumerate(rows)}
         self._funds_cache = (key, out)
@@ -1096,9 +1104,10 @@ class App:
                  if found else "- **Model run used**: none with data through this day"]
         if model:
             fund = model.get("kind") == "fund"
+            m = measures("fund" if fund else "stock")
             lines += [f"- **Model rank**: #{model['rank']} of {model['of']} {'funds' if fund else 'S&P 500 stocks'} today",
-                      f"- **Expected return**: {model['expected_net']:+.2%} {'above cash' if fund else 'after costs'}, "
-                      f"P(profit) {model['p_win']:.0%}"
+                      f"- **{m['expected']['label']}** ({model.get('horizon', 20)} sessions): {model['expected_net']:+.2%}, "
+                      f"{m['probability']['label']} {model['p_win']:.0%}"
                       + (f", P(large loss) {model['p_risk']:.0%}" if model.get("p_risk") is not None else "")]
         lines += [f"- **The agents' view** (shown, not used): rating {result['rating']}, i.e. {ai['action']}"
                   + (f"; {'agrees' if ai['action'] == final else 'differs'}" if model else ""),
@@ -1902,6 +1911,9 @@ def make_handler(app: App):
                     self._json({"records": app.live_records(), "daily": app.daily.state()})
                 elif url.path == "/api/forecasts":
                     self._json(app.forecasts(query))
+                elif url.path == "/api/model-outputs":
+                    from tradingagents.model_outputs import catalog
+                    self._json(catalog())
                 elif url.path == "/api/hardware":
                     from tradingagents.research.compute import hardware
                     self._json(hardware())

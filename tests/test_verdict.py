@@ -55,7 +55,7 @@ def test_a_fund_is_judged_by_its_rank_among_funds_without_a_large_loss_gate():
     fund = {"kind": "fund", "rank": 3, "of": 41, "rank_pct": 0.95, "expected_net": 0.01, "p_win": 0.55, "p_risk": None}
     v = verdict(False, None, None, {}, None, TODAY, score=fund)
     assert v["verdict"] == "BUY" and "funds" in v["checks"][0]["detail"]
-    assert [c["name"] for c in v["checks"]] == ["Model rank", "Expected return", "Chance of beating cash (before costs)"]
+    assert [c["name"] for c in v["checks"]] == ["Model rank", "Expected return", "Chance of a positive total return (before costs)"]
     assert verdict(True, None, None, {}, None, TODAY, score={**fund, "rank": 40, "rank_pct": 0.03, "expected_net": -0.01})["verdict"] == "SELL"
     assert "no model view" in verdict(True, None, None, {}, None, TODAY)["summary"]
 

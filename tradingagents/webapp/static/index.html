@@ -10,10 +10,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #64748b; --faint: #94a3b8;
+  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #586377; --faint: #94a3b8;
   --border: #e5e7eb; --border-strong: #d1d5db;
   --brand-bg: #0b1220; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-  --accent: #2563eb; --accent-soft: #eff4ff; --buy: #059669; --sell: #dc2626;
+  --accent: #2563eb; --on-accent: #ffffff; --accent-soft: #eff4ff; --buy: #047857; --sell: #dc2626;
   --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d; --ok-bg: #ecfdf5; --ok: #065f46; --ok-line: #6ee7b7;
   --chart-grid: #eef0f3; --s1: #2563eb; --s2: #f97316; --s3: #a16207; --s4: #059669;
   --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
@@ -24,7 +24,7 @@
     --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
     --border: #1f2937; --border-strong: #334155;
     --brand-bg: #060a13; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-    --accent: #60a5fa; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
+    --accent: #60a5fa; --on-accent: #0b1220; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
     --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --ok-bg: #0f2a20; --ok: #6ee7b7; --ok-line: #1f6b4f;
     --chart-grid: #1c2433; --s1: #60a5fa; --s2: #fb923c; --s3: #facc15; --s4: #34d399;
     --shadow: none;
@@ -58,19 +58,19 @@ nav button[aria-selected=true] { color: #fff; border-bottom-color: #3b82f6; }
 .risk { display: flex; align-items: center; gap: 14px; flex: 1 1 520px; min-width: 0; }
 .risk-summary { display: flex; align-items: baseline; gap: 8px; flex: 1 1 520px; min-width: 0; flex-wrap: wrap; }
 .risk-summary .lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.risk-summary .lvl { font-size: 13px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 6px; padding: 1px 8px; }
+.risk-summary .lvl { font-size: 13px; font-weight: 700; color: var(--on-accent); background: var(--accent); border-radius: 6px; padding: 1px 8px; }
 .risk-summary .name { font-weight: 600; }
 .risk-summary .limit { color: var(--muted); font-size: 12.5px; }
 .small-btn { padding: 3px 10px; font-size: 12.5px; }
 .acct-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .acct-tabs button { background: var(--surface); color: var(--muted); border: 0; border-radius: 0; padding: 5px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .acct-tabs button + button { border-left: 1px solid var(--border); }
-.acct-tabs button[aria-selected="true"] { background: var(--accent); color: #fff; }
+.acct-tabs button[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
 .acct-tabs .v { font-weight: 500; opacity: .85; margin-left: 4px; }
 .risk .lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
 .risk input[type=range] { flex: 1; min-width: 120px; }
 .risk-read { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; min-width: 250px; }
-.risk-read .lvl { font-size: 13px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 6px; padding: 1px 8px; }
+.risk-read .lvl { font-size: 13px; font-weight: 700; color: var(--on-accent); background: var(--accent); border-radius: 6px; padding: 1px 8px; }
 .risk-read .name { font-weight: 600; }
 .risk-read .limit { color: var(--muted); font-size: 12.5px; }
 .ticks { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); padding: 0 2px; margin-top: -2px; }
@@ -123,6 +123,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .side { font-weight: 700; font-size: 10.5px; letter-spacing: .06em; padding: 3px 8px; border-radius: 5px; }
 .side.buy { background: color-mix(in srgb, var(--buy) 14%, transparent); color: var(--buy); }
 .side.sell { background: color-mix(in srgb, var(--sell) 14%, transparent); color: var(--sell); }
+.side.paper { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); border: 1px dashed currentColor; }
 .amt { font-weight: 650; font-variant-numeric: tabular-nums; }
 .why { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -175,7 +176,7 @@ input[type=number], input[type=text], input[type=date], textarea { width: 100%; 
   border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; }
 input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 textarea { min-height: 90px; font: 12.5px/1.45 ui-monospace, Consolas, monospace; }
-button { font: inherit; font-weight: 500; font-size: 13px; padding: 7px 14px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+button { font: inherit; font-weight: 500; font-size: 13px; padding: 7px 14px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; }
 button:hover { filter: brightness(1.06); }
 button.ghost { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
 button.ghost:hover { background: var(--surface-2); filter: none; }
@@ -696,21 +697,28 @@ async function loadTrade() {
     $("buyMeta").textContent = `${(t.mode || "").toUpperCase()} · ${u.sp500 ? `${u.sp500} S&P 500 companies${(u.extra || []).length ? ` + ${u.extra.length} of yours` : ""} scored · ` : ""}data to ${t.data_to} · for the close of ${t.executes}` +
       (t.ranker ? ` · ranked by ${t.ranker.name === "ensemble" ? "the learned-weight ensemble (Models tab)" : "the internal XGBoost ranker"}` : "");
     const x = t.best;
-    $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side buy">BUY</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
-        <button class="ghost small-btn" id="boughtBest" title="Record that you bought it (Portfolio tab)">I bought this</button></div>
-      <table class="compact" style="margin-top:10px"><tr><th class="l">Buy price</th><td><b>limit ${usd(x.buy_limit)}</b> <span class="muted">(the last close; the model enters at the next close)</span></td></tr>` +
-      (x.patient ? `<tr><th class="l">Or, patient</th><td>limit ${usd(x.patient.price)} <span class="muted">(its median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not a fill; stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)})</span></td></tr>` : "") +
-      `<tr><th class="l">Sell at target</th><td class="pos">${usd(x.target)} (${spct(x.target_pct, 1)})</td></tr>
-       <tr><th class="l">Sell at stop</th><td class="neg">${usd(x.stop)} (${spct(x.stop_pct, 1)})</td></tr>
-       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (on a close)</td></tr></table>`
+    const experimental = t.mode !== "validated";
+    const sz = (x && x.size) || {};
+    // The tested policy buys at the next session's close, whatever it is: that is the entry. The last close is a
+    // dated reference for sizing and for the illustrative dollar levels; stop and target follow the actual fill.
+    $("buyBox").innerHTML = (x ? `<div class="order-head"><span class="side ${experimental ? "paper" : "buy"}">${experimental ? "TOP MODEL CANDIDATE" : "BUY"}</span><strong style="font-size:20px">${tk(x.ticker)}</strong>
+        <button class="ghost small-btn" id="boughtBest" title="Record your actual fill (Portfolio tab)">I bought this</button></div>
+      <table class="compact" style="margin-top:10px">
+       <tr><th class="l">Entry</th><td><b>at the close of ${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever that close is <span class="muted">(the policy the model was tested on; no limit price)</span></td></tr>
+       <tr><th class="l">Allowed size</th><td><b>${usd(x.dollars || 0)}</b>${x.dollars ? ` <span class="muted">≈ ${(+x.shares).toFixed(4)} shares at the reference close</span>` : ""}<div class="muted small">${esc(sz.basis || "")}${sz.budget_usd != null ? ` · trading budget ${usd(sz.budget_usd)}` : ""}${sz.cap_usd != null ? ` · cap per name ${usd(sz.cap_usd)}` : ""}</div></td></tr>
+       <tr><th class="l">Reference close</th><td>${usd(x.last_close)} <span class="muted">on ${esc(x.reference_date || t.data_to)} (not an order price)</span></td></tr>
+       <tr><th class="l">Sell at target</th><td class="pos">${spct(x.target_pct, 1)} from the fill <span class="muted">(${usd(x.target)} if filled at the reference close)</span></td></tr>
+       <tr><th class="l">Sell at stop</th><td class="neg">${spct(x.stop_pct, 1)} from the fill <span class="muted">(${usd(x.stop)} if filled at the reference close)</span></td></tr>
+       <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (each checked on a close)</td></tr></table>` +
+      (x.patient ? `<details class="small" style="margin-top:6px"><summary>Untested alternative: a patient limit</summary><p class="muted">Limit ${usd(x.patient.price)}, the signal model's median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not the chance of a fill. Returns after such fills were never evaluated. Stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)}.</p></details>` : "")
       : "") + (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
     $("sellBox").innerHTML = t.sells.length ? `<table class="compact"><tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Bought</th><th>Unrealized</th><th>Sell at target</th><th>Sell at stop</th><th>Deadline</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
         <td>${money(s.last_close)}</td><td>${money(s.entry)}</td><td>${s.unrealized == null ? "–" : spct(s.unrealized)}</td><td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
-    $("runnersTable").innerHTML = t.runners_up.length ? "<tr><th class='l'>Ticker</th><th>Buy limit</th><th>Target</th><th>Stop</th><th class='l'>AI agents</th></tr>" +
-      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td>${usd(x.buy_limit)}</td><td class="pos">${usd(x.target)}</td><td class="neg">${usd(x.stop)}</td><td class="l small" data-agentcell="${esc(x.ticker)}">…</td></tr>`).join("")
+    $("runnersTable").innerHTML = t.runners_up.length ? `<tr><th class='l'>Ticker</th><th>Allowed size</th><th>Reference close</th><th>Target</th><th>Stop</th><th class='l'>AI agents</th></tr>` +
+      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td title="${esc(x.size?.basis || "")}">${usd(x.dollars || 0)}</td><td>${usd(x.last_close)}</td><td class="pos">${spct(x.target_pct, 1)}</td><td class="neg">${spct(x.stop_pct, 1)}</td><td class="l small" data-agentcell="${esc(x.ticker)}">…</td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = !t.runners_up.length;
     $("runnersAll").onclick = async () => {
@@ -719,7 +727,8 @@ async function loadTrade() {
       agentTicker = t.runners_up[0].ticker; loadAgentReport(); runnerAgents(t.runners_up);
     };
     runnerAgents(t.runners_up);
-    if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfPrice").value = x.buy_limit.toFixed(2); $("pfUnits").focus(); };
+    // The fill is whatever the next close was: ask for it rather than pre-filling the reference close.
+    if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfSide").value = "buy"; $("pfPrice").value = ""; $("pfPrice").placeholder = "your actual fill price"; $("pfDate").value = x.entry?.session || ""; $("pfUnits").focus(); };
     $("runnersNote").textContent = "The next stocks that pass the model's gates, in its order, in case the first is not wanted.";
   }
 
@@ -1076,7 +1085,7 @@ function drawCombined(c, horizon, runId) {
   $("fcToggle").onclick = () => { fcAll = !fcAll; drawCombined(c, horizon, runId); };
   const sd = x => x == null ? "–" : "±" + (x * 100).toFixed(2) + "%";
   const cells = f => `<td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${sd(f.estimation_sd)}</td>`;
-  const head = [["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
+  const head = [["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(total>0)"], ["estimation_sd", "Model unc."]];
   setHTML("fcTable", "<tr><th>Ticker</th><th class='l'>Model</th><th>Weight</th>" +
     head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
     shown.map(t => (t.combined
@@ -1130,7 +1139,7 @@ function renderForecasts(d) {
     $("fcMore").style.display = sorted.length > FC_SHOWN ? "" : "none";
     $("fcToggle").textContent = fcAll ? `Show the first ${FC_SHOWN}` : `Show all ${sorted.length}`;
     $("fcToggle").onclick = () => { fcAll = !fcAll; renderForecasts(lastFc); };
-    const head = [["ticker", "Ticker"], ["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(gain)"], ["estimation_sd", "Model unc."]];
+    const head = [["ticker", "Ticker"], ["mean", "Mean"], ["median", "Median"], ["q05", "5%"], ["q95", "95%"], ["p_gain", "P(total>0)"], ["estimation_sd", "Model unc."]];
     setHTML("fcTable", "<tr>" + head.map(([k, label]) => `<th data-k="${k}" style="cursor:pointer">${label}${fcSort.key === k ? (fcSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("") + "<th class='name'>Notes</th></tr>" +
       rows.map(f => `<tr><td><b>${tk(f.ticker)}</b> <span class="muted">${esc(f.name || "")}</span></td><td class="${f.mean >= 0 ? "pos" : "neg"}">${lpct(f.mean)}</td><td>${lpct(f.median)}</td><td>${lpct(f.q05)}</td><td>${lpct(f.q95)}</td><td>${pct(f.p_gain, 0)}</td><td>${f.estimation_sd == null ? "–" : "±" + (f.estimation_sd * 100).toFixed(2) + "%"}</td><td class="name muted">${esc((f.flags || []).join("; "))}</td></tr>`).join(""));
     $("fcTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {

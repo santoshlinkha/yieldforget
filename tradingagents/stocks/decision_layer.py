@@ -10,7 +10,8 @@ of those models (``policy_study``), data freshness and the account. Every action
 
 An action is taken only if it clears the **no-trade region**: its expected excess is at least
 ``margin`` (chosen on validation data only, from a small fixed grid) and its 10th-percentile excess is
-no worse than ``-downside_floor`` (a risk budget, configured, not tuned). A held position is sold only
+no worse than ``-downside_floor`` (a risk budget, configured, not tuned); a buy with no finite
+10th-percentile estimate is not eligible unless ``allow_missing_downside`` says so, visibly. A held position is sold only
 when holding is expected to do worse than selling by more than ``hold_margin``, so a small edge does not
 churn. The layer **abstains** ("insufficient evidence") when the models are not validated, the data is
 stale or the features are missing; that is a valid answer, shown with its reason.
@@ -34,6 +35,9 @@ class LayerConfig:
     hold_margin: float = 0.005       # sell only when holding is expected to trail selling by more than this
     max_names: int = 5
     max_stale_days: int = 4
+    # A buy needs a finite downside estimate. Turning this on lets one through without it; each such
+    # option then carries ``risk_bypass`` so the page can say so.
+    allow_missing_downside: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -86,7 +90,11 @@ def decide(preds: dict[str, dict], held: bool, cost_rt: float, status: dict, cfg
             fails = []
             if m < cfg.margin:
                 fails.append(f"expected excess {m:+.2%} is under the {cfg.margin:.2%} margin")
-            if q is not None and q < -cfg.downside_floor:
+            if q is None and not cfg.allow_missing_downside:
+                fails.append("no downside estimate (10th-percentile outcome), so the risk budget cannot be checked")
+            elif q is None:
+                row["risk_bypass"] = "no downside estimate; eligible anyway because allow_missing_downside is on"
+            elif q < -cfg.downside_floor:
                 fails.append(f"10th-percentile outcome {q:+.1%} is below the -{cfg.downside_floor:.0%} risk budget")
             row["eligible"], row["blocked"] = not fails, fails
             options.append(row)

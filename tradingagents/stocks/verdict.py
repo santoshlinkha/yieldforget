@@ -75,9 +75,11 @@ def verdict(held: bool, decision: dict | None, signal: dict | None, screen: dict
             _check("Model rank", pct >= TOP, f"#{s['rank']} of {s['of']} {peers} (ahead of {pct:.0%}; "
                                              f"BUY needs the top fifth, AVOID is the bottom fifth)"),
             _check("Expected return", net > 0,
-                   f"{net:+.2%} above cash over {horizon} sessions (BUY needs above zero)" if fund else
+                   f"{net:+.2%} log return above cash over {horizon} sessions from the latest close, before "
+                   f"costs (BUY needs above zero)" if fund else
                    f"{net:+.2%} over {horizon} sessions after costs of {s.get('cost_rt') or 0:.2%} (BUY needs above zero)"),
-            _check("Chance of beating cash (before costs)" if fund else "Chance of profit after costs",
+            # A fund's probability is of a positive total return (cash yield included), not of beating cash.
+            _check("Chance of a positive total return (before costs)" if fund else "Chance of profit after costs",
                    p_win >= MIN_P_WIN, f"{p_win:.0%} (BUY needs {MIN_P_WIN:.0%}+)"),
         ]
         if not fund:

@@ -29,9 +29,11 @@ def _decision(**kw):
 def test_the_best_buy_passes_the_gates_is_not_held_and_carries_its_exits():
     p = trade.plan(_decision(), 30.0, {"AAA": {"price": 97.0, "chance": 0.5, "stop": 89.0, "target": 106.0}})
     best = p["best"]
-    assert best["ticker"] == "AAA" and best["last_close"] == 100.0 and best["shares_at_reference"] == pytest.approx(0.3)
+    # $30 across 5 open name slots (HELD exits at the next close): $6, not the whole budget.
+    assert best["ticker"] == "AAA" and best["last_close"] == 100.0 and best["shares_at_reference"] == pytest.approx(0.06)
     assert best["entry"]["basis"] == "next_close" and best["reference_date"] == "2026-10-26"
-    assert best["buy_limit"] == 100.0 and best["shares"] == pytest.approx(0.3)
+    assert best["buy_limit"] == 100.0 and best["shares"] == pytest.approx(0.06) and best["dollars"] == 6.0
+    assert best["size"]["budget_usd"] == 30.0 and best["size"]["slots_left"] == 5
     s = 0.02 * math.sqrt(20)
     assert best["stop"] == round(100 * math.exp(-s), 2) and best["target"] == round(100 * math.exp(s), 2)
     assert best["patient"]["price"] == 97.0 and best["patient"]["status"] == "untested policy"
@@ -41,6 +43,30 @@ def test_the_best_buy_passes_the_gates_is_not_held_and_carries_its_exits():
     sell = p["sells"][0]
     assert sell["action"] == "EXIT" and sell["sell_target"] == 48.0 and sell["sell_stop"] == 34.0
     assert any("Experimental" in n for n in p["notes"])
+
+
+def test_the_trade_view_keeps_the_saved_capped_size_instead_of_the_whole_budget():
+    # The audit's case: the decision sized AAA at $25 (0.25 shares at $100); $1,000 is available now.
+    entries = [{"ticker": "AAA", "action": "ENTER", "paper_action": "PAPER ENTER", "price": 100.0, "sigma": 0.02,
+                "dollars": 25.0, "shares": 0.25}]
+    d = _decision(entries=entries, lots=[], account={"sleeve_value": 100.0},
+                  settings={"rules": {"max_position_share": 0.25, "max_names": 5, "min_order": 1.0}})
+    best = trade.plan(d, 1000.0)["best"]
+    assert best["dollars"] == 25.0 and best["shares"] == pytest.approx(0.25)
+    assert best["size"]["basis"] == "the saved decision's size" and best["size"]["budget_usd"] == 1000.0
+    smaller = trade.plan(d, 10.0)["best"]                                 # cash fell since the decision
+    assert smaller["dollars"] == 2.0 and "reduced" in smaller["size"]["basis"]    # $10 over 5 slots
+
+
+def test_paper_picks_are_sized_by_the_decisions_cap_and_share_the_budget():
+    entries = [{"ticker": t, "action": "WAIT", "paper_action": "PAPER ENTER", "price": 10.0, "sigma": 0.02}
+               for t in ("AAA", "BBB", "CCC")]
+    d = _decision(entries=entries, lots=[], account={"sleeve_value": 200.0},
+                  settings={"rules": {"max_position_share": 0.25, "max_names": 2, "min_order": 1.0}})
+    p = trade.plan(d, 300.0)
+    sizes = [p["best"]["dollars"]] + [r["dollars"] for r in p["runners_up"]]
+    assert sizes == [50.0, 50.0, 0.0]                                     # 25% of $200 each; two name slots
+    assert "slot" in p["runners_up"][-1]["size"]["basis"]
 
 
 def test_no_decision_and_an_empty_budget_say_so():
