@@ -795,6 +795,12 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           <label>After (this computer's time)<input type="time" id="schAt"></label>
           <label>Refit models every (trading sessions)<input type="number" id="schEvery" min="5" max="120" step="1"></label>
         </div>
+        <div class="col-legend-box small" style="margin:4px 0 8px">
+          <label class="check"><input type="checkbox" id="schTfm"> <b>TimesFM 3.0 (research only).</b> I accept its
+            <a href="https://github.com/google-research/timesfm" target="_blank" rel="noopener">non-commercial license</a>:
+            score it beside the other models, never in the ensemble or the decision.</label>
+          <div class="muted" id="schTfmNote"></div>
+        </div>
         <div class="row"><button id="schSave">Save</button><button class="ghost" id="schRun">Run now</button><span class="small" id="schMsg" role="status" aria-live="polite"></span></div>
         <div class="small" id="schState"></div>
       </div>
@@ -1134,7 +1140,7 @@ $("pfSave").onclick = async () => {
 let fillOp = null;
 
 const ZOO_SHORT = {xgb_rank: "XGB (54)", xgb_rank_all: "XGB (all)", lgbm_lambdarank: "LambdaRank", lgbm_regression: "LGBM reg.",
-  ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", chronos2_covariates: "Chronos-2 + market",
+  ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", chronos2_covariates: "Chronos-2 + market", timesfm3: "TimesFM 3.0",
   mamba: "Mamba", ensemble: "Ensemble", decision: "Decision", momentum_12_1: "Momentum",
   low_volatility: "Low vol.", analysts_target_upside: "Target upside", eps_surprise: "EPS surprise"};
 const ZOO_FITTED = ["xgb_rank", "xgb_rank_all", "lgbm_lambdarank", "lgbm_regression", "ridge_pooled", "ridge_per_stock",
@@ -1160,7 +1166,8 @@ async function loadZoo() {
 // away (a stock's row opens its details) or added as a column (Show).
 let zooCols = store.get("zooCols2", ["decision", "ensemble"]), zooLimit = 20;
 const zooOpen = new Set();
-const LIFE = {active_decision: "decides", fallback_decision: "decides (fallback)", challenger: "shown only", baseline: "baseline"};
+const LIFE = {active_decision: "decides", fallback_decision: "decides (fallback)", challenger: "shown only", baseline: "baseline",
+  research: "research only"};
 function renderZoo() {
   if (!zoo) return;
   const order = k => k === "decision" ? 0 : k === "ensemble" ? 1 : 2;
@@ -1218,7 +1225,7 @@ function renderZoo() {
   const details = r => `<tr class="zoo-detail"><td colspan="${2 + shown.length}"><div class="zoo-grid">` +
     models.filter(k => r.m[k]).map(k => { const x = r.m[k], o = out(k);
       return `<div class="zoo-chip" title="${esc(zoo.models[k].label)}"><span class="muted small">${esc(ZOO_SHORT[k] || k)}</span><b>${Math.round(x.pct * 100)}</b>` +
-        `${x.forecast != null && o ? `<span class="small" title="${esc(o.label)}">${spct(x.forecast, 1)} ${k === "ensemble" ? "net" : k.startsWith("chronos2") ? "from t" : "vs cash"}</span>` : ""}` +
+        `${x.forecast != null && o ? `<span class="small" title="${esc(o.label)}">${spct(x.forecast, 1)} ${k === "ensemble" ? "net" : k.startsWith("chronos2") || k === "timesfm3" ? "from t" : "vs cash"}</span>` : ""}` +
         `${x.rank ? `<span class="muted small">#${x.rank} of ${x.of}</span>` : ""}</div>`; }).join("") +
     `</div><p class="muted small" style="margin:6px 0 0">Percentile among today's stocks (100 = that model's top pick). ${models.filter(k => !r.m[k]).length ? `Not scored by: ${models.filter(k => !r.m[k]).map(k => esc(ZOO_SHORT[k] || k)).join(", ")}.` : ""} <a href="/ticker/${encodeURIComponent(r.t)}" target="_blank" rel="noopener">Open ${esc(r.t)}</a></p></td></tr>`;
   const page = rows.slice(0, q ? 600 : zooLimit);
@@ -1258,6 +1265,9 @@ async function loadSchedule() {
   const st = d.settings || {}, last = d.last || {}, j = d.job || {}, ens = d.ensemble || {};
   if (document.activeElement?.closest?.("#schedCard") == null) {
     $("schOn").checked = !!st.enabled; $("schAt").value = st.morning_at || "07:30"; $("schEvery").value = st.retrain_every_sessions || 20;
+    const tfm = d.timesfm3 || {};
+    $("schTfm").checked = !!(tfm.enabled && tfm.license_accepted);
+    $("schTfmNote").textContent = tfm.license_accepted ? `License accepted on ${tfm.license_accepted}.` : "Off: its license allows non-commercial, non-production use only.";
   }
   $("schRun").disabled = !!j.running;
   const steps = (last.steps || []).map(x => `<li>${x.ok ? (x.reused ? "↺" : "✓") : '<span class="neg">✗</span>'} ${esc(x.step)}${x.reused ? ' <span class="muted">(same inputs: reused)</span>' : ""}${x.error ? ` <span class="neg">${esc(x.error)}</span>` : ""}</li>`).join("");
@@ -1268,9 +1278,12 @@ async function loadSchedule() {
     `<p class="muted">Ensemble: ${ens.trained ? `trained through ${esc(ens.trained_through)} (${ens.age_sessions} sessions ago; refitted at ${st.retrain_every_sessions || 20})` : "not trained"}.</p>`;
   if (j.running) setTimeout(loadSchedule, 3000);
 }
+var schTfmAccepted = null;   // the date already on record, kept when saving again
 $("schSave").onclick = async () => {
   const value = {enabled: $("schOn").checked, morning_at: $("schAt").value || "07:30", retrain_every_sessions: Math.max(5, Math.min(120, +$("schEvery").value || 20))};
-  try { await api("/api/settings", {values: {schedule: value}}); $("schMsg").innerHTML = '<span class="pos">✓ Saved.</span>'; loadSchedule(); }
+  const on = $("schTfm").checked;
+  const timesfm3 = {enabled: on, license_accepted: on ? (schTfmAccepted || new Date().toISOString().slice(0, 10)) : null};
+  try { await api("/api/settings", {values: {schedule: value, timesfm3}}); $("schMsg").innerHTML = '<span class="pos">✓ Saved.</span>'; loadSchedule(); }
   catch (e) { $("schMsg").innerHTML = `<span class="neg">Not saved: ${esc(e.message)}</span>`; }
 };
 $("schRun").onclick = async () => {

@@ -51,6 +51,11 @@ research = [
     "scikit-learn>=1.6",
     "mambapy>=1.2",          # Mamba state-space model in plain PyTorch (mamba-ssm's CUDA kernels do not build on Windows)
 ]
+# TimesFM 3.0 (Google): research-only challenger. Its weights are licensed for non-commercial, non-production use
+# (timesfm-non-commercial-license-v1.0); the app scores it only after the owner accepts that license in Settings.
+timesfm3 = [
+    "timesfm[torch]==3.0.2",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"

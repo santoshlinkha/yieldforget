@@ -44,6 +44,8 @@ GLOBAL_DEFAULTS = {
     # Providers skipped after a failure that will repeat until a reset or a top-up (out of credit, a free daily
     # limit, a rate limit): "provider" or "provider/model" -> {"until": UTC ISO time, "why": short reason}.
     "ai_cooldowns": {},
+    # TimesFM 3.0: research only, scored in the Models view once the owner accepts its non-commercial license.
+    "timesfm3": {"enabled": False, "license_accepted": None},
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).
     # (Inkling's free tier refuses this app: "only available on agentic harnesses".)
     "ai_openrouter_models": ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-31b-it:free"],

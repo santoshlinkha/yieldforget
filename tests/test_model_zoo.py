@@ -180,3 +180,38 @@ def test_every_model_is_refitted_only_every_20_sessions_and_reused_in_between(tm
     assert "xgb_rank" in run["stocks"][next(iter(run["stocks"]))]
     Z.run(store, tmp_path, force=True, refit=True)                # asked to refit: fitted again
     assert len(fits) > n
+
+
+def test_timesfm3_is_research_only_and_runs_only_after_its_license_is_accepted(tmp_path, monkeypatch):
+    import numpy as np
+    import pandas as pd
+
+    from tradingagents.ledger.store import Store
+    from tradingagents.research import foundation as F
+
+    store = Store(tmp_path / "book")
+    assert not Z.timesfm_allowed(store)                                  # off by default
+    store.set("global", "timesfm3", {"enabled": True, "license_accepted": None})
+    assert not Z.timesfm_allowed(store)                                  # switched on without the license: still off
+    store.set("global", "timesfm3", {"enabled": True, "license_accepted": "2026-10-29"})
+    assert Z.timesfm_allowed(store)
+    assert Z.MODELS["timesfm3"][3] == "research" and Z.output_key("timesfm3") == "zoo.chronos_log_return"
+    close = pd.DataFrame({"A": np.linspace(10, 12, 300)}, index=pd.bdate_range("2025-01-01", periods=300))
+    key = lambda on: Z.zoo_inputs(tmp_path, close.index[-1], [], close, timesfm=on)
+    assert key(True) != key(False)                                       # switching it changes the inputs
+
+    class Out:
+        def __init__(self, base):
+            self.forecast = np.full(20, base + 0.02)
+            self.quantiles = np.tile(np.linspace(base - 0.1, base + 0.1, 9), (20, 1))
+
+    class Fake:
+        def predict_batch(self, contexts, horizon, **kw):
+            assert kw["make_positive"] is False and kw["univariate"] is True and horizon == 20
+            return iter([Out(float(c[-1])) for c in contexts])
+
+    monkeypatch.setitem(F._TIMESFM, "cpu", Fake())
+    rows = pd.DataFrame({"cash_h": [0.0]}, index=pd.MultiIndex.from_tuples([(close.index[-1], "A")]))
+    m = F.TimesFM3(close, "cpu").fit(None, None, 20)
+    assert m.quantiles(rows)[0] == pytest.approx([-0.1, 0.02, 0.1])     # 10%, median, 90% log return from t
+    assert "non-commercial" in m.describe()["license"]

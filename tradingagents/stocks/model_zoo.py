@@ -45,6 +45,8 @@ MODELS = {
               "mamba (64-day sequences + 54 features)", "models"),
     "chronos2_covariates": ("Chronos-2 with market covariates (SPY, sector, volume, VIX, 10-year yield), zero-shot",
                             "return", "chronos2 with covariates", "chronos"),
+    "timesfm3": ("TimesFM 3.0 (Google), pretrained, prices only (zero-shot); research only: non-commercial license",
+                 "return", "timesfm3 (zero-shot)", "research"),
     "ensemble": ("Learned-weight ensemble of the distinct models (decides the ranking)", "return",
                  "ensemble (learned weights)", "models"),
     "momentum_12_1": ("Momentum, 12 months less the last", "rank", "momentum_12_1", "baselines"),
@@ -323,7 +325,8 @@ def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool 
     data = D.load(watch, Path(cache_dir))
     spy = data.close["SPY"].dropna()
     cutoff = spy.index[-1]
-    input_key = zoo_inputs(cache_dir, cutoff, watch, data.close)
+    research = timesfm_allowed(store)
+    input_key = zoo_inputs(cache_dir, cutoff, watch, data.close, timesfm=research)
     last = latest(store.con)
     if last and not force and last.get("input_key") == input_key:
         say("Same data, code and models as the run of " + last["created_at"][:16].replace("T", " ") + " UTC: reused", 1.0)
@@ -362,7 +365,7 @@ def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool 
     tickers = today_tickers
     member = today["in_index"].to_numpy(dtype=bool)
     scores, notes = {}, {}
-    steps = list(FITTED) + ["chronos2", "chronos2_covariates", "mamba"]
+    steps = list(FITTED) + ["chronos2", "chronos2_covariates", "mamba"] + (["timesfm3"] if research else [])
     for i, name in enumerate(steps):
         say(f"{'Fitting' if name in due else 'Scoring with'} {MODELS[name][0]}", 0.40 + 0.55 * i / len(steps))
         try:
@@ -371,6 +374,10 @@ def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool 
 
                 etf = {t: (data.info.get(t) or {}).get("sector_etf") for t in tickers}
                 s = Chronos2Covariates(data.close, data.volume, etf, device).fit(None, None, 20).predict(today)
+            elif name == "timesfm3":
+                from tradingagents.research.foundation import TimesFM3
+
+                s = TimesFM3(data.close[[t for t in tickers if t in data.close]], device).fit(None, None, 20).predict(today)
             elif name == "chronos2":
                 from tradingagents.research.foundation import Chronos2
 
@@ -445,7 +452,16 @@ def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool 
 ENSEMBLE = "ensemble.json"
 
 
-def zoo_inputs(cache_dir, cutoff, watch, close: pd.DataFrame) -> str:
+def timesfm_allowed(store) -> bool:
+    """TimesFM 3.0 runs only after the owner accepted its non-commercial license (Settings)."""
+    try:
+        s = store.get("global", "timesfm3") or {}
+    except Exception:
+        return False
+    return bool(s.get("enabled") and s.get("license_accepted"))
+
+
+def zoo_inputs(cache_dir, cutoff, watch, close: pd.DataFrame, timesfm: bool = False) -> str:
     """What every model's run depends on: the data (cutoff and that close's prices), the watchlist, the models' code,
     the ensemble bundle and the pretrained-weight pin."""
     import os
@@ -457,23 +473,25 @@ def zoo_inputs(cache_dir, cutoff, watch, close: pd.DataFrame) -> str:
                   "code": K.code_hash("stocks/model_zoo.py", "stocks/seq_model.py", "stocks/panel.py",
                                       "stocks/adapters.py", "research/foundation.py", "stocks/data.py"),
                   "ensemble": K.file_hash(Path(cache_dir) / "decision_models" / ENSEMBLE),
-                  "chronos_revision": os.environ.get("TRADINGAGENTS_CHRONOS_REVISION")})
+                  "chronos_revision": os.environ.get("TRADINGAGENTS_CHRONOS_REVISION"),
+                  **({"timesfm3": os.environ.get("TRADINGAGENTS_TIMESFM_REVISION") or "on"} if timesfm else {})})
 
 
 def _artifacts(scores: dict, device: str) -> dict:
     """The pretrained weights a run used, as loaded (the revision is recorded, not assumed)."""
-    if not any(k.startswith("chronos2") for k in scores):
-        return {}
-    from tradingagents.research.foundation import loaded_revision
+    from tradingagents.research.foundation import loaded_revision, timesfm_revision
 
-    return {"chronos2": loaded_revision(device)}
+    out = {"chronos2": loaded_revision(device)} if any(k.startswith("chronos2") for k in scores) else {}
+    if "timesfm3" in scores:
+        out["timesfm3"] = timesfm_revision(device)
+    return out
 
 
 def output_key(name: str) -> str | None:
     """Which ``model_outputs`` entry a model's ``forecast`` number is: they differ in unit and clock."""
     if name == "ensemble":
         return "zoo.ensemble_expected_net"
-    if name.startswith("chronos2"):
+    if name.startswith("chronos2") or name == "timesfm3":
         return "zoo.chronos_log_return"
     return "zoo.forecast_log_excess" if MODELS.get(name, ("", ""))[1] == "return" else None
 
@@ -503,7 +521,8 @@ def describe(run: dict, decision: dict | None = None) -> dict:
     for k, meta in (run.get("models") or {}).items():
         section = MODELS.get(k, ("", "", "", "models"))[3]
         lifecycle = ("active_decision" if k == "decision" or (k == "ensemble" and ens)
-                     else "baseline" if section == "baselines" else "challenger")
+                     else "baseline" if section == "baselines" else "research" if section == "research"
+                     else "challenger")
         models[k] = {**meta, "coverage": coverage.get(k, 0), "of": n, "output": output_key(k), "lifecycle": lifecycle,
                      "failed": (run.get("notes") or {}).get(k)}
     return {"models": models, "stocks_scored": n, "stocks": stocks,

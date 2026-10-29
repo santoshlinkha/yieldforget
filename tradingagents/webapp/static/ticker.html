@@ -776,7 +776,7 @@ async function load() {
   }
 }
 const ZOO_SHORT = {xgb_rank: "XGB (54)", xgb_rank_all: "XGB (all)", lgbm_lambdarank: "LambdaRank", lgbm_regression: "LGBM reg.",
-  ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", chronos2_covariates: "Chronos-2 + market",
+  ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", chronos2_covariates: "Chronos-2 + market", timesfm3: "TimesFM 3.0",
   mamba: "Mamba", ensemble: "Ensemble", decision: "Decision", momentum_12_1: "Momentum",
   low_volatility: "Low vol.", analysts_target_upside: "Target upside", eps_surprise: "EPS surprise"};
 const ZOO_FITTED = ["xgb_rank", "xgb_rank_all", "lgbm_lambdarank", "lgbm_regression", "ridge_pooled", "ridge_per_stock",
@@ -796,7 +796,7 @@ async function loadZooTicker() {
     `<div class="table-wrap"><table class="compact"><caption class="sr-only">Each model's percentile and forecast for ${esc(symbol)}</caption><tr><th class="l" scope="col">Model</th><th scope="col">Role</th><th scope="col" title="Percentile among today's stocks; 100 = the model's top pick">Percentile</th><th scope="col">Forecast</th><th scope="col" title="Rank correlation with the net trade result on data the model had not seen: 2012-24 · 2025 on">Tested IC</th></tr>` +
     Object.keys(d.models).map(k => { const x = f[k], o = out(k);
       return `<tr><th class="l small" scope="row" title="${esc(d.models[k].label)}">${esc(ZOO_SHORT[k] || k)}</th><td class="small">${esc(ROLE[d.models[k].lifecycle] || "")}</td><td>${x ? Math.round(x.pct * 100) : "–"}</td>` +
-        `<td title="${o ? esc(o.label) : ""}">${x && x.forecast != null ? spct(x.forecast, 1) + (k === "ensemble" ? ' <span class="muted small">net P&amp;L</span>' : k.startsWith("chronos2") ? ' <span class="muted small">from t</span>' : "") : '<span class="muted">rank only</span>'}</td><td class="muted small">${ic(k)}</td></tr>`; }).join("") +
+        `<td title="${o ? esc(o.label) : ""}">${x && x.forecast != null ? spct(x.forecast, 1) + (k === "ensemble" ? ' <span class="muted small">net P&amp;L</span>' : k.startsWith("chronos2") || k === "timesfm3" ? ' <span class="muted small">from t</span>' : "") : '<span class="muted">rank only</span>'}</td><td class="muted small">${ic(k)}</td></tr>`; }).join("") +
     `</table></div><p class="muted small">Percentile: where ${esc(symbol)} stands among the ${d.members} S&amp;P 500 members by each model (100 = its top pick). Forecasts are not one quantity: regression models give the 20-session log return over cash from the next close (t+1 to t+21); Chronos rows give the log return from the latest close (t to t+20); the ensemble gives the expected net P&amp;L of the barrier-policy trade after costs. Compare percentiles across models, not forecasts. Data to ${esc(d.info_cutoff)}. A tested IC near 0 means the model has shown no skill.</p>`;
 }
 loadZooTicker();

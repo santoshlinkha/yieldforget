@@ -713,7 +713,7 @@ class App:
         sch, last = g.get("schedule") or {}, g.get("schedule_state") or {}
         cutoff = local_store.last_final_session()
         ens = self._ensemble_age()
-        return {"settings": sch, "last": last, "latest_close": cutoff.isoformat(),
+        return {"settings": sch, "timesfm3": g.get("timesfm3") or {}, "last": last, "latest_close": cutoff.isoformat(),
                 "done_for_latest_close": last.get("cutoff") == cutoff.isoformat() and not last.get("error"),
                 "next_session": next_session(cutoff).isoformat(), "ensemble": ens, "job": self.morning.state()}
 

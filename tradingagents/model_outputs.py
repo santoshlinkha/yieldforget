@@ -110,7 +110,7 @@ OUTPUTS: dict[str, Output] = {o.key: o for o in [
            "20-session log return over cash, entry at the next close", "log return", "cash (3-month T-bill)", H,
            NEXT_CLOSE, "the close at t+21", "none", "none (regression output)",
            "Chronos rows forecast from the current close (t) instead; see zoo.chronos_log_return"),
-    Output("zoo.chronos_log_return", "Chronos forecast: log return from the current close",
+    Output("zoo.chronos_log_return", "Pretrained model forecast (Chronos-2, TimesFM 3.0): log return from the current close",
            "median of the 20-step-ahead price path relative to the last close", "log return", None, H, CLOSE_T,
            "the close 20 sessions later (t+20)", "none", "none (pretrained, zero-shot)",
            "a different clock from the trade labels (t+1 to t+21); compare ranks, not returns"),

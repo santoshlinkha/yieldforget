@@ -8,8 +8,9 @@ cutoff date given and no statement on financial series. It may therefore have se
 some of the very prices it is tested on: **contamination risk unknown**. Its
 results are reported over the whole test period, with this label, and separately
 for test dates after its public release (October 2025, arXiv 2510.15821).
-TimesFM-3 was not used: its weights are licensed for non-commercial,
-non-production use only.
+TimesFM 3.0 (Google, 2026-08-31) is offered beside it as a **research-only** model (``TimesFM3`` below): its
+weights are licensed for non-commercial, non-production use only, so it is off until the owner accepts that license
+in Settings, and it never enters the ensemble or the daily decision.
 
 How it forecasts here: for each (date, ticker) row, the context is that asset's last
 1,024 daily log closes up to the date, and Chronos-2 forecasts the next ``horizon``
@@ -102,6 +103,59 @@ class Chronos2(Forecaster):
         return {"name": self.name, "checkpoint": "amazon/chronos-2", "license": "Apache-2.0",
                 "context": CONTEXT, "device": self.device, "contamination": "unknown (no training cutoff published)",
                 "released": RELEASE}
+
+
+TIMESFM_REPO = "google/timesfm-3.0-pytorch"
+TIMESFM_RELEASE = "2026-08-31"
+TIMESFM_LICENSE = "timesfm-non-commercial-license-v1.0 (non-commercial, non-production)"
+TIMESFM_REVISION_ENV = "TRADINGAGENTS_TIMESFM_REVISION"
+_TIMESFM: dict[str, object] = {}
+
+
+def timesfm3(device: str):
+    if device not in _TIMESFM:
+        from timesfm3 import ModelConfig, TimesFM3Evaluator
+
+        pinned = os.environ.get(TIMESFM_REVISION_ENV) or None
+        _TIMESFM[device] = TimesFM3Evaluator(ModelConfig(checkpoint_path=TIMESFM_REPO, per_core_batch_size=64,
+                                                         device=device, revision=pinned))
+    return _TIMESFM[device]
+
+
+class TimesFM3(Chronos2):
+    """TimesFM 3.0, zero-shot on each stock's last ``CONTEXT`` daily log closes, like ``Chronos2``. Its quantiles run
+    from 10% to 90%, so the band it reports is 10-90 (not Chronos's 5-95). Research only (see the module docstring)."""
+
+    name = "timesfm3"
+
+    def _forecast(self, rows: pd.DataFrame) -> np.ndarray:
+        """``(rows, 3)``: forecast log return to the horizon at the 10th, 50th and 90th percentiles."""
+        todo = [k for k in rows.index if (k, self.horizon) not in self._cache]
+        for start in range(0, len(todo), self.batch):
+            keys = todo[start:start + self.batch]
+            contexts, last = [], []
+            for d, t in keys:
+                i = self.pos[d] + 1
+                series = self.logp[t].iloc[max(0, i - CONTEXT):i].dropna().to_numpy(np.float32)
+                contexts.append(series)
+                last.append(series[-1])
+            outs = timesfm3(self.device).predict_batch(contexts, horizon=self.horizon, return_quantiles=True,
+                                                       univariate=True, make_positive=False)
+            for k, o, base in zip(keys, outs, last, strict=True):
+                q = np.asarray(o.quantiles, dtype=float)[-1]          # the 9 quantiles at the horizon: 10% .. 90%
+                self._cache[(k, self.horizon)] = np.array([q[0], float(np.asarray(o.forecast)[-1]), q[-1]]) - base
+        return np.array([self._cache[(k, self.horizon)] for k in rows.index])
+
+    def describe(self):
+        return {"name": self.name, "checkpoint": TIMESFM_REPO, "license": TIMESFM_LICENSE, "context": CONTEXT,
+                "device": self.device, "contamination": "unknown (no training cutoff published)",
+                "released": TIMESFM_RELEASE, "use": "research only: never in the ensemble or the decision"}
+
+
+def timesfm_revision(device: str) -> dict:
+    return {"repo": TIMESFM_REPO, "requested_revision": os.environ.get(TIMESFM_REVISION_ENV) or None,
+            "pinned": bool(os.environ.get(TIMESFM_REVISION_ENV)), "license": TIMESFM_LICENSE,
+            "loaded": device in _TIMESFM}
 
 
 class Chronos2Covariates(Chronos2):
