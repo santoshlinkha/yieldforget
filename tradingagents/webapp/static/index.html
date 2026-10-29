@@ -143,7 +143,10 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
   padding: 6px 8px; background: var(--surface); }
 .zoo-chip b { font-size: 16px; }
 .fit-table { width: 100%; table-layout: fixed; }
-.fit-table th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
+.fit-table th { white-space: normal; vertical-align: bottom; line-height: 1.25; overflow-wrap: anywhere; font-size: 11.5px; }
+.fit-table td { font-size: 12.5px; padding-left: 6px; padding-right: 6px; }
+.fit-table th { padding-left: 6px; padding-right: 6px; }
+.sort-mark { display: inline-block; width: 1em; text-align: center; }
 .fit-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fit-table .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-legend { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 8px 0 0; }
@@ -1519,18 +1522,20 @@ const QS_WIDTHS = {
 function fitScreen(view, cols) {
   const t = $("qsTable"), w = QS_WIDTHS[view] || {};
   t.classList.add("fit-table");
-  t.style.minWidth = Object.values(w).reduce((a, b) => a + b, 0) + "px";
-  t.insertAdjacentHTML("afterbegin", "<colgroup>" + cols.map(([c]) => `<col style="width:${w[c] || 90}px">`).join("") + "</colgroup>");
+  // Shares of the panel's width (from each column's weight), so the table always fits the panel exactly.
+  const total = cols.reduce((sum, [c]) => sum + (w[c] || 90), 0);
+  t.insertAdjacentHTML("afterbegin", "<colgroup>" + cols.map(([c]) => `<col style="width:${((w[c] || 90) / total * 100).toFixed(2)}%">`).join("") + "</colgroup>");
   t.querySelectorAll("th[data-k]").forEach(th => {
     const c = cols.find(x => x[0] === th.dataset.k);
     if (c && c[2]) th.title = c[2];
   });
   t.querySelectorAll("td").forEach(td => { if (!td.title && td.textContent.length > 14) td.title = td.textContent.trim(); });
+  $("qsLegend").open = true;
   $("qsLegend").innerHTML = `<summary>What the columns mean</summary><dl class="col-legend">` +
     cols.map(([, label, help]) => `<dt>${esc(label)}</dt><dd>${esc(help || "")}</dd>`).join("") + "</dl>";
 }
 function renderScreen() {
-  $("qsTable").classList.remove("fit-table"); $("qsTable").style.minWidth = ""; $("qsLegend").innerHTML = "";
+  $("qsTable").classList.remove("fit-table"); $("qsLegend").innerHTML = "";
   if (!qsData || !qsData.latest) { $("qsTable").innerHTML = "<tr><td class='muted l'>Not built yet: build it once (a few minutes the first time).</td></tr>"; return; }
   const q = $("qsFilter").value.trim().toLowerCase();
   let rows = qsData.latest.rows.filter(r => !q || `${r.ticker} ${r.name} ${r.sector}`.toLowerCase().includes(q));
@@ -1545,7 +1550,7 @@ function renderScreen() {
   $("qsMore").style.display = rows.length > SHOWN ? "" : "none";
   $("qsToggle").textContent = qsAll ? `Show the first ${SHOWN}` : `Show all ${rows.length}`;
   $("qsToggle").onclick = () => { qsAll = !qsAll; renderScreen(); };
-  const arrow = c => qsSort.key === c ? (qsSort.dir < 0 ? " ▾" : " ▴") : "";
+  const arrow = c => `<span class="sort-mark" aria-hidden="true">${qsSort.key === c ? (qsSort.dir < 0 ? "▾" : "▴") : ""}</span>`;
   document.querySelectorAll("[data-qv]").forEach(b => b.setAttribute("aria-pressed", b.dataset.qv === qsView));
   if (qsView !== "signals") $("qsTable").classList.remove("sg-table");
   if (qsView === "signals") { renderSignals(shown, arrow); return; }
