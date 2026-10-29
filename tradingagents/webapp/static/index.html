@@ -1142,7 +1142,7 @@ async function aiPool() {
     const q = await api("/api/screen/quality");
     const names = new Set(), out = [];
     for (const r of ((q.latest || {}).rows || []).filter(r => r.rank).sort((a, b) => a.rank - b.rank)) {
-      const company = String(r.name || r.ticker).replace(/\s+(Class|Cl\.?)\s+[A-C].*$/i, "").trim().toLowerCase();
+      const company = String(r.name || r.ticker).replace(/\s+(Class|Cl\.?)\s+[A-C]\b.*$/i, "").trim().toLowerCase();
       if (names.has(company)) continue;            // one share class per company (GOOGL and GOOG are one)
       names.add(company); out.push(r.ticker);
       if (out.length >= AI_POOL) break;
