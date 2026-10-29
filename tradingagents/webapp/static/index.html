@@ -517,6 +517,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
               <h3>Why it's happening</h3>
               <span><span class="muted" id="mkStatus"></span> <button class="ghost" id="mkExplain">Explain today's moves</button></span>
             </div>
+            <div id="mkJob"></div>
             <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
           </div>
         </div>
@@ -2050,7 +2051,8 @@ function renderMarket(m) {
 function renderBrief(b, job) {
   $("mkExplain").disabled = job.running;
   $("mkExplain").textContent = b ? "Explain again" : "Explain today's moves";
-  $("mkStatus").textContent = job.running ? `Working: ${job.progress}…` : "";
+  $("mkStatus").textContent = "";
+  $("mkJob").innerHTML = job.running ? jobLine(job, "explain") : "";       // the progress bar while it works
   if (job.error && !job.running) $("mkStatus").textContent = "Failed: " + job.error.slice(0, 200);
   if (!b) return;
   const arrow = d => d === "up" ? '<span class="arrow pos">▲</span>' : d === "down" ? '<span class="arrow neg">▼</span>' : '<span class="arrow muted">◆</span>';

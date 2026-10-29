@@ -572,3 +572,18 @@ def test_a_per_step_chat_answer_is_saved_as_the_api_runs_report_files(server):
     assert "FINAL TRANSACTION PROPOSAL: **BUY**" in (rep / "3_trading" / "trader.md").read_text(encoding="utf-8")
     prov = json.loads((rep / "provenance.json").read_text(encoding="utf-8"))
     assert prov["answer_form"] == "per-step (API form)" and len(prov["steps_answered"]) == 12
+
+
+def test_non_agent_ai_work_uses_its_own_gemini_key_and_agents_do_not(tmp_path, monkeypatch):
+    from tradingagents.llm_clients.factory import build_llm_kwargs
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    monkeypatch.delenv("GEMINI_CONTEXT_API_KEY", raising=False)
+    assert app.context_config() is app.config                                  # no key: the usual config
+    monkeypatch.setenv("GEMINI_CONTEXT_API_KEY", "synthetic-context-key")
+    cfg = app.context_config()
+    assert cfg["llm_provider"] == "google" and build_llm_kwargs(cfg)["api_key"] == "synthetic-context-key"
+    for attempt in app.agent_attempts(app.store.settings("global")):         # the agents never carry it
+        assert "context_google_api_key" not in attempt and "api_key" not in build_llm_kwargs(attempt)
+    from tradingagents.webapp import keys
+    assert "GEMINI_CONTEXT_API_KEY" in keys.known()                           # settable from Settings

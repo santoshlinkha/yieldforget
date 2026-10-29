@@ -100,6 +100,10 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
         thinking_level = config.get("google_thinking_level")
         if thinking_level:
             kwargs["thinking_level"] = thinking_level
+        # A separate key for the app's non-agent AI work (market brief, news, moat), set by the web app only on
+        # those calls' configs; the agents' configs never carry it.
+        if config.get("context_google_api_key"):
+            kwargs["api_key"] = config["context_google_api_key"]
 
     elif provider in REASONING_EFFORT_PROVIDERS:
         reasoning_effort = config.get("openai_reasoning_effort")

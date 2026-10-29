@@ -19,10 +19,14 @@ DATA_KEYS = {"FRED_API_KEY": "FRED (economic data)", "ALPHA_VANTAGE_API_KEY": "A
              "TYPESAFE_API_KEY": "TypeSafe (post screening)"}
 
 
+CONTEXT_KEY = "GEMINI_CONTEXT_API_KEY"
+CONTEXT_KEYS = {CONTEXT_KEY: "Google Gemini for non-agent work (Trend page brief, ticker news, moat)"}
+
+
 def known() -> dict[str, str]:
     """{env name: label} for every key the page may set."""
     out = {env: provider for provider, env in PROVIDER_API_KEY_ENV.items() if env}
-    return {**out, **DATA_KEYS}
+    return {**out, **DATA_KEYS, **CONTEXT_KEYS}
 
 
 def env_path() -> Path:

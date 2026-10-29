@@ -594,15 +594,29 @@ class App:
                 "catalog": {p: {"quick": first_model(p, "quick"), "deep": first_model(p, "deep")} for p in keys},
                 "suggested": suggest(config["llm_provider"], keys)}
 
+    def context_config(self) -> dict:
+        """The config for the app's non-agent AI work (market brief, ticker news, moat): Gemini on its own key
+        (``GEMINI_CONTEXT_API_KEY``) when that key is set, else the usual config. Agent runs never use it."""
+        from tradingagents.webapp.keys import CONTEXT_KEY
+
+        key = os.environ.get(CONTEXT_KEY)
+        if not key:
+            return self.config
+        model = GEMINI_FALLBACKS[0]
+        return {**self.config, "llm_provider": "google", "quick_think_llm": model, "deep_think_llm": model,
+                "backend_url": None, "context_google_api_key": key}
+
     def start_explain(self) -> bool:
         g = self.store.settings("global")
 
         def work(job):
-            job.progress = "reading prices"
+            job.progress, job.fraction = "reading prices", 0.05
             overview = self.market()["overview"]
-            job.progress = "reading headlines and asking the AI"
-            brief = market_brief(overview, self.config, gateway=self.gateway(), allow_paid=True,
-                                 fallbacks=tuple(g["ai_fallbacks"]))
+            job.progress, job.fraction = "reading headlines and economic data, then asking the AI", 0.35
+            cfg = self.context_config()
+            brief = market_brief(overview, cfg, gateway=self.gateway(), allow_paid=True,
+                                 fallbacks=() if cfg is not self.config else tuple(g["ai_fallbacks"]))
+            job.progress, job.fraction = "saving the brief", 0.95
             save_json(Path(self.config["results_dir"]) / "market" / f"brief_{overview['as_of']}.json", brief)
             return {"as_of": overview["as_of"]}
 
@@ -943,7 +957,7 @@ class App:
             news = summary(self.store.con, t, datetime.now(UTC), days=14)
             numbers = (f"20-session expected return above cash {fc['mean']:+.3%} (net of cost {fc['net']:+.3%}), "
                        f"5-95% {fc['q05']:+.2%} to {fc['q95']:+.2%}, P(large loss) {fc['p_large_loss']:.0%}")
-            out[t] = read_news(t, f.get("name") or t, run["info_cutoff"], news["items"], numbers, self.config,
+            out[t] = read_news(t, f.get("name") or t, run["info_cutoff"], news["items"], numbers, self.context_config(),
                                gateway=self.gateway(), allow_paid=True, fallbacks=tuple(g["ai_fallbacks"]))
         return {"shortlist": wanted[:limit], "readings": out}
 
@@ -1991,7 +2005,7 @@ class App:
                                  f"{'pass' if c['passed'] else 'fail' if c['passed'] is False else 'no data'}"
                                  for c in checks["checks"])
             job.progress = "asking the AI to rate the moat's sources from the filing"
-            result = moat_sources(symbol, profile.get("longName") or symbol, filing, numbers, self.config,
+            result = moat_sources(symbol, profile.get("longName") or symbol, filing, numbers, self.context_config(),
                                   gateway=self.gateway(), allow_paid=True, fallbacks=tuple(g["ai_fallbacks"]))
             save_json(path, result)
             return result
