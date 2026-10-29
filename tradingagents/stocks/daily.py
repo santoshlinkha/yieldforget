@@ -77,13 +77,17 @@ def decision_inputs(store, cache_dir, cutoff, as_of, policy, r: dict, watch, clo
     from .model_zoo import ENSEMBLE
 
     matured = store.con.execute("SELECT COUNT(*) FROM model_outcomes").fetchone()[0]
+    from .model_zoo import latest as latest_zoo
+
+    zoo = latest_zoo(store.con) if use_ensemble else None    # a new run of every model can bring the ensemble's scores
+    zoo_id = zoo["id"] if zoo and zoo.get("info_cutoff") == str(pd.Timestamp(cutoff).date()) else None
     return K.key({"cutoff": str(pd.Timestamp(cutoff).date()), "as_of": str(as_of), "prices": K.prices_hash(close, cutoff),
                   "policy": policy.version(), "rules": r, "capital": capital.snapshot(store),
                   "books": store.ledger.fingerprint(), "watch": sorted(watch), "code": model_code_hash(),
                   "decision_code": K.code_hash("stocks/daily.py", "stocks/feedback.py", "stocks/sizing.py",
                                                "stocks/decision_layer.py", "stocks/positions.py"),
                   "ensemble": K.file_hash(Path(cache_dir) / "decision_models" / ENSEMBLE) if use_ensemble else None,
-                  "matured_outcomes": matured, "version": BUNDLE_VERSION})
+                  "matured_outcomes": matured, "zoo_run": zoo_id, "version": BUNDLE_VERSION})
 
 
 def decision_procedure(policy, bundle: dict, ranker: dict, r: dict) -> str:

@@ -20,6 +20,7 @@ analysts' consensus rebuilt per date (``consensus``; never the AI agents' rating
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -388,8 +389,11 @@ def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool 
                         model = fitted_ridge_per_stock(train, feats_of[name], device, tickers=tickers)
                     else:
                         model = FIT[name](train, feats_of[name], device)
-                    _keep(folder, name, feats_of[name], cutoff, model)
                     fitted_on[name] = str(cutoff.date())
+                    try:
+                        _keep(folder, name, feats_of[name], cutoff, model)
+                    except Exception as exc:  # not kept: refitted next run, but today's scores stand
+                        notes[f"{name}_cache"] = f"fitted but not kept: {str(exc)[:160]}"
                 s = model.predict(today)
             scores[name] = np.asarray(s, dtype=float)
         except Exception as exc:  # one model failing never stops the others
@@ -425,7 +429,7 @@ def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool 
                "models": {k: {"label": v[0], "kind": v[1]} for k, v in MODELS.items()}, "notes": notes,
                "tested": tested_record(), "stocks": stocks_out, "seconds": round(time.time() - t0),
                "artifacts": _artifacts(scores, device)}
-    run_id = f"zoo-{cutoff.date()}-{int(time.time())}"
+    run_id = f"zoo-{cutoff.date()}-{int(time.time())}-{os.urandom(3).hex()}"   # two runs in one second stay apart
     with transaction(store.con):
         store.con.execute("INSERT INTO model_zoo_runs VALUES (?, ?, ?, ?)",
                           (run_id, now_utc(), payload["info_cutoff"], json.dumps(payload)))

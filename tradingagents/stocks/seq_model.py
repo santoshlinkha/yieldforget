@@ -98,6 +98,26 @@ class MambaRanker:
     def __init__(self, bank: SequenceBank, device: str = "cpu", seed: int = 7):
         self.bank, self.device, self.seed = bank, device, seed
 
+    def __getstate__(self):
+        """Saved as its weights (the network class is built inside ``_net``), without the price bank."""
+        state = {k: v for k, v in self.__dict__.items() if k not in ("net", "bank")}
+        if getattr(self, "net", None) is not None:
+            state["_net_state"] = {k: v.detach().cpu() for k, v in self.net.state_dict().items()}
+        return state
+
+    def __setstate__(self, state):
+        import torch
+
+        weights = state.pop("_net_state", None)
+        self.__dict__.update(state)
+        self.bank = None                       # given back by the caller (``model_zoo.run``) before predicting
+        if weights is not None:
+            if str(self.device).startswith("cuda") and not torch.cuda.is_available():
+                self.device = "cpu"
+            self.net = _net(len(self.features), self.device)
+            self.net.load_state_dict(weights)
+            self.net.eval()
+
     def _static(self, rows, fit=False):
         x = rows[self.features].astype(float)
         if fit:
