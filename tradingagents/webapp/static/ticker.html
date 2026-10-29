@@ -74,6 +74,7 @@ th:first-child, td:first-child, th.l, td.l { text-align: left; }
 .note { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
 .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .tabs button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .tabs button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .chips button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -739,11 +740,16 @@ async function loadZooTicker() {
   const f = d.forecasts || {};
   if (!Object.keys(f).length) { $("zooBox").innerHTML = `<p class="muted small">${esc(symbol)} was not scored in the run of ${esc(d.info_cutoff)} (not an S&amp;P 500 member or in your watchlist).</p>`; return; }
   const ic = k => { const r = (d.tested || {})[k]; return r && r.development_ic != null ? `${r.development_ic.toFixed(3)}${r.recent_ic != null ? " · " + r.recent_ic.toFixed(3) : ""}` : "untested"; };
-  $("zooBox").innerHTML = `<div class="table-wrap"><table class="compact"><tr><th class="l">Model</th><th>Rank</th><th>Forecast</th><th title="Rank correlation with the net trade result on data the model had not seen: 2012-24 · 2025 on">Tested IC</th></tr>` +
-    Object.keys(d.models).map(k => { const x = f[k];
-      return `<tr><td class="l small" title="${esc(d.models[k].label)}">${esc(ZOO_SHORT[k] || k)}</td><td>${x ? `top ${Math.max(1, Math.round((1 - x.pct) * 100))}%` : "–"}</td>` +
-        `<td>${x && x.forecast != null ? spct(x.forecast, 1) : '<span class="muted">rank only</span>'}</td><td class="muted small">${ic(k)}</td></tr>`; }).join("") +
-    `</table></div><p class="muted small">Rank: where ${esc(symbol)} stands among the ${d.members} S&amp;P 500 members by each model (top 1% = its top pick). Forecast: the 20-session log return over cash from the next close, for models that predict one. Data to ${esc(d.info_cutoff)}. A tested IC near 0 means the model has shown no skill; none of these decides anything.</p>`;
+  // One rank notation everywhere: the percentile among today's stocks, 100 = the model's top pick. Each forecast
+  // number keeps its own definition (model_outputs), and the row says which model really decides the ranking.
+  const out = k => (d.outputs || {})[(d.models[k] || {}).output];
+  const ROLE = {active_decision: "decides", fallback_decision: "decides (fallback)", challenger: "shown only", baseline: "baseline"};
+  $("zooBox").innerHTML = `<p class="small${d.ranking_source === "ensemble" ? "" : " note"}"><b>Ranking:</b> ${esc(d.ranking_note || "")}.</p>` +
+    `<div class="table-wrap"><table class="compact"><caption class="sr-only">Each model's percentile and forecast for ${esc(symbol)}</caption><tr><th class="l" scope="col">Model</th><th scope="col">Role</th><th scope="col" title="Percentile among today's stocks; 100 = the model's top pick">Percentile</th><th scope="col">Forecast</th><th scope="col" title="Rank correlation with the net trade result on data the model had not seen: 2012-24 · 2025 on">Tested IC</th></tr>` +
+    Object.keys(d.models).map(k => { const x = f[k], o = out(k);
+      return `<tr><th class="l small" scope="row" title="${esc(d.models[k].label)}">${esc(ZOO_SHORT[k] || k)}</th><td class="small">${esc(ROLE[d.models[k].lifecycle] || "")}</td><td>${x ? Math.round(x.pct * 100) : "–"}</td>` +
+        `<td title="${o ? esc(o.label) : ""}">${x && x.forecast != null ? spct(x.forecast, 1) + (k === "ensemble" ? ' <span class="muted small">net P&amp;L</span>' : k.startsWith("chronos2") ? ' <span class="muted small">from t</span>' : "") : '<span class="muted">rank only</span>'}</td><td class="muted small">${ic(k)}</td></tr>`; }).join("") +
+    `</table></div><p class="muted small">Percentile: where ${esc(symbol)} stands among the ${d.members} S&amp;P 500 members by each model (100 = its top pick). Forecasts are not one quantity: regression models give the 20-session log return over cash from the next close (t+1 to t+21); Chronos rows give the log return from the latest close (t to t+20); the ensemble gives the expected net P&amp;L of the barrier-policy trade after costs. Compare percentiles across models, not forecasts. Data to ${esc(d.info_cutoff)}. A tested IC near 0 means the model has shown no skill.</p>`;
 }
 loadZooTicker();
 

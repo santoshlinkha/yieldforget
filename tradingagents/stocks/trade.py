@@ -129,6 +129,12 @@ def plan(decision: dict | None, budget: float, patient_limits: dict[str, dict] |
                      "the buy is its best idea on paper, not a validated signal. Size it as an experiment.")
     if not best:
         notes.append("No stock passes the model's gates today: waiting is the answer.")
+    ranker = (decision.get("model") or {}).get("ranker") or {}
+    if ranker.get("name") == "ensemble" and ranker.get("quality_matched") is False:
+        notes.append(ranker["quality_note"][0].upper() + ranker["quality_note"][1:] + ".")
+    if ranker.get("name") == "ensemble" and ranker.get("coverage") is not None and ranker["coverage"] < ranker["of"]:
+        notes.append(f"The ensemble scored {ranker['coverage']} of {ranker['of']} stocks; the rest keep the XGBoost "
+                     "ranker's numbers.")
     for n in dict.fromkeys(n for e in passing[:1 + RUNNERS_UP] for n in e.get("notes") or []):
         notes.append(n[0].upper() + n[1:] + ".")
     from .positions import POLICIES, execution_spec

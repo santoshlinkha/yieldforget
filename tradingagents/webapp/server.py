@@ -1325,9 +1325,15 @@ class App:
         state = self.zoo.state()
         if not run:
             return {"available": False, "job": state}
-        base = {"available": True, "job": state, **{k: run[k] for k in ("id", "created_at", "info_cutoff", "models",
+        from tradingagents.model_outputs import OUTPUTS
+
+        described = model_zoo.describe(run)
+        base = {"available": True, "job": state, **{k: run[k] for k in ("id", "created_at", "info_cutoff",
                                                                           "tested", "members", "notes", "version")},
-                "ensemble": run.get("ensemble")}
+                **described, "ensemble": run.get("ensemble"),
+                "outputs": {k: OUTPUTS[k].as_dict() for k in ("zoo.pct", "zoo.forecast_log_excess",
+                                                              "zoo.chronos_log_return", "zoo.ensemble_expected_net",
+                                                              "zoo.mean_pct")}}
         if ticker:
             t = ticker.strip().upper()
             return {**base, "ticker": t, "forecasts": run["stocks"].get(t)}

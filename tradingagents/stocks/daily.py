@@ -483,8 +483,16 @@ def apply_ensemble(today: pd.DataFrame, zoo: dict | None, bundle: dict, rows: pd
     r = rows.droplevel("date") if "date" in rows.index.names else rows
     r = r.reindex(out.index)
     out["p_win"] = bundle["quality"].predict(r.assign(score_pct=out["score_pct"].to_numpy()))
+    # The trade-quality model was fitted on the XGBoost ranker's out-of-fold percentiles, not the ensemble's: the
+    # P(profit) it gives an ensemble percentile is a transfer, untested until it is refitted on ensemble out-of-fold
+    # scores (backlog). Said on the record and on the Trade page rather than hidden.
     return out, {"name": "ensemble", "weights": zoo["ensemble"]["weights"], "version": zoo["ensemble"].get("version"),
-                 "note": "learned-weight ensemble of the stock models (Models tab)"}
+                 "note": "learned-weight ensemble of the stock models (Models tab)",
+                 "coverage": int(have.sum()), "of": int(len(out)),
+                 "quality_matched": False,
+                 "quality_note": "P(profit after costs) comes from the trade-quality model fitted on the XGBoost "
+                                 "ranker's out-of-fold percentiles, applied to the ensemble's percentile: not yet "
+                                 "refitted or tested on ensemble scores"}
 
 
 def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "barrier_20", train: bool = False,

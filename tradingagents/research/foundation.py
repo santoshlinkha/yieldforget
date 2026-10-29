@@ -21,6 +21,8 @@ is fitted: ``fit`` only records the horizon. One series per row, in bounded batc
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -31,12 +33,28 @@ RELEASE = "2025-10-17"
 _PIPELINES: dict[str, object] = {}
 
 
+REPO = "amazon/chronos-2"
+# The weights are not pinned unless this names a Hugging Face commit; what was loaded is recorded either way.
+REVISION_ENV = "TRADINGAGENTS_CHRONOS_REVISION"
+
+
 def pipeline(device: str):
     if device not in _PIPELINES:
         from chronos import Chronos2Pipeline
 
-        _PIPELINES[device] = Chronos2Pipeline.from_pretrained("amazon/chronos-2", device_map=device)
+        pinned = os.environ.get(REVISION_ENV) or None
+        kwargs = {"revision": pinned} if pinned else {}
+        _PIPELINES[device] = Chronos2Pipeline.from_pretrained(REPO, device_map=device, **kwargs)
     return _PIPELINES[device]
+
+
+def loaded_revision(device: str) -> dict:
+    """What a run used: the requested pin (or none), and the commit the weights resolved to when known."""
+    pipe = _PIPELINES.get(device)
+    config = getattr(getattr(pipe, "model", None), "config", None)
+    return {"repo": REPO, "requested_revision": os.environ.get(REVISION_ENV) or None,
+            "resolved_commit": getattr(config, "_commit_hash", None),
+            "pinned": bool(os.environ.get(REVISION_ENV))}
 
 
 class Chronos2(Forecaster):

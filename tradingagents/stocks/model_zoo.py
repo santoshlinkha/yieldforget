@@ -270,11 +270,15 @@ def run(store, cache_dir: Path, progress=None) -> dict:
                                              "excess_vs_spy": round(float(ens["expected_excess"][j]), 5),
                                              "net_sd": round(float(ens["net_sd"][j]), 5),
                                              "net_q10": round(float(ens["net_q10"][j]), 5) if np.isfinite(ens["net_q10"][j]) else None}
+    if ens is None:
+        notes["ensemble"] = ("not available: no learned-weight bundle (experiments/stacking_study.py) or it scored "
+                             "nothing; the daily decision falls back to the XGBoost ranker")
     payload = {"version": VERSION, "info_cutoff": str(cutoff.date()), "device": device, "train_rows": int(len(train)),
                "ensemble": ens and {"weights": ens["weights"], "evaluation": ens["evaluation"], "version": ens["version"]},
                "members": int(member.sum()), "watchlist": [t for t in watch if t in stocks_out],
                "models": {k: {"label": v[0], "kind": v[1]} for k, v in MODELS.items()}, "notes": notes,
-               "tested": tested_record(), "stocks": stocks_out, "seconds": round(time.time() - t0)}
+               "tested": tested_record(), "stocks": stocks_out, "seconds": round(time.time() - t0),
+               "artifacts": _artifacts(scores, device)}
     run_id = f"zoo-{cutoff.date()}-{int(time.time())}"
     with transaction(store.con):
         store.con.execute("INSERT INTO model_zoo_runs VALUES (?, ?, ?, ?)",
@@ -284,6 +288,45 @@ def run(store, cache_dir: Path, progress=None) -> dict:
 
 
 ENSEMBLE = "ensemble.json"
+
+
+def _artifacts(scores: dict, device: str) -> dict:
+    """The pretrained weights a run used, as loaded (the revision is recorded, not assumed)."""
+    if not any(k.startswith("chronos2") for k in scores):
+        return {}
+    from tradingagents.research.foundation import loaded_revision
+
+    return {"chronos2": loaded_revision(device)}
+
+
+def output_key(name: str) -> str | None:
+    """Which ``model_outputs`` entry a model's ``forecast`` number is: they differ in unit and clock."""
+    if name == "ensemble":
+        return "zoo.ensemble_expected_net"
+    if name.startswith("chronos2"):
+        return "zoo.chronos_log_return"
+    return "zoo.forecast_log_excess" if MODELS.get(name, ("", ""))[1] == "return" else None
+
+
+def describe(run: dict) -> dict:
+    """What a saved run covers, read from the run itself (so older runs are described too): each model's stock
+    count, its output, its lifecycle, and whether the learned ensemble really scored this run."""
+    stocks = run.get("stocks") or {}
+    n = len(stocks)
+    coverage = {k: sum(1 for m in stocks.values() if k in m) for k in run.get("models") or {}}
+    ens = coverage.get("ensemble", 0)
+    models = {}
+    for k, meta in (run.get("models") or {}).items():
+        section = MODELS.get(k, ("", "", "", "models"))[3]
+        lifecycle = ("active_decision" if k == "ensemble" and ens else "fallback_decision" if k == "xgb_rank" and not ens
+                     else "baseline" if section == "baselines" else "challenger")
+        models[k] = {**meta, "coverage": coverage.get(k, 0), "of": n, "output": output_key(k), "lifecycle": lifecycle,
+                     "failed": (run.get("notes") or {}).get(k)}
+    return {"models": models, "stocks_scored": n,
+            "ranking_source": ("ensemble" if ens else "xgb_rank"),
+            "ranking_note": (f"the learned-weight ensemble scored {ens} of {n} stocks and orders the daily decision"
+                             if ens else "the learned ensemble has no scores in this run, so the daily decision is "
+                             "ranked by the internal XGBoost ranker (fallback)")}
 
 
 def ensemble_bundle(cache_dir) -> dict | None:
