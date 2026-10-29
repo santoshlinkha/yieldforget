@@ -136,7 +136,13 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .zoo-fit td { white-space: normal; }
 .zoo-fit th, #zooTable th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .zoo-fit td.small, .zoo-fit th { max-width: 260px; }
-#zooTable { width: auto; min-width: 0; }
+#zooTable { width: 100%; min-width: 0; table-layout: fixed; }
+#zooTable th, #zooTable td { vertical-align: middle; }
+#zooTable .zoo-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
+.zp { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; width: 100%; }
+.zp b { min-width: 24px; text-align: right; font-variant-numeric: tabular-nums; }
+.zp-track { flex: 1; max-width: 70px; height: 6px; border-radius: 3px; background: var(--chart-grid); overflow: hidden; }
+.zp-track i { display: block; height: 100%; background: var(--accent); border-radius: 0 3px 3px 0; }
 #zooTable .zoo-open { white-space: nowrap; }
 .zoo-detail td { background: var(--surface-2); }
 .zoo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
@@ -616,9 +622,10 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
             <div class="card"><h3>The models</h3><div id="zooModels"></div></div>
           </div>
           <div class="card">
-            <div class="card-head"><h3>Every stock</h3><input id="zooFilter" placeholder="Find a ticker" style="max-width:200px"></div>
+            <div class="card-head"><h3>Every stock</h3><input id="zooFilter" placeholder="Find a ticker or company" style="max-width:220px"></div>
             <p class="muted small" id="zooCount" style="margin:0 0 6px"></p>
-            <div class="table-wrap"><table id="zooTable" class="compact"></table></div>
+            <div class="table-wrap"><table id="zooTable" class="compact zoo-stocks"></table></div>
+            <button class="ghost" id="zooMore" hidden style="margin-top:8px">Show 20 more</button>
           </div>
         </div>
 
@@ -1135,7 +1142,7 @@ async function loadZoo() {
 }
 // The stock table shows what decides (Decision), the ensemble and the plain mean; every other model is one click
 // away (a stock's row opens its details) or added as a column (Show).
-let zooCols = store.get("zooCols2", ["decision", "ensemble"]);
+let zooCols = store.get("zooCols2", ["decision", "ensemble"]), zooLimit = 20;
 const zooOpen = new Set();
 const LIFE = {active_decision: "decides", fallback_decision: "decides (fallback)", challenger: "shown only", baseline: "baseline"};
 function renderZoo() {
@@ -1177,30 +1184,36 @@ function renderZoo() {
   const rows = Object.entries(zoo.stocks).map(([t, m]) => {
     const fitted = ZOO_FITTED.map(k => m[k] && m[k].pct).filter(v => v != null);
     return {t, m, avg: fitted.length ? fitted.reduce((a, b) => a + b, 0) / fitted.length : null, n: fitted.length};
-  }).filter(r => !q || r.t.includes(q));
+  }).filter(r => !q || r.t.includes(q) || String((zoo.names || {})[r.t] || "").toUpperCase().includes(q));
   const val = (r, k) => k === "avg" ? r.avg : k === "t" ? r.t : (r.m[k] ? r.m[k].pct : null);
   rows.sort((a, b) => {
     const x = val(a, zooSort.key), y = val(b, zooSort.key);
     if (x == null) return 1; if (y == null) return -1;
     return (x < y ? -1 : x > y ? 1 : 0) * zooSort.dir;
   });
-  const pctCell = x => x ? `<td><b>${Math.round(x.pct * 100)}</b></td>` : "<td class='muted' title='not scored'>–</td>";
+  // A percentile as its number and a small bar (100 = that model's top pick).
+  const pctBar = v => `<span class="zp"><span class="zp-track"><i style="width:${Math.max(2, Math.round(v * 100))}%"></i></span><b>${Math.round(v * 100)}</b></span>`;
+  const pctCell = x => x ? `<td>${pctBar(x.pct)}</td>` : "<td class='muted' data-tip='Not scored by this model'>–</td>";
   const sortTh = (k, label, title, cls = "") => {
     const on = zooSort.key === k;
     return `<th class="${cls}" scope="col" aria-sort="${on ? (zooSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${esc(k)}" data-tip="${esc(title)}">${label}${on ? (zooSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
   };
   // A stock's details: every model's percentile and its own forecast, named by what it measures.
-  const details = r => `<tr class="zoo-detail"><td colspan="${3 + shown.length}"><div class="zoo-grid">` +
+  const details = r => `<tr class="zoo-detail"><td colspan="${2 + shown.length}"><div class="zoo-grid">` +
     models.filter(k => r.m[k]).map(k => { const x = r.m[k], o = out(k);
       return `<div class="zoo-chip" title="${esc(zoo.models[k].label)}"><span class="muted small">${esc(ZOO_SHORT[k] || k)}</span><b>${Math.round(x.pct * 100)}</b>` +
         `${x.forecast != null && o ? `<span class="small" title="${esc(o.label)}">${spct(x.forecast, 1)} ${k === "ensemble" ? "net" : k.startsWith("chronos2") ? "from t" : "vs cash"}</span>` : ""}` +
         `${x.rank ? `<span class="muted small">#${x.rank} of ${x.of}</span>` : ""}</div>`; }).join("") +
     `</div><p class="muted small" style="margin:6px 0 0">Percentile among today's stocks (100 = that model's top pick). ${models.filter(k => !r.m[k]).length ? `Not scored by: ${models.filter(k => !r.m[k]).map(k => esc(ZOO_SHORT[k] || k)).join(", ")}.` : ""} <a href="/ticker/${encodeURIComponent(r.t)}" target="_blank" rel="noopener">Open ${esc(r.t)}</a></p></td></tr>`;
-  $("zooTable").innerHTML = `<caption class="sr-only">Each stock's percentile by the deciding ranking, the ensemble and the mean of the models (100 = top); click a stock for every model</caption><tr>${sortTh("t", "Ticker", "Ticker", "l")}` +
+  const page = rows.slice(0, q ? 600 : zooLimit);
+  $("zooTable").className = "compact zoo-stocks";
+  $("zooTable").innerHTML = `<colgroup><col style="width:${shown.length > 4 ? 22 : 30}%">${shown.map(() => "<col>").join("")}<col style="width:15%"></colgroup>` +
+    `<caption class="sr-only">Each stock's percentile by the deciding ranking, the ensemble and the mean of the models (100 = top); click a stock for every model</caption><tr>${sortTh("t", "Ticker", "Ticker", "l")}` +
     shown.map(k => sortTh(k, esc(ZOO_SHORT[k] || k), String(zoo.models[k].label).split(". ")[0])).join("") +
     `${sortTh("avg", "Mean (N)", "Mean of the models (N models)")}</tr>` +
-    rows.slice(0, q ? 600 : 150).map(r => `<tr class="zoo-row"><th class="l" scope="row"><button type="button" class="th-sort zoo-open" data-zoorow="${esc(r.t)}" aria-expanded="${zooOpen.has(r.t)}" title="Every model's view of ${esc(r.t)}">${zooOpen.has(r.t) ? "▾" : "▸"} <b>${esc(r.t)}</b></button>${(zoo.watchlist || []).includes(r.t) ? ' <span class="muted small">yours</span>' : ""}</th>` +
-      `${shown.map(k => pctCell(r.m[k])).join("")}<td><b>${r.avg == null ? "–" : Math.round(r.avg * 100)}</b> <span class="muted small">(${r.n})</span></td></tr>` +
+    page.map(r => `<tr class="zoo-row"><th class="l" scope="row"><button type="button" class="th-sort zoo-open" data-zoorow="${esc(r.t)}" aria-expanded="${zooOpen.has(r.t)}" data-tip="Every model's view of ${esc(r.t)}">${zooOpen.has(r.t) ? "▾" : "▸"} <b>${esc(r.t)}</b></button>${(zoo.watchlist || []).includes(r.t) ? ' <span class="sg-badge">yours</span>' : ""}` +
+      `<div class="muted small zoo-name">${esc((zoo.names || {})[r.t] || "")}</div></th>` +
+      `${shown.map(k => pctCell(r.m[k])).join("")}<td>${r.avg == null ? "–" : pctBar(r.avg)}<div class="muted small">${r.n} models</div></td></tr>` +
       (zooOpen.has(r.t) ? details(r) : "")).join("");
   $("zooTable").querySelectorAll("button[data-sort]").forEach(b => b.onclick = () => {
     const k = b.dataset.sort;
@@ -1214,10 +1227,13 @@ function renderZoo() {
     renderZoo();
     $("zooTable").querySelector(`button[data-zoorow="${CSS.escape(t)}"]`)?.focus();
   });
-  $("zooCount").textContent = q ? `${rows.length} match` : `Showing the top 150 of ${rows.length} by ${zooSort.key === "avg" ? "the mean percentile" : ZOO_SHORT[zooSort.key] || "ticker"}; type a ticker to find any stock; click a stock for every model.`;
+  $("zooCount").textContent = q ? `${rows.length} match` : `${page.length} of ${rows.length} stocks, ordered by ${zooSort.key === "avg" ? "the mean of the models" : ZOO_SHORT[zooSort.key] || "ticker"}. Percentiles among today's stocks (100 = top pick). Click a stock for every model; tick Show above to add a model's column.`;
+  $("zooMore").hidden = !!q || page.length >= rows.length;
+  $("zooMore").textContent = `Show ${Math.min(20, rows.length - page.length)} more`;
 }
 $("zooRun").onclick = async () => { try { await api("/api/model-zoo/run", {}); loadZoo(); } catch (e) { showError(e.message); } };
 $("zooFilter").oninput = renderZoo;
+$("zooMore").onclick = () => { zooLimit += 20; renderZoo(); };
 
 // --- every morning: the schedule, its last run and a run now ---
 async function loadSchedule() {

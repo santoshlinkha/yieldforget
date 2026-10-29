@@ -1724,7 +1724,8 @@ class App:
         if ticker:
             t = ticker.strip().upper()
             return {**base, "ticker": t, "forecasts": run["stocks"].get(t)}
-        return {**base, "stocks": run["stocks"], "watchlist": run.get("watchlist", [])}
+        return {**base, "stocks": run["stocks"], "watchlist": run.get("watchlist", []),
+                "names": {t: describe(t) for t in run["stocks"]}}
 
     def capital_state(self) -> dict:
         from tradingagents.optimizer.data import latest_prices
