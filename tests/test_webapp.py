@@ -90,7 +90,7 @@ def test_page_loads_and_polling_never_call_a_model(server):
     base, tmp_path, _ = server
     for path in ("/api/state", "/api/ledger", "/api/ai", "/api/recommendations", "/api/ratings", "/api/capital",
                  "/api/market/explain", "/api/trade", "/api/income", "/api/model-record", "/api/decisions",
-                 "/api/model-outputs"):
+                 "/api/model-outputs", "/api/schedule"):
         status, _ = _call(base, path)
         assert status == 200, path
     for gone in ("/api/tracker", "/api/backtest"):
@@ -485,3 +485,30 @@ def test_a_provider_out_of_credit_or_at_its_free_limit_is_skipped_until_it_can_w
     assert calls == ["google"]                                         # the second Google model was not tried
     assert [a["state"] for a in job.attempts] == ["failed", "skipped"] and len(str(err.value)) < 300
     assert "google" in app.store.get("global", "ai_cooldowns")
+
+
+def test_the_morning_run_is_due_once_per_close_after_its_time_and_runs_each_step(tmp_path, monkeypatch):
+    from datetime import date as d, datetime as dt
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    monkeypatch.setattr(srv.local_store, "last_final_session", lambda now=None: d(2026, 10, 28))
+    assert not app.morning_due(dt(2026, 10, 29, 7, 0))                     # before 07:30
+    assert app.morning_due(dt(2026, 10, 29, 8, 0))
+    calls = []
+    import tradingagents.research.engine as engine
+    from tradingagents.stocks import daily, model_zoo
+    monkeypatch.setattr(engine, "run_forecast", lambda *a, **k: calls.append(("forecast", k["model"], k["horizon"])) or {})
+    monkeypatch.setattr(model_zoo, "run", lambda *a, **k: calls.append(("zoo",)) or {"reused": True})
+    monkeypatch.setattr(daily, "run", lambda *a, **k: calls.append(("decision", a[4])) or {"id": "x"})
+    assert app.start_morning()
+    for _ in range(100):
+        if not app.morning.running:
+            break
+        time.sleep(0.05)
+    state = app.store.get("global", "schedule_state")
+    assert state["cutoff"] == "2026-10-28" and state["error"] is None and len(state["steps"]) == 5
+    assert ("zoo",) in calls and ("decision", True) in calls and sum(c[0] == "forecast" for c in calls) == 3
+    assert not app.morning_due(dt(2026, 10, 29, 9, 0))                     # done for this close
+    app.store.set("global", "schedule", {"enabled": False, "morning_at": "07:30", "retrain_every_sessions": 20})
+    monkeypatch.setattr(srv.local_store, "last_final_session", lambda now=None: d(2026, 10, 29))
+    assert not app.morning_due(dt(2026, 10, 30, 9, 0))                     # switched off

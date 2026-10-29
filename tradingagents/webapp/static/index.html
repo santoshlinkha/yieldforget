@@ -517,16 +517,17 @@ select option { background: var(--surface); color: var(--text); }
       <div class="card">
         <h3>The model's picks</h3>
         <p class="muted small" id="recRule"></p>
-        <div class="table-wrap"><table id="recPicks" class="compact"></table></div>
+        <div class="table-wrap"><table id="recDollar" class="compact" style="margin-bottom:12px"></table></div>
+        <div class="table-wrap"><table id="recPicks" class="compact"></table></div><div id="recPicksMore"></div>
       </div>
       <div class="card">
         <h3>The second model's suggestions</h3>
         <p class="muted small">The policy layer (buy at the next close, buy on a limit, or cash). It abstains ("insufficient evidence") until its validation passes, so these are the buys it <i>would</i> have made, recorded and judged anyway. A limit that never filled is not judged.</p>
-        <div class="table-wrap"><table id="recPolicy" class="compact"></table></div>
+        <div class="table-wrap"><table id="recPolicy" class="compact"></table></div><div id="recPolicyMore"></div>
       </div>
       <div class="card">
         <h3>The AI agents' calls</h3>
-        <div class="table-wrap"><table id="recAgents" class="compact"></table></div>
+        <div class="table-wrap"><table id="recAgents" class="compact"></table></div><div id="recAgentsMore"></div>
       </div>
       <p class="muted small" id="recHidden"></p>
       <div class="undo-bar" id="recUndo" hidden></div>
@@ -587,6 +588,17 @@ select option { background: var(--surface); color: var(--text); }
         <p class="muted">Every company in the S&amp;P 500 is scored after each close. Add any other US-listed stocks here (tickers, separated by commas or spaces): they are scored the same way, ranked against the S&amp;P 500, and can be picked as the best buy. Funds are not scored by the stock model.</p>
         <textarea id="watchList" placeholder="e.g. PLTR, HIMS, SOFI, RKLB"></textarea>
         <div class="row"><button id="watchSave">Save</button><span class="muted small" id="watchMsg"></span></div>
+      </div>
+      <div class="card" id="schedCard">
+        <h3>Every morning</h3>
+        <p class="muted small">While the app is running: after the time below, once for each new close, it records the fund forecasts, scores every stock with every model and makes the daily decision. Models are refitted only when their last fit is the number of trading sessions below old (and the ensemble's weights then too); the same inputs are never run twice.</p>
+        <div class="settings-grid" style="margin:0 0 6px">
+          <label class="check"><input type="checkbox" id="schOn"> On</label>
+          <label>After (this computer's time)<input type="time" id="schAt"></label>
+          <label>Refit models every (trading sessions)<input type="number" id="schEvery" min="5" max="120" step="1"></label>
+        </div>
+        <div class="row"><button id="schSave">Save</button><button class="ghost" id="schRun">Run now</button><span class="small" id="schMsg" role="status" aria-live="polite"></span></div>
+        <div class="small" id="schState"></div>
       </div>
       <div class="card" id="keysCard">
         <h3>API keys</h3>
@@ -690,7 +702,7 @@ const TAB_LOADERS = {
   decisions: () => { loadDecisions(); loadAiDecisions(); },
   models: () => { if (!zoo) loadZoo(); },
   record: () => loadTrackRecord(),
-  settings: () => { loadCapital(); loadKeys(); loadAgents(); },
+  settings: () => { loadCapital(); loadKeys(); loadAgents(); loadSchedule(); },
 };
 const tabsLoaded = new Set();
 let started = false;            // set once start-up has the state the loaders need
@@ -1003,6 +1015,33 @@ function renderZoo() {
 $("zooRun").onclick = async () => { try { await api("/api/model-zoo/run", {}); loadZoo(); } catch (e) { showError(e.message); } };
 $("zooFilter").oninput = renderZoo;
 
+// --- every morning: the schedule, its last run and a run now ---
+async function loadSchedule() {
+  let d;
+  try { d = await api("/api/schedule"); } catch (e) { $("schState").innerHTML = `<span class="neg">${esc(e.message)}</span>`; return; }
+  const st = d.settings || {}, last = d.last || {}, j = d.job || {}, ens = d.ensemble || {};
+  if (document.activeElement?.closest?.("#schedCard") == null) {
+    $("schOn").checked = !!st.enabled; $("schAt").value = st.morning_at || "07:30"; $("schEvery").value = st.retrain_every_sessions || 20;
+  }
+  $("schRun").disabled = !!j.running;
+  const steps = (last.steps || []).map(x => `<li>${x.ok ? (x.reused ? "↺" : "✓") : '<span class="neg">✗</span>'} ${esc(x.step)}${x.reused ? ' <span class="muted">(same inputs: reused)</span>' : ""}${x.error ? ` <span class="neg">${esc(x.error)}</span>` : ""}</li>`).join("");
+  $("schState").innerHTML = (j.running ? jobLine(j, "morning") : "") +
+    `<p>Latest close ${esc(d.latest_close)}: ${d.done_for_latest_close ? '<span class="pos">done</span>' : "not run yet"}` +
+    `${last.finished_at ? ` · last run ${esc(last.finished_at.replace("T", " "))} for the close of ${esc(last.cutoff)}` : ""}.</p>` +
+    (steps ? `<ul class="small" style="margin:4px 0;padding-left:18px">${steps}</ul>` : "") +
+    `<p class="muted">Ensemble: ${ens.trained ? `trained through ${esc(ens.trained_through)} (${ens.age_sessions} sessions ago; refitted at ${st.retrain_every_sessions || 20})` : "not trained"}.</p>`;
+  if (j.running) setTimeout(loadSchedule, 3000);
+}
+$("schSave").onclick = async () => {
+  const value = {enabled: $("schOn").checked, morning_at: $("schAt").value || "07:30", retrain_every_sessions: Math.max(5, Math.min(120, +$("schEvery").value || 20))};
+  try { await api("/api/settings", {values: {schedule: value}}); $("schMsg").innerHTML = '<span class="pos">✓ Saved.</span>'; loadSchedule(); }
+  catch (e) { $("schMsg").innerHTML = `<span class="neg">Not saved: ${esc(e.message)}</span>`; }
+};
+$("schRun").onclick = async () => {
+  try { await api("/api/schedule/run", {}); $("schMsg").textContent = "Started."; loadSchedule(); }
+  catch (e) { $("schMsg").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+};
+
 // --- track record: were the picks and the agents' calls right? ---
 let undoTimer = null;
 function showUndo(text, key) {
@@ -1017,6 +1056,18 @@ function showUndo(text, key) {
     loadTrackRecord();
   };
 }
+// Each table shows its latest 5 data dates; "Load more" adds 5 more.
+const recDays = {picks: 5, policy: 5, agents: 5};
+function recentDays(rows, n) {
+  const days = [...new Set(rows.map(r => r.data_to))].sort().reverse();
+  const keep = new Set(days.slice(0, n));
+  return {rows: rows.filter(r => keep.has(r.data_to)), more: Math.max(0, days.length - n)};
+}
+function moreButton(id, key, more) {
+  $(id).innerHTML = more ? `<button class="ghost small-btn" data-recmore="${key}">Load more (${more} earlier day${more === 1 ? "" : "s"})</button>` : "";
+  const b = $(id).querySelector("button");
+  if (b) b.onclick = () => { recDays[key] += 5; loadTrackRecord(); };
+}
 async function loadTrackRecord() {
   let d;
   try { d = await api("/api/track-record"); } catch (e) { $("recPicks").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
@@ -1030,10 +1081,27 @@ async function loadTrackRecord() {
     kpi("All picks: average net return", show(s.all_picks), sub(s.all_picks)) +
     kpi("Policy model: average net return", show(s.policy), sub(s.policy)) +
     kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "none matured yet", sub(s.agents, false));
+  // $1 on each recommendation, followed exactly: finished ones at their 20th close, open ones at the latest close.
+  const one = d.one_dollar || {};
+  const dollarLine = (label, x) => {
+    if (!x) return "";
+    const f = x.finished, o = x.open, tone = v => v >= 0 ? "pos" : "neg";
+    return `<tr><th class="l" scope="row">${label}</th><td>${f.trades}</td><td>${usd(f.invested)}</td><td>${usd(f.value)}</td>` +
+      `<td class="${tone(f.profit)}"><b>${susd(f.profit)}</b> <span class="muted small">${f.invested ? spct(f.profit / f.invested, 1) : ""}</span></td>` +
+      `<td>${o.trades}</td><td class="${tone(o.profit)}">${o.trades ? susd(o.profit) : "–"}</td></tr>`;
+  };
+  $("recDollar").innerHTML = `<caption class="small muted l" style="caption-side:top;text-align:left">If you had bought <b>$1</b> of every recommendation exactly as made (at the next close, sold at the 20th close after, less the estimated round-trip cost; the agents' Buy/Overweight calls before costs)</caption>` +
+    `<tr><th class="l">Recommendations</th><th>Finished</th><th>Put in</th><th>Worth now</th><th>Profit / loss</th><th>Still open</th><th>Open P/L (latest close)</th></tr>` +
+    dollarLine("Best buy each day", one.best_buy) + dollarLine("Every pick (best + runners-up)", one.all_picks) +
+    dollarLine("Policy model's picks", one.policy) + dollarLine("AI agents' Buy calls", one.agents_buys);
   $("recRule").textContent = `${d.outcome ? d.outcome[0].toUpperCase() + d.outcome.slice(1) + ". " : ""}Beat cost: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade). Overlapping holds are not independent: the sample is the number of data dates, not of rows.`;
   const del = r => `<td><button class="ghost small-btn rec-del" data-key="${esc(r.key)}" title="Hide this row (the saved decision is kept; Show hidden rows brings it back)" aria-label="Hide row">Hide</button></td>`;
   const verdict = r => r.verdict === "correct" ? `<span class="pos"><b>✓ ${r.rating ? "right direction" : "beat cost"}</b></span>` : r.verdict === "wrong" ? `<span class="neg"><b>✗ ${r.rating ? "wrong direction" : "below cost"}</b></span>`
     : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
+  const allPicks = d.picks, allPolicy = d.policy || [], allAgents = d.agents;
+  const pk = recentDays(allPicks, recDays.picks), po = recentDays(allPolicy, recDays.policy), ag = recentDays(allAgents, recDays.agents);
+  d = {...d, picks: pk.rows, policy: po.rows, agents: ag.rows};
+  moreButton("recPicksMore", "picks", pk.more); moreButton("recPolicyMore", "policy", po.more); moreButton("recAgentsMore", "agents", ag.more);
   $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th><th></th></tr>" +
     d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
       `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +

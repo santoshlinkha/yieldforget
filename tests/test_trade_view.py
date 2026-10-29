@@ -236,3 +236,23 @@ def test_the_track_record_leads_with_net_returns_with_the_cost_the_verdict_uses(
     # +1% raw, 2% cost: the headline is the net -1%, and "beat cost" agrees with it.
     assert s["avg_raw_return"] == pytest.approx(0.01) and s["avg_net_return"] == pytest.approx(-0.01)
     assert s["correct"] == 0 and s["dates"] == 1 and "avg_return" not in s
+
+
+def test_one_dollar_on_every_recommendation_adds_up_net_of_costs(tmp_path, monkeypatch):
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    close = pd.DataFrame({"AAA": np.r_[100.0, 100.0, np.full(28, 110.0)], "BBB": np.r_[50.0, 50.0, np.full(28, 45.0)],
+                          "SPY": 100.0}, index=idx)
+    picks = [{"key": f"p|{t}", "ticker": t, "data_to": str(idx[0].date()), "horizon": 20, "place": i + 1,
+              "cost_rt": 0.01, "role": "best"} for i, t in enumerate(("AAA", "BBB"))]
+    monkeypatch.setattr(T, "_picks", lambda con: [dict(p) for p in picks])
+    monkeypatch.setattr(T, "_policy_picks", lambda con: [])
+    monkeypatch.setattr(T, "hidden", lambda con: set())
+    monkeypatch.setattr("tradingagents.research.prices.bars", lambda tickers, cache: {"Close": close, "Low": close})
+    one = T.build(None, tmp_path)["one_dollar"]
+    f = one["all_picks"]["finished"]
+    # $1 each: AAA +10% -1% cost = +$0.09, BBB -10% -1% = -$0.11: $2 in, $1.98 now.
+    assert f["trades"] == 2 and f["invested"] == 2.0 and f["profit"] == pytest.approx(-0.02)
+    assert f["value"] == pytest.approx(1.98) and one["best_buy"]["finished"]["profit"] == pytest.approx(0.09)
+    assert one["all_picks"]["running"][-1] == {"date": str(idx[0].date()), "invested": 2.0, "profit": -0.02}

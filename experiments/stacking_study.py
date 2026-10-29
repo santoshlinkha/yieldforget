@@ -82,14 +82,22 @@ def main():
     d = panel.index.get_level_values("date")
     log("panel", panel.shape, "net rows", int(net.notna().sum()))
 
-    def crossfit(fit_predict):
+    def crossfit(fit_predict, cached=None):
+        """Out-of-fold scores, one fit per year. A year whose rows are all in ``cached`` keeps them: its fit used only
+        rows that ended before the year, which never change. Only a year with new rows (the current one, as data
+        arrives) is fitted again, so a refresh every 20 sessions costs one year's fit per model."""
         outs = []
         for start, stop in edges:
             test = (d >= start) & (d < stop)
             train = (label_end < start) & panel["label"].notna()
             if not test.any() or panel.index[train].get_level_values("date").nunique() < 100:
                 continue
-            outs.append(pd.Series(fit_predict(panel[train], panel[test]), index=panel.index[test]))
+            idx = panel.index[test]
+            if cached is not None and idx.isin(cached.index).all():
+                outs.append(cached.reindex(idx))
+                continue
+            log("fitting fold", start.date())
+            outs.append(pd.Series(fit_predict(panel[train], panel[test]), index=idx))
         return pd.concat(outs)
 
     # 1. Out-of-fold scores, saved so the weights can be refitted without refitting the models.
@@ -97,15 +105,16 @@ def main():
     oof = {}
     for name in MEMBERS:
         path = OUT / f"oof_{name}{'_quick' if quick else ''}.pkl"
-        if path.is_file():
-            oof[name] = pd.read_pickle(path)
-            log("loaded", name)
-            continue
+        cached = pd.read_pickle(path) if path.is_file() else None
+        if cached is not None:
+            log("loaded", name, "through", cached.index.get_level_values("date").max().date())
         if name == "mamba":
-            oof[name] = crossfit(lambda a, b: MambaRanker(bank, device).fit(a, sets["base"]).predict(b))
+            oof[name] = crossfit(lambda a, b: MambaRanker(bank, device).fit(a, sets["base"]).predict(b), cached)
         else:
             fn, which = Z.FITTED[name]
-            oof[name] = crossfit(lambda a, b, fn=fn, which=which: fn(a, b, sets[which], device))
+            oof[name] = crossfit(lambda a, b, fn=fn, which=which: fn(a, b, sets[which], device), cached)
+        if cached is not None and oof[name].index.equals(cached.index):
+            continue
         oof[name].to_pickle(path)
         log("oof", name, json.dumps(evaluate(oof[name], net)))
 
@@ -115,8 +124,13 @@ def main():
     rows = panel[d.isin(cd)]
     etf = {t: (data.info.get(t) or {}).get("sector_etf") for t in tickers}
     close_t = data.close
-    for label, model in (("prices only", Chronos2(close_t, device)),
-                         ("with covariates", Chronos2Covariates(close_t, data.volume, etf, device))):
+    # A scheduled refresh (STACKING_SKIP_CHRONOS=1) skips this report: it is not used in the weights and takes most
+    # of the run; the last one stays in model_zoo.json.
+    chronos = [] if os.getenv("STACKING_SKIP_CHRONOS") == "1" else [
+        ("prices only", lambda: Chronos2(close_t, device)),
+        ("with covariates", lambda: Chronos2Covariates(close_t, data.volume, etf, device))]
+    for label, make in chronos:
+        model = make()
         try:
             s = pd.Series(model.fit(None, None, 20).predict(rows), index=rows.index)
             res["chronos"][label] = evaluate(s, net)
@@ -166,7 +180,8 @@ def main():
         zoo = OUT / "model_zoo.json"                  # beside the other models, where the Models tab reads records
         study = json.loads(zoo.read_text(encoding="utf-8")) if zoo.is_file() else {}
         study.setdefault("models", {})["ensemble (learned weights)"] = res["evaluation"]["stacked (learned weights)"]
-        study["chronos"] = {f"chronos2 {k}": v for k, v in res["chronos"].items()}
+        if res["chronos"]:
+            study["chronos"] = {f"chronos2 {k}": v for k, v in res["chronos"].items()}
         zoo.write_text(json.dumps(study, indent=1, default=float))
     log("done", round(time.time() - t0), "s")
 

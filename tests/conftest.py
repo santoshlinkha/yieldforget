@@ -39,6 +39,7 @@ def _own_file_locations():
     os.environ["TRADINGAGENTS_RESULTS_DIR"] = os.path.join(home, "logs")
     os.environ["TRADINGAGENTS_CACHE_DIR"] = os.path.join(home, "cache")
     os.environ["TRADINGAGENTS_MEMORY_LOG_PATH"] = os.path.join(home, "memory", "trading_memory.md")
+    os.environ["TRADINGAGENTS_NO_SCHEDULE"] = "1"      # the morning run never starts inside a test server
 
 
 _own_file_locations()

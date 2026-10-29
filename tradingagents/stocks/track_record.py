@@ -242,7 +242,38 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
                 "costs": "estimated round trip deducted" if costs else "none (a direction call, not a trade)",
                 "open": still_open}
 
+    def one_dollar(rows, key=None, costs=True, follows=lambda r: True):
+        """$1 on every recommendation followed exactly (bought at the next close, sold at the 20th close after, less
+        the round-trip cost): what was put in, what it is worth, and the profit, for finished and open ones apart.
+        Open ones are valued at the latest close. Day by day, the running total of the finished ones."""
+        chosen = [r for r in rows if (key is None or key(r)) and follows(r) and r.get("return") is not None
+                  and r.get("status") in ("done", "open")]
+        net = lambda r: r["return"] - (float(r.get("cost_rt") or 0.0) if costs else 0.0)  # noqa: E731
+        done = [r for r in chosen if r["status"] == "done"]
+        still = [r for r in chosen if r["status"] == "open"]
+        by_day = {}
+        for r in done:
+            day = by_day.setdefault(r["data_to"], [0, 0.0])
+            day[0] += 1
+            day[1] += net(r)
+        running, n, total = [], 0, 0.0
+        for day in sorted(by_day):
+            n, total = n + by_day[day][0], total + by_day[day][1]
+            running.append({"date": day, "invested": float(n), "profit": round(total, 4)})
+        return {"each_usd": 1.0, "finished": {"trades": len(done), "invested": float(len(done)),
+                                              "profit": round(sum(net(r) for r in done), 4),
+                                              "value": round(len(done) + sum(net(r) for r in done), 4)},
+                "open": {"trades": len(still), "invested": float(len(still)),
+                         "profit": round(sum(net(r) for r in still), 4),
+                         "value": round(len(still) + sum(net(r) for r in still), 4)},
+                "costs": "estimated round trip deducted" if costs else "none", "running": running}
+
+    buys = lambda r: r.get("rating") in UP  # noqa: E731   (the agents' Buy/Overweight calls: $1 bought on each)
+    dollars = {"best_buy": one_dollar(picks, lambda r: r["place"] == 1), "all_picks": one_dollar(picks),
+               "policy": one_dollar(policy), "agents_buys": one_dollar(agents, costs=False, follows=buys)}
+
     return {"picks": picks, "policy": policy, "agents": sorted(agents, key=lambda a: a["data_to"], reverse=True),
+            "one_dollar": dollars,
             "hidden": len(gone),
             "summary": {"best_buy": summary(picks, lambda r: r["place"] == 1), "all_picks": summary(picks),
                         "policy": summary(policy), "agents": summary(agents, costs=False)},

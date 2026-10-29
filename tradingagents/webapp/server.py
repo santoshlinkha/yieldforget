@@ -186,7 +186,8 @@ def _finite(value):
 GEMINI_FALLBACKS = ("gemini-3.8-flash", "gemini-3.5-flash-lite")
 
 
-JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "screen", "analysis", "sector", "zoo")
+JOB_NAMES = ("ai", "explain", "forecast", "daily", "stocks", "decisions", "screen", "analysis", "sector", "zoo",
+             "morning")
 
 
 def _short_error(exc: Exception) -> str:
@@ -310,6 +311,7 @@ class App:
         self.owner = f"web-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.lock = threading.Lock()   # one writer at a time on the shared connection
         self.csrf_token = secrets.token_urlsafe(32)   # printed into the pages; every write must return it
+        self.morning = Job()
         self.ai, self.backtest, self.tracker, self.explain, self.forecast = Job(), Job(), Job(), Job(), Job()
         self.moat_jobs: dict[str, Job] = {}
         self.daily = Job()   # the daily Chronos-2 record, apart from the runs started on the page
@@ -656,6 +658,137 @@ class App:
             return {"universe": universe, "batch": compare_runs(runs), "failed": failed}
 
         return self.forecast.start(work)
+
+    # --- every morning: the forecasts, every model's scores and the daily decision for the latest close ---
+
+    def schedule_state(self) -> dict:
+        from tradingagents.ledger.sessions import next_session
+
+        g = self.store.settings("global")
+        sch, last = g.get("schedule") or {}, g.get("schedule_state") or {}
+        cutoff = local_store.last_final_session()
+        ens = self._ensemble_age()
+        return {"settings": sch, "last": last, "latest_close": cutoff.isoformat(),
+                "done_for_latest_close": last.get("cutoff") == cutoff.isoformat() and not last.get("error"),
+                "next_session": next_session(cutoff).isoformat(), "ensemble": ens, "job": self.morning.state()}
+
+    def _ensemble_age(self) -> dict:
+        from tradingagents.ledger.sessions import sessions_between
+        from tradingagents.stocks import model_zoo
+
+        b = model_zoo.ensemble_bundle(self.cache_dir)
+        if not b:
+            return {"trained": False}
+        through = b.get("trained_through")
+        age = sessions_between(through, local_store.last_final_session()) if through else None
+        return {"trained": True, "trained_through": through, "created": b.get("created"), "age_sessions": age}
+
+    def morning_due(self, now: datetime | None = None) -> bool:
+        """After the set time, once per new close, with nothing else fitting models."""
+        g = self.store.settings("global")
+        sch = g.get("schedule") or {}
+        if not sch.get("enabled"):
+            return False
+        now = now or datetime.now()
+        hh, mm = (int(x) for x in str(sch.get("morning_at") or "07:30").split(":"))
+        if (now.hour, now.minute) < (hh, mm):
+            return False
+        cutoff = local_store.last_final_session().isoformat()
+        last = g.get("schedule_state") or {}
+        if last.get("cutoff") == cutoff and (not last.get("error") or last.get("attempts", 0) >= 3):
+            return False
+        return not any(getattr(self, n).running for n in ("morning", "zoo", "decisions", "forecast", "daily"))
+
+    def start_scheduler(self, every_seconds: int = 300) -> threading.Thread:
+        """A background check every few minutes; the morning run starts when due (only while the app runs)."""
+        def loop():
+            while True:
+                try:
+                    if self.morning_due():
+                        self.start_morning()
+                except Exception:  # a failed check never stops the next one
+                    logger.exception("morning schedule check failed")
+                time.sleep(every_seconds)
+
+        thread = threading.Thread(target=loop, daemon=True, name="morning-schedule")
+        thread.start()
+        return thread
+
+    def start_morning(self, body: dict | None = None) -> bool:
+        """Forecasts, every model's scores and the daily decision for the latest close. Models are refitted only when
+        their last fit is ``retrain_every_sessions`` old, and the ensemble's weights then too; the same inputs as an
+        earlier run are reused, so a second run the same morning costs nothing."""
+        import subprocess
+        import sys
+
+        from tradingagents.research.engine import CHRONOS, run_forecast
+        from tradingagents.stocks import daily, model_zoo
+
+        g = self.store.settings("global")
+        every = int((g.get("schedule") or {}).get("retrain_every_sessions") or 20)
+        refit_ensemble = bool((body or {}).get("refit_ensemble"))
+        cutoff = local_store.last_final_session().isoformat()
+
+        def work(job):
+            steps, errors = [], []
+
+            def step(name, frac, fn):
+                job.progress, job.fraction = name, frac
+                try:
+                    out = fn()
+                    steps.append({"step": name, "ok": True, **({"reused": True} if isinstance(out, dict)
+                                                              and out.get("reused") else {})})
+                except Exception as exc:  # one step failing leaves the others
+                    logger.exception("morning step failed: %s", name)
+                    steps.append({"step": name, "ok": False, "error": _short_error(exc)})
+                    errors.append(f"{name}: {_short_error(exc)}")
+
+            device = self.store.get("global", "compute_backend")
+            context, _ = self.store.portfolio("combined", _today())
+            held = [p.ticker.upper() for p in context.positions]
+            etfs = [t for t in dict.fromkeys([*etf_list(read_config(self.universe_path)), *held])
+                    if t not in ("SGOV", "BIL")]
+            model = (self.store.settings("trading") or {}).get("forecast_model") or "xgb_quantile"
+            for i, h in enumerate((20, 60)):
+                step(f"Fund forecasts, {h} sessions (Chronos-2)", 0.02 + 0.04 * i,
+                     lambda h=h: run_forecast(self.store.con, self.cache_dir, etfs, horizon=h, model=CHRONOS,
+                                              universe="etf", device_setting=device))
+            step(f"Fund forecasts, 20 sessions ({model})", 0.10,
+                 lambda: run_forecast(self.store.con, self.cache_dir, etfs, horizon=20, model=model, universe="etf",
+                                      device_setting=device))
+            ens = self._ensemble_age()
+            if refit_ensemble or (ens.get("trained") and (ens.get("age_sessions") or 0) >= every):
+                root = Path(__file__).resolve().parents[2]
+                if (root / "experiments" / "stacking_study.py").is_file():
+                    def stack():
+                        r = subprocess.run([sys.executable, "-m", "experiments.stacking_study"], cwd=root,
+                                           env={**os.environ, "STACKING_SKIP_CHRONOS": "1"}, capture_output=True,
+                                           text=True, timeout=4 * 3600)
+                        if r.returncode:
+                            raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[-1][:300])
+                    step(f"Refitting the ensemble's weights (every {every} sessions)", 0.15, stack)
+
+            def zoo():
+                return model_zoo.run(self.store, self.cache_dir, lambda text, frac=None: setattr(
+                    job, "progress", f"Every model: {text}"))
+            step("Every model's scores (refitted when due)", 0.40, zoo)
+
+            def decide():
+                return daily.run(self.store, self.cache_dir, date.today(), "barrier_20", True,
+                                 lambda text, frac=None: setattr(job, "progress", f"Daily decision: {text}"))
+            step("The daily decision (models refitted when due)", 0.75, decide)
+            job.fraction = 1.0
+            last = self.store.get("global", "schedule_state") or {}
+            state = {"cutoff": cutoff, "finished_at": datetime.now().isoformat(timespec="minutes"), "steps": steps,
+                     "error": "; ".join(errors) or None,
+                     "attempts": (last.get("attempts", 0) + 1) if last.get("cutoff") == cutoff else 1}
+            with self.lock:
+                self.store.set("global", "schedule_state", state, source="schedule")
+            if errors:
+                raise RuntimeError("; ".join(errors))
+            return state
+
+        return self.morning.start(work)
 
     def start_daily_record(self) -> bool:
         """Chronos-2's forecasts for the latest close, at 20 and 60 sessions, once per trading day.
@@ -2088,6 +2221,8 @@ def make_handler(app: App):
                     self._json({"records": app.live_records(), "daily": app.daily.state()})
                 elif url.path == "/api/forecasts":
                     self._json(app.forecasts(query))
+                elif url.path == "/api/schedule":
+                    self._json(_finite(app.schedule_state()))
                 elif url.path == "/api/model-outputs":
                     from tradingagents.model_outputs import catalog
                     self._json(catalog())
@@ -2183,6 +2318,8 @@ def make_handler(app: App):
                         raise ValueError("that job is not stuck: it is not running, or it reported progress in the "
                                          f"last {Job.STUCK_AFTER // 60} minutes")
                     self._json(job.state())
+                elif self.path == "/api/schedule/run":
+                    self._started(app.start_morning(body), "The morning run")
                 elif self.path == "/api/model-zoo/run":
                     self._started(app.start_zoo(body), "A run of every model")
                 elif self.path == "/api/track-record/hide":
@@ -2243,6 +2380,8 @@ def serve(portfolio_path: str, schedule_path: str, port: int = 8765, config: dic
         app.start_daily_record()
     except Exception:  # the record is a bonus: the app starts without it
         logger.exception("daily Chronos-2 record could not start")
+    if os.environ.get("TRADINGAGENTS_NO_SCHEDULE") != "1":
+        app.start_scheduler()
     return _Server(("127.0.0.1", port), make_handler(app))
 
 
