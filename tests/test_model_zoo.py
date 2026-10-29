@@ -3,6 +3,8 @@ Mamba model sees only the days up to each decision close."""
 
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -115,3 +117,62 @@ def test_the_decision_ranks_by_the_ensemble_only_for_its_own_close():
     assert used["name"] == "ensemble" and out.loc["Y", "score_pct"] == 0.95 and out.loc["Y", "expected_net"] == 0.012
     stale, used2 = daily.apply_ensemble(today, zoo, bundle, rows, pd.Timestamp("2026-10-27"))
     assert used2["name"] == "xgb_rank" and stale.loc["X", "score_pct"] == 0.9
+
+
+FITS = []
+
+
+class FakeMamba:
+    """A stand-in for the sequence model (module level, so it pickles like the real one)."""
+
+    def __init__(self, bank, device="cpu"):
+        self.bank = bank
+
+    def fit(self, train, feats):
+        FITS.append("mamba")
+        return self
+
+    def predict(self, rows):
+        assert self.bank is not None           # given back on reuse
+        return np.arange(len(rows), dtype=float)
+
+
+def test_every_model_is_refitted_only_every_20_sessions_and_reused_in_between(tmp_path, monkeypatch):
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_stocks import _stock_data
+
+    from tradingagents.ledger.store import Store
+    from tradingagents.research import foundation
+    from tradingagents.research.features import MACRO_FEATURES
+    from tradingagents.stocks import data as D, macro as M, model_zoo as Z, seq_model
+
+    data = _stock_data(tmp_path, n=12, years=8, requested=())
+    monkeypatch.setattr(D, "load", lambda *a, **k: data)
+    monkeypatch.setattr(M, "features", lambda dates, cache_dir: pd.DataFrame(index=dates, columns=MACRO_FEATURES, dtype=float))
+    monkeypatch.setattr(Z, "extra_features", lambda cache, d, dates, tickers, px: pd.DataFrame(
+        {"n8k_5": 0.0, "an_pt_upside": 0.1, "eps_surprise_last": 0.0},
+        index=pd.MultiIndex.from_product([dates, tickers], names=["date", "ticker"])))
+
+    class Refused:
+        def __init__(self, *a, **k):
+            raise RuntimeError("no pretrained model in tests")
+    monkeypatch.setattr(foundation, "Chronos2", Refused)
+    monkeypatch.setattr(foundation, "Chronos2Covariates", Refused)
+    fits = FITS
+    fits.clear()
+    monkeypatch.setattr(seq_model, "MambaRanker", FakeMamba)
+    real = dict(Z.FIT)
+    monkeypatch.setattr(Z, "FIT", {k: (lambda f, k=k: lambda *a, **kw: (fits.append(k), f(*a, **kw))[1])(v)
+                                   for k, v in real.items()})
+    store = Store(tmp_path / "book")
+    first = Z.run(store, tmp_path)
+    assert {"xgb_rank", "lgbm_regression", "mamba"} <= set(fits)
+    n = len(fits)
+    again = Z.run(store, tmp_path, force=True)                    # same close: every fitted model is reused
+    assert len(fits) == n and again["id"] != first["id"], (fits, Z.latest(store.con)["notes"])
+    run = Z.latest(store.con)
+    assert run["train_rows"] is None and set(run["fitted_on"]) >= {"xgb_rank", "mamba"}
+    assert "xgb_rank" in run["stocks"][next(iter(run["stocks"]))]
+    Z.run(store, tmp_path, force=True, refit=True)                # asked to refit: fitted again
+    assert len(fits) > n

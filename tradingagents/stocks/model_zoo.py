@@ -258,9 +258,53 @@ def tested_record() -> dict:
 
 # --- the live run ---
 
-def run(store, cache_dir: Path, progress=None, force: bool = False) -> dict:
-    """Fit every model on history to the last close, score today's members and watchlist, save and return the run.
-    A run from the same inputs (``zoo_inputs``) is returned as it is, with ``reused``, unless ``force``."""
+REFIT = ("xgb_rank", "xgb_rank_all", "lgbm_lambdarank", "lgbm_regression", "ridge_pooled", "ridge_per_stock", "mamba")
+
+
+def _recipe(name: str, feats: list[str]) -> str:
+    """A fitted model's recipe: its name, features and the code that fits it (not the data or the day)."""
+    from . import input_keys as K
+
+    return K.key({"name": name, "features": list(feats), "version": VERSION,
+                  "code": K.code_hash("stocks/model_zoo.py", "stocks/adapters.py", "stocks/seq_model.py",
+                                      "stocks/panel.py", "research/models.py")})[:20]
+
+
+def _fitted(folder: Path, name: str, feats, cutoff, every: int):
+    """The newest fit of this recipe made on the cutoff or earlier and fewer than ``every`` sessions old, or None."""
+    import pickle
+
+    from .daily import due_for_refit, latest_fit
+
+    found = latest_fit(folder, f"{name}-{_recipe(name, feats)}", cutoff)
+    if not found or due_for_refit(found[1], cutoff, every):
+        return None
+    return pickle.loads(found[0].read_bytes()), found[1]  # noqa: S301  (the app's own model cache)
+
+
+def _keep(folder: Path, name: str, feats, cutoff, model) -> None:
+    import pickle
+
+    folder.mkdir(parents=True, exist_ok=True)
+    bank = getattr(model, "bank", None)
+    if bank is not None:          # the sequence bank holds the price data: rebuilt from today's data on reuse
+        model.bank = None
+    try:
+        path = folder / f"{name}-{_recipe(name, feats)}_{pd.Timestamp(cutoff).date()}.pkl"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(pickle.dumps(model))
+        tmp.replace(path)
+    finally:
+        if bank is not None:
+            model.bank = bank
+
+
+def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool = False) -> dict:
+    """Score today's members and watchlist with every model, save and return the run.
+
+    The fitted models are kept and reused until they are ``schedule.retrain_every_sessions`` sessions old (or
+    ``refit``); only then is the history panel built and each model fitted again. A run from the same inputs
+    (``zoo_inputs``) is returned as it is, with ``reused``, unless ``force``."""
     from tradingagents.ledger.db import now_utc, transaction
     from tradingagents.research.compute import cuda_usable
     from tradingagents.research.features import decision_dates
@@ -289,29 +333,39 @@ def run(store, cache_dir: Path, progress=None, force: bool = False) -> dict:
     data = as_of_data(data, cutoff)
     px = px.loc[:cutoff]
     sessions = data.close.index
-    say("Building the training panel (every 5 sessions since 2006)", 0.10)
-    dates = decision_dates(sessions, start="2006-01-01", every=5)
-    panel = P.build(data, 20, dates=dates, macro=M.features(dates, cache_dir))
-    train = panel[panel["in_index"] & panel["label"].notna() & (pd.to_datetime(panel["label_end"]) <= cutoff)]
+    every = int((store.get("global", "schedule") or {}).get("retrain_every_sessions") or 20)
+    folder = Path(cache_dir) / "zoo_models"
+    say("Scoring today's stocks", 0.08)
     today = P.build(data, 20, dates=pd.DatetimeIndex([cutoff]), macro=M.features(pd.DatetimeIndex([cutoff]), cache_dir))
     today = today[today["in_index"] | today.index.get_level_values("ticker").isin(watch)]
-    tickers = sorted(set(train.index.get_level_values("ticker")) | set(today.index.get_level_values("ticker")))
-    say("Adding news (SEC 8-K), analyst consensus and competitors", 0.30)
-    all_dates = pd.DatetimeIndex(sorted(set(train.index.get_level_values("date")) | {cutoff}))
-    extra = extra_features(cache_dir, data, all_dates, tickers, px)
-    train, today = train.join(extra), today.join(extra)
-    sets = feature_sets(P.features_for(), list(extra.columns))
+    today_tickers = sorted(set(today.index.get_level_values("ticker")))
+    extra_today = extra_features(cache_dir, data, pd.DatetimeIndex([cutoff]), today_tickers, px)
+    sets = feature_sets(P.features_for(), list(extra_today.columns))
+    feats_of = {**{n: sets[w] for n, (_, w) in FITTED.items()}, "mamba": sets["base"]}
+    kept = {} if refit else {n: _fitted(folder, n, feats_of[n], cutoff, every) for n in REFIT}
+    due = [n for n in REFIT if not kept.get(n)]
+    train, fitted_on = None, {n: k[1] for n, k in kept.items() if k}
+    if due:
+        say(f"Building the training panel to refit {len(due)} model{'s' * (len(due) > 1)} "
+            f"(every {every} sessions; every 5 sessions of history since 2006)", 0.12)
+        dates = decision_dates(sessions, start="2006-01-01", every=5)
+        panel = P.build(data, 20, dates=dates, macro=M.features(dates, cache_dir))
+        train = panel[panel["in_index"] & panel["label"].notna() & (pd.to_datetime(panel["label_end"]) <= cutoff)]
+        tickers = sorted(set(train.index.get_level_values("ticker")) | set(today_tickers))
+        say("Adding news (SEC 8-K), analyst consensus and competitors", 0.30)
+        all_dates = pd.DatetimeIndex(sorted(set(train.index.get_level_values("date")) | {cutoff}))
+        extra = extra_features(cache_dir, data, all_dates, tickers, px)
+        train, today = train.join(extra), today.join(extra)
+    else:
+        today = today.join(extra_today)
+    tickers = today_tickers
     member = today["in_index"].to_numpy(dtype=bool)
     scores, notes = {}, {}
     steps = list(FITTED) + ["chronos2", "chronos2_covariates", "mamba"]
     for i, name in enumerate(steps):
-        say(f"Fitting {MODELS[name][0]}", 0.40 + 0.55 * i / len(steps))
+        say(f"{'Fitting' if name in due else 'Scoring with'} {MODELS[name][0]}", 0.40 + 0.55 * i / len(steps))
         try:
-            if name == "mamba":
-                from .seq_model import MambaRanker, SequenceBank
-
-                s = MambaRanker(SequenceBank(data), device).fit(train, sets["base"]).predict(today)
-            elif name == "chronos2_covariates":
+            if name == "chronos2_covariates":
                 from tradingagents.research.foundation import Chronos2Covariates
 
                 etf = {t: (data.info.get(t) or {}).get("sector_etf") for t in tickers}
@@ -321,8 +375,22 @@ def run(store, cache_dir: Path, progress=None, force: bool = False) -> dict:
 
                 s = Chronos2(data.close[[t for t in tickers if t in data.close]], device).fit(None, None, 20).predict(today)
             else:
-                fn, which = FITTED[name]
-                s = fn(train, today, sets[which], device)
+                if name == "mamba":
+                    from .seq_model import MambaRanker, SequenceBank
+                if kept.get(name):
+                    model = kept[name][0]
+                    if name == "mamba":
+                        model.bank = SequenceBank(data)
+                else:
+                    if name == "mamba":
+                        model = MambaRanker(SequenceBank(data), device).fit(train, feats_of[name])
+                    elif name == "ridge_per_stock":
+                        model = fitted_ridge_per_stock(train, feats_of[name], device, tickers=tickers)
+                    else:
+                        model = FIT[name](train, feats_of[name], device)
+                    _keep(folder, name, feats_of[name], cutoff, model)
+                    fitted_on[name] = str(cutoff.date())
+                s = model.predict(today)
             scores[name] = np.asarray(s, dtype=float)
         except Exception as exc:  # one model failing never stops the others
             notes[name] = f"failed: {str(exc)[:200]}"
@@ -350,7 +418,8 @@ def run(store, cache_dir: Path, progress=None, force: bool = False) -> dict:
         notes["ensemble"] = ("not available: no learned-weight bundle (experiments/stacking_study.py) or it scored "
                              "nothing; the daily decision falls back to the XGBoost ranker")
     payload = {"version": VERSION, "input_key": input_key, "info_cutoff": str(cutoff.date()), "device": device,
-               "train_rows": int(len(train)),
+               "train_rows": int(len(train)) if train is not None else None, "fitted_on": fitted_on,
+               "refit_every_sessions": every,
                "ensemble": ens and {"weights": ens["weights"], "evaluation": ens["evaluation"], "version": ens["version"]},
                "members": int(member.sum()), "watchlist": [t for t in watch if t in stocks_out],
                "models": {k: {"label": v[0], "kind": v[1]} for k, v in MODELS.items()}, "notes": notes,
