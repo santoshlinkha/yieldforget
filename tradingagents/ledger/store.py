@@ -49,6 +49,8 @@ GLOBAL_DEFAULTS = {
     "ai_cooldowns": {},
     # "Ask the AI to pick" (Trade page): once a calendar day; {"date", "tickers", "asked_at"} of the last time.
     "ai_pick_state": {},
+    # The AI's own first screen (stocks.ai_screen): {"date", "cutoff", "picks", "note", "model", "considered"}.
+    "ai_screen_state": {},
     # TimesFM 3.0: research only, scored in the Models view once the owner accepts its non-commercial license.
     "timesfm3": {"enabled": False, "license_accepted": None},
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).

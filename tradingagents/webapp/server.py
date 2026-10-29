@@ -427,6 +427,8 @@ class App:
         asked = self.store.get("global", "ai_pick_state") or {}
         done = asked.get("date") == _today() and all(self._agents_ran_today(t) for t in asked.get("tickers") or [])
         out["ai_pick"] = {**asked, "today": done}      # asked today and every stock in it decided
+        scr = self.store.get("global", "ai_screen_state") or {}
+        out["ai_screen"] = scr if scr.get("date") == _today() else None
         picks = ([out["best"]] if out.get("best") else []) + list(out.get("runners_up") or [])
         if picks:
             out["allocation"] = self._allocation(picks, inc["budget"]["available"])
@@ -1706,7 +1708,8 @@ class App:
 
         g = self.store.settings("global")
         tickers = [str(t).strip().upper() for t in body.get("tickers") or [] if str(t).strip()]
-        if not tickers:
+        by_ai = bool(body.get("ai_screen"))      # the AI screens the market and names the tickers itself
+        if not tickers and not by_ai:
             raise ValueError("pick at least one ticker")
         if len(tickers) > 20:
             raise ValueError("at most 20 tickers per run")
@@ -1714,12 +1717,15 @@ class App:
         analysts = self._analysts(body, g)
         if body.get("ai_pick"):      # "Ask the AI to pick": once a calendar day, unless some of it failed
             asked = g.get("ai_pick_state") or {}
-            if asked.get("date") == _today() and all(self._agents_ran_today(t) for t in asked.get("tickers") or []):
+            if asked.get("date") == _today() and asked.get("tickers") and \
+                    all(self._agents_ran_today(t) for t in asked["tickers"]):
                 raise ValueError(f"The AI already picked today ({', '.join(asked.get('tickers') or [])}); "
                                  "it can be asked again tomorrow")
 
         def work(job):
             done, failed = {}, {}
+            if by_ai:
+                tickers[:] = self._ai_screen(job, day, g)
             for i, t in enumerate(tickers, 1):
                 job.log.append(f"{i}/{len(tickers)} {t}: started")
                 try:
@@ -1737,11 +1743,35 @@ class App:
             return {"ticker": None, "done": done, "failed": failed, "date": day}
 
         started = self.analysis.start(work)
-        if started and body.get("ai_pick"):
+        if started and body.get("ai_pick") and not by_ai:
             with self.lock:
                 self.store.set("global", "ai_pick_state", {"date": _today(), "tickers": tickers,
                                                           "asked_at": datetime.now().isoformat(timespec="minutes")})
         return started
+
+    AI_RUN = 5   # the full team analyses the AI screen's top five
+
+    def _ai_screen(self, job, day: str, g: dict) -> list[str]:
+        """The AI's own first screen of the Screener's ranked stocks, saved; returns its top ``AI_RUN`` to analyse."""
+        from tradingagents.research.prices import bars
+        from tradingagents.stocks import ai_screen
+
+        rows = [r for r in ((self.screen_state()["latest"] or {}).get("rows") or []) if r.get("rank")]
+        if not rows:
+            raise ValueError("the Screener has no ranked stocks yet: build it first")
+        job.progress, job.fraction = f"AI screen: the analysts rank {len(rows)} stocks from their fact sheet", 0.02
+        try:
+            close = bars([r["ticker"] for r in rows], self.cache_dir)["Close"]
+        except Exception:   # no prices: the sheet says so per stock
+            close = None
+        out = ai_screen.screen(rows, close, day, self.agent_config(g), self.gateway())
+        tickers = [p["ticker"] for p in out["picks"][:self.AI_RUN]]
+        job.log.append(f"AI screen ({out['how']}): {', '.join(p['ticker'] for p in out['picks'])}")
+        with self.lock:
+            self.store.set("global", "ai_screen_state", {**out, "date": _today()})
+            self.store.set("global", "ai_pick_state", {"date": _today(), "tickers": tickers,
+                                                      "asked_at": datetime.now().isoformat(timespec="minutes")})
+        return tickers
 
     def request_log(self, ticker: str, day: str, run: str | None = None) -> dict:
         """Every model request of a saved agent run and its reply (read from the run's folder); ``run`` names an

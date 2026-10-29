@@ -578,7 +578,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           </div>
           <div class="card">
             <div class="card-head"><h3>AI's pick</h3>
-              <button class="ghost small-btn" id="runnersAll" hidden title="Run the AI agents on the Screener's top 5 stocks by Rank (not the model's picks), one after another; each stock at most once a day">Ask the AI to pick</button></div>
+              <button class="ghost small-btn" id="runnersAll" hidden title="The AI's analysts screen every ranked stock from a fact sheet and rank the ten they would buy; the full TradingAgents team then analyses their top five, in that order (once a day)">Ask the AI to pick</button></div>
             <div id="aiPickBox"></div>
           </div>
           <div class="card agent-room">
@@ -1082,10 +1082,8 @@ async function loadTrade() {
     $("runnersAll").disabled = !!asked;
     $("runnersAll").textContent = asked ? `Asked today (${esc((t.ai_pick.asked_at || "").slice(11, 16))})` : "Ask the AI to pick";
     $("runnersAll").onclick = async () => {
-      const pool = await aiPool();
-      if (!pool.length) { showError("The Screener has no ranked stocks yet: build it first."); return; }
       try {
-        await api("/api/ai-decisions", {tickers: pool, analysts: ["market", "social", "news", "fundamentals"], date: t.data_to, ai_pick: true});
+        await api("/api/ai-decisions", {ai_screen: true, ai_pick: true, analysts: ["market", "social", "news", "fundamentals"], date: t.data_to});
         $("runnersAll").disabled = true; $("runnersAll").textContent = "Asked today";
       } catch (e) { showError(e.message); }
       loadAgentReport();
@@ -1212,42 +1210,48 @@ async function aiPool() {
   } catch (e) { return []; }
 }
 async function loadAiPicks() {
+  const scr = lastTrade && lastTrade.ai_screen;
+  if (!scr || !(scr.picks || []).length) { $("aiPickBox").innerHTML = ""; return; }
   const seen = [];
-  for (const t of await aiPool()) {
-    try { seen.push({ticker: t, r: await api("/api/agent-report?ticker=" + encodeURIComponent(t))}); } catch (e) { /* skipped */ }
+  for (const p of scr.picks.slice(0, 5)) {
+    try { seen.push({ticker: p.ticker, pick: p, r: await api("/api/agent-report?ticker=" + encodeURIComponent(p.ticker))}); }
+    catch (e) { seen.push({ticker: p.ticker, pick: p, r: {available: false}}); }
   }
-  renderAiPick(seen);
+  renderAiPick(seen, scr);
 }
 const AI_RANK = {buy: 5, overweight: 4, hold: 3, underweight: 2, sell: 1};
 // The AI's pick: of the model's picks the agents have read, the one they rate highest (ties: the model's order).
 // The AI's picks: the stocks the agents chose to buy (rated Buy or Overweight), at the agents' own entry price, sell
 // target and stop loss, with the trading budget split across them. Blank until the agents have run.
-async function renderAiPick(seen) {
-  const ran = seen.filter(s => s.r.available && s.r.agent_rating);
-  if (!ran.length) { $("aiPickBox").innerHTML = ""; return; }
-  const buys = ran.map((s, i) => ({...s, i, score: AI_RANK[String(s.r.agent_rating).toLowerCase()] || 0}))
-    .filter(s => s.score >= 4).sort((a, b) => b.score - a.score || a.i - b.i);
-  if (!buys.length) { $("aiPickBox").innerHTML = `<p class="muted small" style="margin:0">The AI found nothing to buy today.</p>`; return; }
+// The AI's picks: its own ranking of the market, and what the full team decided on each it analysed. The trading
+// budget is split across the ones the team would buy, at the team's own entry price, sell target and stop.
+async function renderAiPick(seen, scr) {
+  const buys = seen.filter(s => s.r.available && aiWord(s.r.agent_rating, false)[0] === "BUY");
   const plans = await Promise.all(buys.map(b => api("/api/entry-plans?ticker=" + encodeURIComponent(b.ticker)).catch(() => ({runs: []}))));
-  // The budget split: the Trade page's weights, renormalized over the AI's picks.
+  const plan = Object.fromEntries(buys.map((b, k) => [b.ticker, plans[k]]));
   const a = (lastTrade && lastTrade.allocation) || {weights: {}, budget: 0};
   const raw = buys.map(b => a.weights[b.ticker] ?? 1 / buys.length), sum = raw.reduce((x, y) => x + y, 0) || 1;
+  const weight = Object.fromEntries(buys.map((b, k) => [b.ticker, raw[k] / sum]));
   const num = v => v == null || v === "" ? "–" : usd(+v);
-  const rows = buys.map((b, k) => {
-    const run = (plans[k].runs || [])[0] || {}, row = run.final || run.trader || {}, p = row.plan || {};
-    const lv = (row.validation || {}).levels || {}, w = raw[k] / sum;
-    const price = p.entry_price != null ? num(p.entry_price)
-      : p.entry_range_low != null ? `${num(p.entry_range_low)}–${num(p.entry_range_high)}` : "–";
-    return `<tr><td class="l"><b>${tk(b.ticker)}</b></td>` +
-      `<td class="num">${Math.round(w * 100)}</td><td class="num">${a.budget ? usd(w * a.budget) : "–"}</td>` +
-      `<td class="num"><b>${price}</b></td><td class="num pos">${num(lv.price_target)}</td><td class="num neg">${num(lv.stop_loss)}</td></tr>`;
+  const rows = seen.map(x => {
+    const decided = x.r.available ? aiWord(x.r.agent_rating, false) : null;
+    const run = ((plan[x.ticker] || {}).runs || [])[0] || {}, row = run.final || run.trader || {}, p = row.plan || {};
+    const lv = (row.validation || {}).levels || {}, w = weight[x.ticker];
+    const price = p.entry_price != null ? num(p.entry_price) : p.entry_range_low != null ? `${num(p.entry_range_low)}–${num(p.entry_range_high)}` : "–";
+    const why = x.pick ? [x.pick.why, `Technical: ${x.pick.technical}`, `Sentiment: ${x.pick.sentiment}`, `News: ${x.pick.news}`, `Fundamentals: ${x.pick.fundamentals}`].join("\n") : "";
+    return `<tr><td class="num">${x.pick ? x.pick.rank : ""}</td><td class="l" title="${esc(why)}"><b>${tk(x.ticker)}</b></td>` +
+      `<td class="l">${decided ? `<a class="ai-box ${decided[1]}" href="/ticker/${encodeURIComponent(x.ticker)}#reports" target="_blank" rel="noopener">${decided[0]}</a>` : ""}</td>` +
+      `<td class="num">${w != null ? Math.round(w * 100) : ""}</td><td class="num">${w != null && a.budget ? usd(w * a.budget) : ""}</td>` +
+      `<td class="num">${w != null ? `<b>${price}</b>` : ""}</td><td class="num pos">${w != null ? num(lv.price_target) : ""}</td><td class="num neg">${w != null ? num(lv.stop_loss) : ""}</td></tr>`;
   });
-  $("aiPickBox").innerHTML = `<div class="table-wrap"><table class="compact ai-picks"><colgroup><col style="width:14%">` +
-    `<col style="width:13%"><col style="width:17%"><col style="width:22%"><col style="width:17%"><col style="width:17%"></colgroup>` +
-    `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget, out of 100">Weight</th><th class="num">Amount</th>` +
+  $("aiPickBox").innerHTML = `<div class="table-wrap"><table class="compact ai-picks"><colgroup><col style="width:6%"><col style="width:12%">` +
+    `<col style="width:14%"><col style="width:11%"><col style="width:14%"><col style="width:17%"><col style="width:13%"><col style="width:13%"></colgroup>` +
+    `<tr><th class="num" title="The AI's own rank">#</th><th class="l">Ticker</th><th class="l" title="The full team's decision (click for the report)">AI</th>` +
+    `<th class="num" title="Share of the trading budget, out of 100">Weight</th><th class="num">Amount</th>` +
     `<th class="num" title="The agents' entry price (or range)">Buy at</th><th class="num" title="The agents' sell target">Sell</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
     rows.join("") + `</table></div>` +
-    `<p class="muted small" style="margin:6px 0 0">As of ${esc(buys[0].r.date)}: chosen by the agents from the Screener's top ${AI_POOL} by Rank, at their own prices. Context, not a validated signal.</p>`;
+    `<p class="muted small" style="margin:6px 0 0">The AI ranked ${scr.considered} stocks from their facts (${esc(String(scr.model || "").split("/").pop())}); ` +
+    `the full team analysed its top ${seen.length}. Hover a ticker for its reasons. Context, not a validated signal.</p>`;
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
