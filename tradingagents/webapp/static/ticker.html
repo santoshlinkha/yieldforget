@@ -188,6 +188,27 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .plan-sum { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .plan-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; margin-bottom: 4px; }
 .plan-kv td { padding: 3px 6px; border: 0; font-size: 13px; }
+.plan-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-top: 6px; }
+.plan-tile { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; background: var(--surface-2); min-width: 0; }
+.plan-tile.wide { grid-column: 1 / -1; }
+.plan-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+.plan-tile .v { font-size: 14px; overflow-wrap: anywhere; }
+.plan-tile.wide .v { font-size: 13px; }
+.stage-final { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
+.stage-final-link { font-weight: 700; font-size: 14px; padding: 6px 12px; border-radius: 8px; text-decoration: none;
+  background: var(--accent-soft, #eff4ff); border: 1px solid var(--accent, #2563eb); }
+.stages { display: grid; gap: 6px; }
+.stage { display: grid; grid-template-columns: 22px 150px 1fr; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 8px; }
+.stage-n { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700;
+  background: var(--accent, #2563eb); color: #fff; }
+.stage-title { font-weight: 600; font-size: 13px; }
+.stage-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.stage-chip { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); text-decoration: none;
+  background: var(--surface-2); }
+.stage-chip:hover, .stage-chip.on { border-color: var(--accent, #2563eb); }
+.stage-foot { margin: 8px 0 0; }
+@media (max-width: 600px) { .stage { grid-template-columns: 22px 1fr; } .stage-chips { grid-column: 1 / -1; } }
 .plan-kv td.muted { width: 42%; }
 #eplan ul { margin: 4px 0 4px 18px; padding: 0; }
 .verdict.ABSTAIN { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
@@ -511,22 +532,25 @@ function planSummary(run) {
   const s = v.sizing, lv = v.levels || {};
   const tag = run.current ? "" : (row.expired ? " · expired" : (f && f.superseded_by ? " · superseded" : ""));
   const cur = p.currency ? " " + esc(p.currency) : "";
-  const price = p.entry_price != null ? `${esc(p.entry_price)}${cur}`
-    : p.entry_range_low != null && p.entry_range_high != null ? `${esc(p.entry_range_low)} to ${esc(p.entry_range_high)}${cur}` : null;
-  const lines = [
-    ["Buy", price ? `<b>${price}</b>${p.entry_type ? ` <span class="muted">(${esc(p.entry_type)})</span>` : ""}` : null],
-    [p.status === "wait" ? "Wait until" : "When", p.trigger ? esc(p.trigger) : (p.earliest_execution ? `from ${esc(p.earliest_execution)}` : null)],
-    ["Stop loss / Sell target", lv.stop_loss != null || lv.price_target != null
-      ? `<span class="neg">${nz(lv.stop_loss)}</span> / <span class="pos">${nz(lv.price_target)}</span>` : null],
-    ["Size", s ? `${money(s.dollars)} <span class="muted">(${esc(s.shares)} shares)</span>` : null],
-    ["Expires", p.expires_at ? esc(p.expires_at) : null]].filter(([, x]) => x);
-  const why = p.rationale ? esc(p.rationale.length > 220 ? p.rationale.slice(0, 220).replace(/\s+\S*$/, "") + "…" : p.rationale) : "";
+  const money2 = x => x == null || x === "" ? null : `${esc(x)}${cur}`;
+  const entry = p.entry_price != null ? money2(p.entry_price)
+    : p.entry_range_low != null && p.entry_range_high != null ? `${esc(p.entry_range_low)} – ${esc(p.entry_range_high)}${cur}` : null;
+  const tiles = [
+    ["Entry price", entry ? `<b>${entry}</b>${p.entry_type ? `<div class="muted small">${esc(p.entry_type)} order</div>` : ""}` : null],
+    ["Exit (sell target)", money2(lv.price_target) ? `<b class="pos">${money2(lv.price_target)}</b>` : null],
+    ["Stop loss", money2(lv.stop_loss) ? `<b class="neg">${money2(lv.stop_loss)}</b>` : null],
+    ["Size", s ? `<b>${money(s.dollars)}</b><div class="muted small">${esc(s.shares)} shares</div>` : null],
+    [p.status === "wait" ? "Wait until" : "Entry condition", p.trigger ? esc(p.trigger) : null, "wide"],
+    ["When", p.earliest_execution ? `from ${esc(p.earliest_execution)}` : null],
+    ["Valid until", p.expires_at ? esc(p.expires_at) : null]].filter(x => x[1]);
+  const why = p.rationale ? esc(p.rationale.length > 260 ? p.rationale.slice(0, 260).replace(/\s+\S*$/, "") + "…" : p.rationale) : "";
   return `<div class="plan-sum"><div class="plan-head"><b>${(f && f.action) || (t && t.action) ? aiWord((f && f.action) || t.action) : "–"}</b>` +
     (v.state ? ` <span class="eplan-state ${esc(v.state)}">${esc(STATE_TEXT[v.state] || v.state)}</span>` : "") +
     ` <span class="muted small">as of ${esc(row.analysis_date)}${tag}</span></div>` +
-    (lines.length ? `<table class="plan-kv">${lines.map(([k, x]) => `<tr><td class="l muted">${k}</td><td class="l">${x}</td></tr>`).join("")}</table>` : "") +
-    ((v.blocks || []).length ? `<p class="small neg" style="margin:4px 0">${esc(v.blocks[0])}${v.blocks.length > 1 ? ` (+${v.blocks.length - 1} more)` : ""}</p>` : "") +
-    (why ? `<p class="small" style="margin:4px 0 0">${why}</p>` : "") + `</div>`;
+    (tiles.length ? `<div class="plan-tiles">${tiles.map(([k, x, wide]) => `<div class="plan-tile${wide ? " wide" : ""}"><div class="k">${k}</div><div class="v">${x}</div></div>`).join("")}</div>`
+      : `<p class="muted small">No entry plan was given.</p>`) +
+    ((v.blocks || []).length ? `<p class="small neg" style="margin:6px 0 0">${esc(v.blocks[0])}${v.blocks.length > 1 ? ` (+${v.blocks.length - 1} more)` : ""}</p>` : "") +
+    (why ? `<p class="small" style="margin:8px 0 0"><b>Why:</b> ${why}</p>` : "") + `</div>`;
 }
 function planRun(run) {
   return planSummary(run) + `<details class="small" style="margin-top:6px"><summary class="muted">Details</summary>${planDetail(run)}</details>`;
@@ -765,9 +789,7 @@ async function load() {
     const withRun = rp.runs.filter(run => run.agents && !run.run);
     let h = withRun.length ? `<p class="small">Agents' decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.agents)}</b></a>`).join(" · ")}</p>` : "";
     h += rp.runs.length ? rp.runs.map(run => `<details ${run.run ? `data-run="${esc(run.run)}"` : `data-day="${esc(run.date)}"`}><summary><button class="ghost small-btn run-del" data-delrun="${esc(run.date)}"${run.run ? ` data-delrunid="${esc(run.run)}"` : ""} title="Delete this analysis (moved to a _deleted folder, not erased)" aria-label="Delete the ${esc(run.date)} analysis">Delete</button>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.run ? `<span class="muted">${esc(earlier(run))}</span>` : ""}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""}${run.run && run.decision ? ` · final decision then: ${esc(run.decision)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
-      (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"${run.run ? ` data-callrun="${esc(run.run)}"` : ""}><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
-      run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") +
-      `<div class="runView"></div></details>`).join("")
+      runStages(run) + `<div class="runView"></div></details>`).join("")
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     if (allRuns > rp.runs.length) h += `<p class="muted small">Showing the latest ${rp.runs.length} of ${allRuns} runs.</p>`;
     $("reports").innerHTML = h;
@@ -809,6 +831,34 @@ async function load() {
     const linked = (location.hash.match(/^#report=(\d{4}-\d{2}-\d{2})$/) || [])[1];
     if (linked && !openRun.done) { openRun.done = true; openRun(linked); }
   }
+}
+// The TradingAgents team's reports of one run, by stage: the final decision first, then each stage's reports as
+// chips (click to read), then the complete report and the log of what was sent to the AI.
+const STAGES = [["analysts", "1", "Analysts", {market: "Market", sentiment: "Sentiment", news: "News", fundamentals: "Fundamentals"}],
+  ["research", "2", "Research debate", {bull: "Bull case", bear: "Bear case", manager: "Research manager"}],
+  ["trading", "3", "Trader", {trader: "Trading plan"}],
+  ["risk", "4", "Risk debate", {aggressive: "Aggressive", conservative: "Conservative", neutral: "Neutral"}],
+  ["portfolio", "5", "Portfolio manager", {decision: "Decision"}]];
+function runStages(run) {
+  const files = run.files || [], chip = (fl, label) => `<a href="#" class="stage-chip" data-path="${esc(fl.path)}">${esc(label)}</a>`;
+  const final = files.find(fl => /FINAL DECISION/i.test(fl.name));
+  const full = files.find(fl => /complete report/i.test(fl.name));
+  const used = new Set([final, full].filter(Boolean));
+  let h = final ? `<div class="stage-final"><a href="#" class="stage-final-link" data-path="${esc(final.path)}" data-final>Read the final decision</a>` +
+    (run.agents ? ` <span class="verdict ${esc(run.agents)}">${esc(run.agents)}</span>` : "") + `</div>` : "";
+  h += `<div class="stages">` + STAGES.map(([key, n, title, roles]) => {
+    const mine = files.filter(fl => new RegExp(`^\\s*${n}\\s+${key}\\s*/`, "i").test(fl.name));
+    mine.forEach(fl => used.add(fl));
+    if (!mine.length) return "";
+    const chips = mine.map(fl => { const role = fl.name.split("/").pop().trim().toLowerCase(); return chip(fl, roles[role] || role); }).join("");
+    return `<div class="stage"><span class="stage-n">${n}</span><span class="stage-title">${title}</span><span class="stage-chips">${chips}</span></div>`;
+  }).join("") + `</div>`;
+  const other = files.filter(fl => !used.has(fl));
+  h += `<p class="small muted stage-foot">` + [full ? `<a href="#" data-path="${esc(full.path)}">Complete report</a>` : "",
+    ...other.map(fl => `<a href="#" data-path="${esc(fl.path)}">${esc(fl.name)}</a>`),
+    run.requests ? `<a href="#" data-calls="${esc(run.date)}"${run.run ? ` data-callrun="${esc(run.run)}"` : ""}>What was sent to the AI (${run.requests} calls)</a>` : ""]
+    .filter(Boolean).join(" · ") + `</p>`;
+  return h;
 }
 const ZOO_SHORT = {xgb_rank: "XGB (54)", xgb_rank_all: "XGB (all)", lgbm_lambdarank: "LambdaRank", lgbm_regression: "LGBM reg.",
   ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", chronos2_covariates: "Chronos-2 + market", timesfm3: "TimesFM 3.0",
