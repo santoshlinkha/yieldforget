@@ -424,7 +424,8 @@ class App:
                                                 "stop": round(dip["stop"], 2), "target": round(dip["profit"], 2)}
         out = trade.plan(decision, inc["budget"]["available"], patient)
         asked = self.store.get("global", "ai_pick_state") or {}
-        out["ai_pick"] = {**asked, "today": asked.get("date") == _today()}
+        done = asked.get("date") == _today() and all(self._agents_ran_today(t) for t in asked.get("tickers") or [])
+        out["ai_pick"] = {**asked, "today": done}      # asked today and every stock in it decided
         picks = ([out["best"]] if out.get("best") else []) + list(out.get("runners_up") or [])
         if picks:
             out["allocation"] = self._allocation(picks, inc["budget"]["available"])
@@ -1708,9 +1709,9 @@ class App:
             raise ValueError("at most 20 tickers per run")
         day = self._check_day(str(body.get("date") or self._last_session()))
         analysts = self._analysts(body, g)
-        if body.get("ai_pick"):      # "Ask the AI to pick": once a calendar day
+        if body.get("ai_pick"):      # "Ask the AI to pick": once a calendar day, unless some of it failed
             asked = g.get("ai_pick_state") or {}
-            if asked.get("date") == _today():
+            if asked.get("date") == _today() and all(self._agents_ran_today(t) for t in asked.get("tickers") or []):
                 raise ValueError(f"The AI already picked today ({', '.join(asked.get('tickers') or [])}); "
                                  "it can be asked again tomorrow")
 

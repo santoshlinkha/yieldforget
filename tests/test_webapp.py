@@ -607,6 +607,8 @@ def test_non_agent_ai_work_uses_its_own_gemini_key_and_agents_do_not(tmp_path, m
 def test_ask_the_ai_to_pick_runs_once_a_calendar_day(tmp_path, monkeypatch):
     srv, app = _agent_app(tmp_path, monkeypatch)
     monkeypatch.setattr(app, "_run_agents", lambda job, t, day, analysts, g: {"rating": "Hold", "how": "agents"})
+    decided = {"AAA": True, "BBB": False}                                       # BBB failed: it may be asked again
+    monkeypatch.setattr(app, "_agents_ran_today", lambda t: decided.get(t))
     body = {"tickers": ["AAA", "BBB"], "date": app._last_session(), "ai_pick": True}
     assert app.start_ai_decisions(body)
     for _ in range(100):
@@ -614,6 +616,12 @@ def test_ask_the_ai_to_pick_runs_once_a_calendar_day(tmp_path, monkeypatch):
             break
         time.sleep(0.05)
     assert app.store.get("global", "ai_pick_state")["tickers"] == ["AAA", "BBB"]
+    assert app.start_ai_decisions(body) is not None                              # a stock failed: allowed again
+    for _ in range(100):
+        if not app.analysis.running:
+            break
+        time.sleep(0.05)
+    decided["BBB"] = True
     with pytest.raises(ValueError, match="already picked today"):
         app.start_ai_decisions(body)
     assert app.start_ai_decisions({**body, "ai_pick": False}) is not None     # a plain agent run is not limited
