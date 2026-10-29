@@ -191,6 +191,11 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .bell-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 .sig-sum { display: grid; gap: 6px; }
 .sig-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+.sig-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.sig-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--surface-2); min-width: 0; }
+.sig-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.sig-tile .v { font-size: 15px; font-weight: 600; }
+.sig-warn ul { margin: 4px 0 0; padding-left: 18px; }
 .sig-chip { border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; font-size: 12px; white-space: nowrap; }
 .sig-chip.hot { border-color: var(--sell, #dc2626); color: var(--sell, #dc2626); }
 .sig-chip.good { border-color: var(--buy, #047857); color: var(--buy, #047857); }
@@ -1198,20 +1203,25 @@ function signalTable(sg) {
 function sigSummary(vd, dec, head, sg) {
   let h = `<div class="sig-sum">`;
   if (vd) {
-    const vm = vd.model;
-    h += `<div class="sig-line"><span class="verdict big ${vd.action}">${vd.action}</span><span>${esc(vd.summary || vd.label || "")}</span></div>`;
-    if (vm) h += `<div class="sig-line muted small">Model rank <b>#${vm.rank}</b> of ${vm.of} · expected ${spct(vm.expected_net, 2)} after costs over ${vm.horizon} sessions` +
-      `${vm.p_win != null ? ` · P(profit) ${pct(vm.p_win, 0)}` : ""}</div>`;
+    const vm = vd.model, view = vd.label !== vd.action ? ` <span class="muted small">(model view ${esc(vd.verdict)}, not validated)</span>` : "";
+    h += `<div class="sig-line"><span class="verdict big ${vd.action}">${vd.action}</span><span>${esc(vd.summary || "")}${view}</span></div>`;
+    const tiles = [
+      vm ? ["Model rank", `#${vm.rank} <span class="muted small">of ${vm.of}</span>`] : null,
+      vm ? ["Expected", `${spct(vm.expected_net, 2)} <span class="muted small">${vm.horizon} sessions, after costs</span>`] : null,
+      vm && vm.p_win != null ? ["P(profit)", pct(vm.p_win, 0)] : null,
+      sg && sg.status === "ok" ? ["Trend", esc(sg.trend)] : null].filter(Boolean);
+    if (tiles.length) h += `<div class="sig-tiles">${tiles.map(([k, v]) => `<div class="sig-tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}</div>`;
   }
-  if (dec) h += `<div class="sig-line small"><b>Today:</b> <span class="${ACTION_CLS[dec.action] || ""}">${esc(dec.action)}</span>` +
-    `${dec.paper_action ? ` <span class="muted">(${esc(dec.paper_action)})</span>` : ""} <span class="muted">· for the close of ${esc(head.executes)}</span></div>`;
+  if (dec) h += `<div class="sig-line small"><b>Today:</b> ${esc(dec.paper_action || dec.action)} <span class="muted">· for the close of ${esc(head.executes)}</span></div>`;
   if (sg && sg.status === "ok") {
     const f = sg.forecast, lift = k => (sg.lifts || {})[k] || 0;
     const chip = (name, p, key, good) => `<span class="sig-chip${lift(key) >= 1.2 ? (good ? " good" : " hot") : ""}" title="${lift(key).toFixed(2)}× usual">${name} ${pct(p, 0)}</span>`;
-    h += `<div class="sig-line small"><b>Trend:</b> ${esc(sg.trend)} ` + chip("Breakout", f.p_up_break, "up_break", true) +
+    h += `<div class="sig-line small"><span class="muted">Next ${sg.horizon} sessions:</span> ` + chip("Breakout", f.p_up_break, "up_break", true) +
       chip("Breakdown", f.p_down_break, "down_break", false) + chip("Big loss", f.p_large_loss, "large_loss", false) +
       chip("Deep drop", f.p_deep_drawdown, "deep_drawdown", false) + `</div>`;
-    if ((sg.warnings || []).length) h += `<div class="sig-line small neg">${sg.warnings.map(w => esc(w.text)).join(" · ")}</div>`;
+    const w = sg.warnings || [];
+    if (w.length) h += `<details class="small sig-warn"><summary><b class="neg">${w.length} warning${w.length === 1 ? "" : "s"}</b></summary>` +
+      `<ul>${w.map(x => `<li>${esc(x.text)}</li>`).join("")}</ul></details>`;
   }
   return h + `</div>`;
 }
@@ -1225,9 +1235,7 @@ async function loadSignals() {
   if (vd) {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
     const vm = vd.model;
-    h += `<div class="vbox"><span class="verdict big ${vd.action}" title="The action the evidence gate allows">${vd.action}</span><div class="why">${vd.label !== vd.action ? `<div class="small"><b>Model view: ${esc(vd.label)}</b>. The model is experimental, so its BUY is not acted on.</div>` : ""}<b>${vd.held ? "You hold it" : "Not held"}</b>: ${esc(vd.summary)}.` +
-      (vm ? `<div class="small muted" style="margin-top:4px">Model rank <b>#${vm.rank}</b> of ${vm.of} ${vm.kind === "fund" ? "funds" : "S&amp;P 500 stocks"} · ${esc(vm.measures?.expected?.label || "expected")} ${spct(vm.expected_net, 2)} over ${vm.horizon} sessions · ${esc(vm.measures?.probability?.label || "P(profit)")} ${pct(vm.p_win, 0)}</div>` : "") + `</div></div>` +
-      `<details${vd.verdict === "WATCH" || vd.label !== vd.action ? " open" : ""}><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
+    h += `<details><summary class="small"><b>The tests behind it</b></summary><ul class="vchecks">` +
       (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
         : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
       `<p class="small" style="margin:10px 0 4px"><b>Context</b> <span class="muted">(shown, does not change the verdict)</span></p><ul class="vchecks">` +
@@ -1236,16 +1244,9 @@ async function loadSignals() {
   }
   if (dec) {
     const why = (dec.blocked || dec.reasons || []).join("; ");
-    h += `<div class="consensus"><span class="big ${ACTION_CLS[dec.action] || ""}">${esc(dec.action)}</span>` +
-      `<span class="muted">${dec.paper_action ? esc(dec.paper_action) + " · " : ""}${dec.kind === "held" ? "held in Trading" : "today's candidate"}, ` +
-      `executes at the close of ${esc(head.executes)}${head.mode === "experimental" ? " · experimental mode" : ""}</span></div>`;
-    if (dec.expected_net != null)
-      h += `<p class="small">Expected net after costs ${spct(dec.expected_net, 2)}, P(profit) ${pct(dec.p_win, 0)}${dec.dollars ? `, size ${money(dec.dollars)}` : ""}` +
-        `${dec.tied_with ? ` <span class="muted">(${dec.tied_with} other stocks share this estimate: the score-to-P&amp;L map groups stocks in tenths)</span>` : ""}</p>`;
     if (why) h += `<p class="small muted">Why not more: ${esc(why)}</p>`;
   } else {
-    h += `<p class="small muted">${head ? "No action today: only the top-ranked stocks and your Trading holdings get one."
-      : "No daily decision made yet: Decisions → Make today's decision."}</p>`;
+    if (!head) h += `<p class="small muted">No daily decision made yet: Decisions → Make today's decision.</p>`;
   }
   const ep = row.entry;
   if (ep) {
