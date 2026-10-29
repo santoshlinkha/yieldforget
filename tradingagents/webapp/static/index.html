@@ -150,6 +150,8 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .fit-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fit-table .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-legend-box { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; background: var(--surface-2); }
+.col-legend-box > ul { margin: 6px 0 0; padding-left: 18px; }
+.col-legend-box > ul li { margin: 3px 0; }
 .col-legend { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 8px 0 0; }
 .col-legend dt { font-weight: 600; } .col-legend dd { margin: 0; color: var(--muted); }
 .sg-table th { white-space: nowrap; }
@@ -167,6 +169,17 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .sg-table .sg-warn[open] div { white-space: normal; margin-top: 3px; }
 .sg-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: 5px;
   border: 1px solid currentColor; line-height: 1.5; }
+.runners { width: 100%; table-layout: fixed; }
+.runners th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; }
+.runners td { vertical-align: middle; padding-top: 7px; padding-bottom: 7px; }
+.runners th.num, .runners td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.runners tr + tr td { border-top: 1px solid var(--border); }
+.runners .rn-tk { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.runners .rn-ai { padding: 1px 7px; font-size: 11px; line-height: 1.4; }
+.runners .rn-agents { min-width: 0; }
+.runners .rn-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rn-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 5px;
+  border: 1px solid currentColor; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
 .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -490,6 +503,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       <div class="page-head"><div><h2>Trend</h2><p>The market and its sectors: where prices are moving, which sectors are rotating in or out and why, and the market's breadth. Context for the trade, not part of the model's decision.</p></div>
         <span class="muted small" id="mkAsOf">Loading market data…</span></div>
         <div class="tiles" id="mkTiles"></div>
+        <div class="card"><div class="econ" id="aiEcon"><p class="muted">Loading…</p></div></div>
         <div class="split">
           <div>
             <div class="card">
@@ -547,8 +561,9 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
           <div class="row" style="margin:0;align-items:center;gap:8px"><b>What the columns mean</b><button type="button" class="ghost small-btn" id="qsLegendToggle" aria-expanded="true" aria-controls="qsLegend">Hide</button></div>
           <div id="qsLegend"></div>
         </div>
-        <details class="small"><summary><b>How the scores and ranks are measured</b></summary>
-          <ul class="muted">
+        <div class="small col-legend-box" id="qsHowBox">
+          <div class="row" style="margin:0;align-items:center;gap:8px"><b>How the scores and ranks are measured</b><button type="button" class="ghost small-btn" id="qsHowToggle" aria-expanded="true" aria-controls="qsHow">Hide</button></div>
+          <ul class="muted" id="qsHow">
             <li><b>Quality score (0–100)</b>: the share of the ticker page's tests the stock passes: the moat checks (gross margin, return on capital, margin stability, free cash flow, and so on) plus the financial strength items (debt to equity, interest coverage, current ratio) and the profitability items (FCF, ROIC above 15%, margin trends). A pass counts 1, a "check" ½, a flag 0; tests without data are left out. Example: 13 of 14 tests passed = 92.9.</li>
             <li><b>Quality rank</b>: position by quality score alone, 1 = highest. Equal scores share a rank (many stocks score 100).</li>
             <li><b>Consensus</b>: this month's analyst ratings averaged on 1 = strong buy, 2 = buy, 3 = hold, 4 = sell, 5 = strong sell. Lower is more bullish.</li>
@@ -558,7 +573,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
             <li><b>Signals</b>: the stock models' probabilities over 20 sessions, each compared with how often it happened to any stock in training (the lift: 1.0× is ordinary) and with today's other stocks (a warning also needs the top fifth, so a market-wide shift does not flag everyone). Breakout likely: P(the price trades above its 20-day high at any time in the next 20 sessions, intraday) ≥ 1.2× usual. Breakdown risk: P(it trades below its 20-day low, intraday) ≥ 1.2× usual: a barrier touch, not a loss, a crash or a limit fill. Crash warning: P(a large loss at the 20-session end) ≥ 1.5× usual and ≥ 10%. Deep drawdown warning: ≥ 1.5× usual and ≥ 20%. A model that gives nearly every stock the same probability raises no warning and says so. Trend: up, down or sideways when its probability is ≥ 1.15× its usual share and in today's top fifth; otherwise "no clear trend". Action: the latest daily decision (Decisions tab); only its top candidates and Trading holdings get one. None of it is validated for trading.</li>
             <li><b>Valuation</b> is shown but not in the score, so a good company and a cheap one stay distinguishable. None of these was tested for predicting returns; it is a screen of facts and opinions as of today.</li>
           </ul>
-        </details>
+        </div>
         <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
         <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
         </div>
@@ -580,7 +595,6 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       <div class="page-head"><div><h2>Decisions</h2><p>Two kinds of decision, side by side. <b>AI decisions</b>: the TradingAgents team (technical, fundamentals, news and sentiment analysts, a bull/bear debate, a trader, a risk debate and a portfolio manager) reads each stock as of the last close, with the economy in view, and says BUY, HOLD or SELL; shown next to the app's rule verdict. <b>Quant model decision</b>: the fitted models' daily ENTER / WAIT / HOLD / EXIT, sized to the trading budget (SGOV's interest and the match). Nothing is sent to the broker; you place the orders. Opening this page reads only what is saved.</p></div></div>
       <div class="card" id="aiCard">
         <div class="card-head"><h3>AI decisions</h3><span class="muted small" id="aiProv"></span></div>
-        <div class="econ" id="aiEcon"></div>
         <div class="aiopts">
           <div><label class="flabel" for="aiDay">Analyze as of</label><input type="date" id="aiDay" style="max-width:180px"></div>
           <div><span class="flabel">Analysts</span><div class="chips" id="aiAnalysts"></div></div>
@@ -907,8 +921,16 @@ async function loadTrade() {
         <td>${money(s.last_close)}</td><td>${money(s.entry)}</td><td>${s.unrealized == null ? "–" : spct(s.unrealized)}</td><td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
-    $("runnersTable").innerHTML = t.runners_up.length ? `<tr><th class='l'>Ticker</th><th>Allowed size</th><th>Reference close</th><th>Target</th><th>Stop</th><th class='l'>AI agents</th></tr>` +
-      t.runners_up.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b> <button class="ghost small-btn" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}">AI</button></td><td title="${esc(x.size?.basis || "")}">${usd(x.dollars || 0)}</td><td>${usd(x.last_close)}</td><td class="pos">${spct(x.target_pct, 1)}</td><td class="neg">${spct(x.stop_pct, 1)}</td><td class="l small" data-agentcell="${esc(x.ticker)}">…</td></tr>`).join("")
+    // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
+    $("runnersTable").className = "compact runners";
+    $("runnersTable").innerHTML = t.runners_up.length
+      ? `<colgroup><col style="width:21%"><col style="width:14%"><col style="width:15%"><col style="width:12%"><col style="width:12%"><col style="width:26%"></colgroup>` +
+        `<tr><th class="l">Ticker</th><th class="num" title="What the decision's sizing rule allows on today's budget">Size</th><th class="num" title="The reference close (not an order price): the buy is at the next close">Last close</th>` +
+        `<th class="num" title="Sell when a close reaches this far above the fill">Target</th><th class="num" title="Sell when a close falls this far below the fill">Stop</th><th class="l">AI agents</th></tr>` +
+        t.runners_up.map(x => `<tr><td class="l"><span class="rn-tk"><b>${tk(x.ticker)}</b><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></span></td>` +
+          `<td class="num" title="${esc(x.size?.basis || "")}">${usd(x.dollars || 0)}</td><td class="num">${usd(x.last_close)}</td>` +
+          `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
+          `<td class="l rn-agents" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = !t.runners_up.length;
     $("runnersAll").onclick = async () => {
@@ -994,12 +1016,11 @@ function agentCell(r) {
   let h = "";
   if (r.available) {
     const act = r.agent_action || "", cls = /BUY/.test(act) ? "pos" : /SELL|AVOID/.test(act) ? "neg" : "";
-    h = r.agent_rating ? `<b class="${cls}">${esc(r.agent_rating)}</b>${act ? ` <span class="muted">→ ${esc(act)}</span>` : ""}`
-                       : `<b>saved</b>`;
-    h += `<div class="muted small">for ${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}</div>`;
+    h = r.agent_rating ? `<span class="rn-badge ${cls}">${esc(r.agent_rating)}${act ? ` → ${esc(act)}` : ""}</span>` : `<b>saved</b>`;
+    h += `<div class="muted small rn-clip" title="${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}">${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}</div>`;
   } else h = '<span class="muted">not run yet</span>';
   if (lr && lr.status !== "ok" && (!r.available || (lr.as_of || "") >= (r.date || "")))
-    h += `<div class="neg small">last try ${esc((lr.finished_at || "").slice(0, 10))} failed${lr.why ? ": " + esc(lr.why) : ""}</div>`;
+    h += `<div class="neg small rn-clip" title="last try ${esc((lr.finished_at || "").slice(0, 10))} failed${lr.why ? ": " + esc(lr.why) : ""}">last try failed${lr.why ? ": " + esc(lr.why) : ""}</div>`;
   return h;
 }
 async function runnerAgents(list) {
@@ -1607,6 +1628,20 @@ const QS_WIDTHS = {
             target_upside: 66},
   signals: {rank: 52, ticker: 164, verdict: 104, model_rank: 72, action: 100, trend: 106, lift_up: 78, lift_down: 88,
             p_large_loss: 64, warnings: 210, quality_score: 66, analyst_mean: 56}};
+// The explanation boxes above the table (column meanings, how scores are measured): Hide / Show, remembered here.
+// The body is hidden with display directly, so no page style can keep it showing.
+function setBox(body, button, key, on) {
+  $(body).style.display = on ? "" : "none";
+  $(button).textContent = on ? "Hide" : "Show";
+  $(button).setAttribute("aria-expanded", on);
+  store.set(key, on);
+}
+const BOXES = [["qsLegend", "qsLegendToggle", "qsLegendShown"], ["qsHow", "qsHowToggle", "qsHowShown"]];
+for (const [body, button, key] of BOXES) {
+  $(button).onclick = () => setBox(body, button, key, $(body).style.display === "none");
+  setBox(body, button, key, store.get(key, true));
+}
+function showLegend(on) { setBox("qsLegend", "qsLegendToggle", "qsLegendShown", on); }
 function fitScreen(view, cols) {
   const t = $("qsTable"), w = QS_WIDTHS[view] || {};
   t.classList.add("fit-table");
@@ -1757,11 +1792,7 @@ function aiBrief(b) {
 function aiRender() {
   const d = aiData;
   $("aiProv").textContent = `on ${d.provider.llm_provider} · ${d.provider.quick_think_llm}${d.provider.deep_think_llm !== d.provider.quick_think_llm ? " / " + d.provider.deep_think_llm : ""} (Settings → Agent models)`;
-  $("aiEcon").innerHTML = aiBrief(d.brief);
-  $("aiEconRun").onclick = async () => {
-    try { await api("/api/market/explain", {}); $("aiEconRun").disabled = true; $("aiEconRun").textContent = "Writing…"; setTimeout(loadAiDecisions, 15000); }
-    catch (e) { showError(e.message); }
-  };
+
   if (aiPicked === null) {
     const held = d.rows.filter(r => r.in_trading).map(r => r.ticker);
     aiPicked = new Set([...held, ...d.rows.filter(r => r.why === "model verdict BUY").map(r => r.ticker)].slice(0, AI_PICK));
@@ -2125,8 +2156,15 @@ function miniMarkdown(text) {
   return renderMarkdown(text);
 }
 
+function renderEcon(brief) {
+  $("aiEcon").innerHTML = aiBrief(brief);
+  $("aiEconRun").onclick = async () => {
+    try { await api("/api/market/explain", {}); $("aiEconRun").disabled = true; $("aiEconRun").textContent = "Writing…"; pollExplain(); }
+    catch (e) { showError(e.message); }
+  };
+}
 async function loadMarket() {
-  try { const m = await api("/api/market"); renderMarket(m); return m; }
+  try { const m = await api("/api/market"); renderMarket(m); renderEcon(m.brief); return m; }
   catch (e) { $("mkAsOf").textContent = "Market data unavailable: " + e.message; }
 }
 async function pollExplain() {
