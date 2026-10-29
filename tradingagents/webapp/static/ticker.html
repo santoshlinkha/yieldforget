@@ -154,7 +154,9 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 /* A failed run: one tidy box inside the panel, one row per provider tried, the raw error folded away. */
 .failbox { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-left: 3px solid var(--sell);
   background: var(--surface); border-radius: 8px; padding: 10px 12px; color: var(--text); font-size: 13px; }
-.failbox .head { font-weight: 600; color: var(--sell); margin-bottom: 6px; }
+.failbox .head { font-weight: 600; color: var(--sell); }
+.failbox > summary { cursor: pointer; } .failbox[open] > summary { margin-bottom: 6px; }
+.run-del { float: right; margin-left: 8px; }
 .failbox ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
 .failbox li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 6px; align-items: start; line-height: 1.4; }
 .failbox li .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--sell); }
@@ -689,10 +691,9 @@ async function load() {
     // Each saved run shows the agents' own decision (their rating as an action); the model's verdict is the card above.
     const withRun = rp.runs.filter(run => run.agents && !run.run);
     let h = withRun.length ? `<p class="small">Agents' decisions on record: ${withRun.map(run => `<a href="#report=${esc(run.date)}" data-open="${esc(run.date)}">${esc(run.date)}: <b>${esc(run.agents)}</b></a>`).join(" · ")}</p>` : "";
-    h += rp.runs.length ? rp.runs.map(run => `<details ${run.run ? `data-run="${esc(run.run)}"` : `data-day="${esc(run.date)}"`}><summary>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.run ? `<span class="muted">${esc(earlier(run))}</span>` : ""}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""}${run.run && run.decision ? ` · final decision then: ${esc(run.decision)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
+    h += rp.runs.length ? rp.runs.map(run => `<details ${run.run ? `data-run="${esc(run.run)}"` : `data-day="${esc(run.date)}"`}><summary><button class="ghost small-btn run-del" data-delrun="${esc(run.date)}"${run.run ? ` data-delrunid="${esc(run.run)}"` : ""} title="Delete this analysis (moved to a _deleted folder, not erased)" aria-label="Delete the ${esc(run.date)} analysis">Delete</button>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.run ? `<span class="muted">${esc(earlier(run))}</span>` : ""}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""}${run.run && run.decision ? ` · final decision then: ${esc(run.decision)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
       (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"${run.run ? ` data-callrun="${esc(run.run)}"` : ""}><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") +
-      `<p><button class="ghost small-btn" data-delrun="${esc(run.date)}"${run.run ? ` data-delrunid="${esc(run.run)}"` : ""} title="Remove this analysis from the page (moved to a _deleted folder, not erased)">Delete this analysis</button></p>` +
       `<div class="runView"></div></details>`).join("")
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     if (allRuns > rp.runs.length) h += `<p class="muted small">Showing the latest ${rp.runs.length} of ${allRuns} runs.</p>`;
@@ -708,7 +709,8 @@ async function load() {
     $("reports").querySelectorAll("details[data-day], details[data-run]").forEach(box => box.addEventListener("toggle", () => {
       if (!box.open) { box.querySelector(".runView").innerHTML = ""; box.querySelectorAll("a.on").forEach(x => x.classList.remove("on")); }
     }));
-    $("reports").querySelectorAll("button[data-delrun]").forEach(b => b.onclick = async () => {
+    $("reports").querySelectorAll("button[data-delrun]").forEach(b => b.onclick = async ev => {
+      ev.preventDefault(); ev.stopPropagation();       // inside the run's summary: do not open or close the run
       if (!confirm(`Delete the ${b.dataset.delrun} analysis of ${symbol}${b.dataset.delrunid ? " (earlier run)" : ""}? Its folder is moved to _deleted and can be moved back.`)) return;
       try { await getJSON("/api/agent-report/delete", {ticker: symbol, date: b.dataset.delrun, run: b.dataset.delrunid || null}); load(); }
       catch (e) { b.insertAdjacentHTML("afterend", ` <span class="neg small">${esc(e.message)}</span>`); }
@@ -1139,9 +1141,12 @@ function failBox(error, list) {
   const rows = (list || []).map(a => `<li class="${a.state === "ok" ? "ok" : a.state === "failed" ? "" : "skipped"}"><span class="dot"></span>` +
     `<span><b>${esc(a.provider)}</b> ${esc(String(a.model).split("/").pop().replace(":free", ""))}` +
     `${a.state === "failed" ? `<br><span class="why">${esc(plain(a.why))}</span>` : a.state === "ok" ? ' <span class="why">ran it</span>' : ""}</span></li>`).join("");
-  return `<div class="failbox"><div class="head">The agents could not run</div>` +
-    (rows ? `<ul>${rows}</ul>` : `<div class="why">${esc(plain(error))}</div>`) +
-    `<details><summary>Full error</summary><pre>${esc(error)}</pre></details></div>`;
+  const failed = (list || []).filter(a => a.state === "failed");
+  const reasons = [...new Set(failed.map(a => plain(a.why)))];
+  const summary = reasons.length ? reasons.slice(0, 2).join("; ") + (reasons.length > 2 ? "; …" : "") : plain(error);
+  return `<details class="failbox"><summary><span class="head">The agents could not run</span> · ${esc(summary)}` +
+    `${(list || []).length ? ` <span class="muted small">(${(list || []).length} provider${(list || []).length === 1 ? "" : "s"} tried)</span>` : ""}</summary>` +
+    (rows ? `<ul>${rows}</ul>` : "") + `<details><summary>Full error</summary><pre>${esc(error)}</pre></details></details>`;
 }
 function tries(list) {
   if (!list || !list.length) return "";

@@ -419,7 +419,7 @@ select option { background: var(--surface); color: var(--text); }
           <button id="qsBuild">Build or refresh the screen</button>
           <button class="ghost" id="sgBuild" title="Fits this week's stock models if needed and scores every S&amp;P 500 stock: free, on this machine, a few minutes">Compute signals for all</button>
           <input type="text" id="qsFilter" placeholder="Filter by ticker, name or sector" style="max-width:300px">
-          <span class="muted small" id="qsStatus"></span>
+          <div class="muted small" id="qsStatus" style="flex-basis:100%"></div>
         </div>
         <p class="muted small" id="sgStatus" style="margin:0 0 8px"></p>
         <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
@@ -818,7 +818,9 @@ async function loadAgentReport() {
   if (j.running) h += jobLine(j, "analysis") + (mine ? "" : `<p class="muted small">Another analysis is running; wait for it to finish.</p>`);
   else h += `<div class="row" style="margin:4px 0 8px"><button id="runAgentsBtn">${r.available ? "Run again" : "Run the AI agents"} on ${esc(agentTicker)}</button>` +
     `<span class="muted small">all four analysts, as of ${esc(agentDay || "the last close")}; free models first (Gemini, then OpenRouter), a few minutes</span></div>` +
-    (j.error && (j.attempts || []).length ? `<p class="neg small">Last run failed: ${esc(j.error)} <button class="ghost small-btn" id="agentDismiss" title="Remove this failed-run message (the run's record is kept)">Dismiss</button></p>${tries(j.attempts)}` : "");
+    (j.error && (j.attempts || []).length ? `<details class="small"><summary><span class="neg">Last run failed</span> · ${esc(shortFail(j.attempts, j.error))} ` +
+      `<button class="ghost small-btn" id="agentDismiss" title="Remove this failed-run message (the run's record is kept)">Dismiss</button></summary>` +
+      `${tries(j.attempts)}<pre class="small" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:140px;overflow:auto">${esc(j.error)}</pre></details>` : "");
   if (r.available) {
     h += `<div class="agent-final">${miniMarkdown((r.final || "").split(/\r?\n/).slice(0, 14).join("\n"))}</div>` +
       `<p class="muted small">Saved ${esc(r.saved_at.replace("T", " "))} for ${esc(r.date)}. The model's numbers above decide; the agents' view is context.` +
@@ -828,7 +830,8 @@ async function loadAgentReport() {
   box.innerHTML = h;
   const btn = $("runAgentsBtn");
   if (btn) btn.onclick = runAgents;
-  if ($("agentDismiss")) $("agentDismiss").onclick = async () => {
+  if ($("agentDismiss")) $("agentDismiss").onclick = async ev => {
+    ev.preventDefault(); ev.stopPropagation();
     try { await api("/api/agent-runs/dismiss", {ticker: agentTicker}); loadAgentReport(); } catch (e) { showError(e.message); }
   };
   const full = $("agentFull");
@@ -1140,7 +1143,7 @@ async function loadLive() {
         <td>${r.mean_ic == null ? "<span class='muted'>waiting</span>" : r.mean_ic.toFixed(3)}</td><td>${r.hit == null ? "–" : pct(r.hit, 0)}</td><td>${lpct(r.top_minus_all)}</td></tr>`).join("")
         : "<tr><td colspan='8' class='muted l'>No saved runs yet.</td></tr>");
     const j = d.daily;
-    $("fcDaily").textContent = j.running ? `Daily Chronos-2 record: ${j.progress}…` : j.error ? `Daily Chronos-2 record failed: ${j.error}` : "";
+    $("fcDaily").innerHTML = j.running ? jobLine({...j, progress: "Daily Chronos-2 record: " + j.progress}, "daily") : j.error ? `<span class="neg">Daily Chronos-2 record failed: ${esc(j.error)}</span>` : "";
     if (j.running) setTimeout(loadLive, 5000);
   } catch (e) { $("fcLive").innerHTML = `<tr><td class="l">${esc(e.message)}</td></tr>`; }
 }
@@ -1264,7 +1267,7 @@ function renderForecasts(d) {
       `<tr class="group"><td colspan="8">${esc(UNI[g.universe] || g.universe)} · ${g.horizon} sessions</td></tr>` +
       Object.values(g.scores).map(m => `<tr><td class="l">${esc(m.name)}</td><td>${m.mean_ic == null ? "–" : m.mean_ic.toFixed(3) + ` <span class="muted">(${m.ic_ci[0]?.toFixed?.(3) ?? "–"}, ${m.ic_ci[1]?.toFixed?.(3) ?? "–"})</span>`}</td><td>${(m.r2_oos * 100).toFixed(2)}%</td><td>${m.calibration_xs == null ? "–" : m.calibration_xs.toFixed(2)}</td><td>${pct(m.coverage_90, 0)}</td><td>${m.brier.toFixed(3)} / ${m.brier_null.toFixed(3)}</td><td>${lpct(m.top_minus_all_net)}</td><td>${m.p_value.toFixed(3)}</td></tr>`).join("")).join(""));
   const j = d.job;
-  $("fcStatus").textContent = j.running ? j.progress : j.error ? "Failed: " + j.error : "";
+  $("fcStatus").innerHTML = j.running ? jobLine(j, "forecast") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` : "";
   if (fcWasRunning && !j.running) { fcView = null; loadLive(); }   // a finished batch: show its newest run
   fcWasRunning = j.running;
   $("fcRun").disabled = j.running;
@@ -1434,7 +1437,7 @@ async function loadSignalsBoard() {
 }
 async function pollSignalRun() {
   const d = await api("/api/stocks").catch(() => null), j = d && d.job;
-  if (j && j.running) { $("sgStatus").textContent = j.progress + "…"; $("sgBuild").disabled = true; setTimeout(pollSignalRun, 5000); return; }
+  if (j && j.running) { $("sgStatus").innerHTML = jobLine(j, "stocks"); $("sgBuild").disabled = true; setTimeout(pollSignalRun, 3000); return; }
   $("sgBuild").disabled = false;
   if (j && j.error) $("sgStatus").textContent = "Failed: " + j.error; else loadSignalsBoard();
 }
@@ -1443,8 +1446,8 @@ document.querySelectorAll("[data-qv]").forEach(b => b.onclick = () => { qsView =
 async function loadScreen() {
   try { qsData = await api("/api/screen/quality"); } catch (e) { $("qsStatus").textContent = e.message; return; }
   const j = qsData.job, l = qsData.latest;
-  $("qsStatus").textContent = j.running ? j.progress + "…" : j.error ? "Failed: " + j.error :
-    l ? `${l.stocks} stocks, data to ${l.as_of}, built ${l.built_at.slice(0, 16).replace("T", " ")} UTC${Object.keys(l.errors).length ? `; ${Object.keys(l.errors).length} could not be scored` : ""}` : "";
+  $("qsStatus").innerHTML = j.running ? jobLine(j, "screen") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` :
+    l ? esc(`${l.stocks} stocks, data to ${l.as_of}, built ${l.built_at.slice(0, 16).replace("T", " ")} UTC${Object.keys(l.errors).length ? `; ${Object.keys(l.errors).length} could not be scored` : ""}`) : "";
   $("qsBuild").disabled = j.running;
   if (j.running) setTimeout(loadScreen, 4000);
   renderScreen();
@@ -1507,6 +1510,15 @@ function aiCost() {
   $("aiRunPicked").disabled = !n || !k || aiData.job.running;
 }
 // Each AI provider tried for a run: trying (spinning), failed (struck, with the reason) or ok.
+// A failed run in a few words: the distinct reasons the providers gave, e.g. "out of credit; free daily limit".
+function shortFail(list, error) {
+  const plain = w => /free-models-per-day|free daily limit/i.test(w) ? "free daily limit reached"
+    : /prepayment credits are depleted|402|out of credit/i.test(w) ? "out of credit"
+    : /429|rate.?limit|RESOURCE_EXHAUSTED|quota/i.test(w) ? "rate limited" : /401|403|key/i.test(w) ? "key rejected"
+    : String(w || "").slice(0, 60);
+  const reasons = [...new Set((list || []).filter(a => a.state === "failed").map(a => plain(a.why || "")))].filter(Boolean);
+  return (reasons.length ? reasons.join("; ") : plain(error)) + ` (${(list || []).length} provider${(list || []).length === 1 ? "" : "s"} tried)`;
+}
 function tries(list) {
   if (!list || !list.length) return "";
   return `<span class="tries">` + list.map(a => `<span class="try ${a.state}" title="${esc(a.provider + " / " + a.model + (a.why ? ": " + a.why : ""))}">` +

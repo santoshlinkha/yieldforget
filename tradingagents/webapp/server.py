@@ -207,6 +207,17 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+_COUNT = re.compile(r"(\d+)\s*(?:of|/)\s*(\d+)")
+
+
+def _counted(job, text: str, base: float = 0.0, span: float = 1.0):
+    """Show ``text`` and move the job's bar from an "N of M" in it (never backwards)."""
+    m = _COUNT.search(str(text))
+    if m and int(m[2]):
+        job.fraction = max(job.fraction or 0.0, min(base + span * int(m[1]) / int(m[2]), 1.0))
+    job.progress = text
+
+
 _MISSING = object()
 
 
@@ -611,12 +622,14 @@ class App:
             # Three at a time, since every boosted-tree fit already uses all the cores.
             done, runs, failed = 0, [], []
             job.progress = f"training {len(combos)} model{'s' * (len(combos) > 1)} on {UNIVERSES[universe]}"
+            job.fraction = 0.02
             with ThreadPoolExecutor(max_workers=min(3, len(combos))) as pool:
                 futures = {pool.submit(run_forecast, self.store.con, self.cache_dir, tickers, horizon=h, model=m,
                                        universe=universe, device_setting=device): (m, h) for m, h in combos}
                 for fut in as_completed(futures):
                     m, h = futures[fut]
                     done += 1
+                    job.fraction = max(job.fraction or 0.0, done / len(combos))
                     try:
                         runs.append(fut.result())
                     except Exception as exc:  # one failing model leaves the others' results
@@ -654,8 +667,9 @@ class App:
 
         def work(job):
             done = []
-            for h in due:
+            for i, h in enumerate(due):
                 job.progress = f"recording Chronos-2's {h}-session forecasts"
+                job.fraction = i / len(due)
                 done.append(run_forecast(con, self.cache_dir, tickers, horizon=h, model=CHRONOS, universe="etf",
                                          device_setting=self.store.get("global", "compute_backend"))["run_id"])
             return {"runs": done}
@@ -693,9 +707,25 @@ class App:
                              device=self.store.get("global", "compute_backend"))
 
         def work(job):
-            progress = Progress(lambda stage: setattr(job, "progress", stage))
+            stages = {"economic": 0.05, "building": 0.15, "fitting": 0.30, "collecting news": 0.50}
+
+            def stage(text):
+                at = next((v for k, v in stages.items() if str(text).startswith(k)), None)
+                if at is not None:
+                    job.fraction = max(job.fraction or 0.0, at)
+                _counted(job, text, 0.0, 0.0)
+
+            class Counted(Progress):
+                def ticker(self, t, status, note=None):
+                    super().ticker(t, status, note)
+                    scored = sum(1 for x in self.tickers.values() if x["status"] in ("done", "abstained"))
+                    job.fraction = max(job.fraction or 0.0, 0.55 + 0.45 * scored / max(len(names), 1))
+
+            progress = Counted(stage)
             job.log = progress.tickers       # per-stock status, read while it runs
-            return run_batch(self.store.con, self.cache_dir, names, sources, config, progress)
+            out = run_batch(self.store.con, self.cache_dir, names, sources, config, progress)
+            job.fraction = 1.0
+            return out
 
         return self.stocks.start(work)
 
@@ -1366,9 +1396,10 @@ class App:
                          set(parse_tickers(" ".join(self.store.get("global", "stock_watchlist") or []))))
 
         def work(job):
-            job.progress = f"scoring {len(tickers)} stocks (cached data is reused)"
+            job.progress, job.fraction = f"scoring {len(tickers)} stocks (cached data is reused)", 0.02
             out = screen.build(self.cache_dir, tickers, Path(self.config["results_dir"]),
-                               progress=lambda m: setattr(job, "progress", m))
+                               progress=lambda m: _counted(job, m, 0.02, 0.96))
+            job.fraction = 1.0
             return {"stocks": out["stocks"], "errors": len(out["errors"])}
 
         return self.screen.start(work)
