@@ -225,7 +225,8 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
 .notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; }
-.alert-strip { display: grid; gap: 6px; margin: 0 0 12px; }
+.alert-strip { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border); }
+.alert-title { font-weight: 700; font-size: 13px; }
 .alert-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; font-size: 13px; border: 1px solid; }
 .alert-item.entry { border-color: #6ee7b7; background: #ecfdf5; color: #065f46; }
 .alert-item.exit { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
@@ -580,7 +581,6 @@ details[open] > summary::after { content: "Hide"; }
         <div class="row"><button id="tdRun" title="The internal model's decision for the next session, from the latest close (free, on this machine)">Make today's decision</button>
           <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="tdTrain"> fit models if needed</label>
           <span class="muted small" id="tdStatus"></span></div></div>
-      <div class="alert-strip" id="alertStrip" hidden></div>
       <!-- 1. Today's trade: what to buy (left), what to sell and the alternatives (right). -->
       <div class="split trade-top">
         <div>
@@ -590,6 +590,7 @@ details[open] > summary::after { content: "Hide"; }
             <div class="table-wrap"><table id="runnersTable" class="compact"></table></div>
             <p class="muted small" id="runnersNote" style="margin:6px 0 0"></p>
             <div id="pickNotes"></div>
+            <div class="alert-strip" id="alertStrip" hidden></div>
           </div>
         </div>
         <div>
@@ -1166,14 +1167,18 @@ async function renderAlerts(t) {
   try { a = await api("/api/entry-alerts"); } catch (e) { /* none shown */ }
   const today = a.checked || new Date().toISOString().slice(0, 10);
   const entries = (a.alerts || []).filter(x => x.met).map(x => ({kind: "entry", ticker: x.ticker,
-    text: `entry condition met: last close ${x.close != null ? usd(x.close) : "?"} (${x.rule})`}));
+    title: "Entry condition met", line: `Last close ${x.close != null ? usd(x.close) : "?"}: ${x.rule}.`,
+    detail: x.trigger ? `The agents' condition: ${x.trigger}` : "", text: `last close ${x.close != null ? usd(x.close) : "?"} (${x.rule})`}));
   const exits = (t.sells || []).filter(s => s.action === "EXIT" || s.action === "REDUCE").map(s => ({kind: "exit", ticker: s.ticker,
-    text: `${s.action === "EXIT" ? "sell" : "reduce"}${s.execute ? " at the close of " + s.execute : ""}: ${(s.reasons || [])[0] || ""}`}));
+    title: s.action === "EXIT" ? "Sell" : "Reduce", line: `${s.execute ? "At the close of " + s.execute + "." : ""} Last close ${usd(s.last_close)}.`,
+    detail: (s.reasons || []).join("; "), text: `${s.action === "EXIT" ? "sell" : "reduce"}${s.execute ? " at the close of " + s.execute : ""}`}));
   const items = [...entries, ...exits];
   for (const x of items) notifyOnce(`alert:${x.kind}:${x.ticker}:${today}`, `${x.kind === "entry" ? "Entry" : "Exit"}: ${x.ticker}`, x.text);
   // Only real entries and exits: no prompt here (notifications are turned on from a stock's entry plan bell).
   $("alertStrip").hidden = !items.length;
-  $("alertStrip").innerHTML = items.map(x => `<div class="alert-item ${x.kind}"><b>${x.kind === "entry" ? "ENTRY" : "EXIT"}</b> ${tk(x.ticker)} <span>${esc(x.text)}</span></div>`).join("");
+  $("alertStrip").innerHTML = `<div class="alert-title">Notifications</div>` + items.map(x =>
+    `<div class="${x.kind === "entry" ? "ok" : "note"}" style="margin-top:8px"><b>${esc(x.title)}: ${tk(x.ticker)}</b> · ${esc(x.line)}` +
+    (x.detail ? `<div class="small" style="margin-top:4px">${esc(x.detail)}</div>` : "") + `</div>`).join("");
 }
 async function checkEntryAlerts() {
   let a;

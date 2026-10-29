@@ -706,12 +706,14 @@ def test_a_free_daily_limit_pauses_only_the_free_models_of_that_key(tmp_path, mo
 
 def test_a_watched_entry_plan_is_met_by_its_price_condition(tmp_path, monkeypatch):
     srv, app = _agent_app(tmp_path, monkeypatch)
-    app.store.set("global", "entry_alerts", ["AAA", "BBB", "CCC"])
+    app.store.set("global", "entry_alerts", ["AAA", "BBB", "CCC", "DDD"])
     plans = {"AAA": {"entry_type": "limit", "entry_range_low": 95, "entry_range_high": 100},
              "BBB": {"entry_type": "limit", "entry_price": 50},
-             "CCC": {"entry_type": "market", "entry_price": 10}}
+             "CCC": {"entry_type": "market", "entry_price": 10}, "DDD": {"entry_type": "market", "entry_price": 5}}
+    action = {"AAA": "Buy", "BBB": "Overweight", "CCC": "Buy", "DDD": "Underweight"}     # DDD is not a buy: not watched
     import tradingagents.agents.entry_plan as ep
-    monkeypatch.setattr(ep, "plans_for", lambda con, t: [{"stage": "portfolio_manager", "plan": plans[t], "analysis_date": "2026-10-28"}])
+    monkeypatch.setattr(ep, "plans_for", lambda con, t: [{"current": True, "trader": None, "final": {
+        "action": action[t], "plan": plans[t], "analysis_date": "2026-10-28", "expired": False}}])
     monkeypatch.setattr(srv, "latest_prices", lambda cache, tickers: {"AAA": 98.0, "BBB": 51.0, "CCC": 11.0})
     got = {x["ticker"]: x["met"] for x in app.entry_alerts()["alerts"]}
     assert got == {"AAA": True, "BBB": False, "CCC": True}       # inside the range; above the limit; market entry

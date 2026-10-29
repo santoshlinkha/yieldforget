@@ -672,9 +672,8 @@ async function loadEntryPlans() {
   catch (e) { $("eplan").innerHTML = `<p class="neg">${esc(e.message)}</p>`; return; }
   if (!r.runs.length) { $("eplan").innerHTML = `<p class="muted small">No entry plan yet. An agent run or a pasted chat answer adds one; the app checks it against the as-traded close and this account (settled cash, caps, timing, no day trading) and executes nothing.</p>`; return; }
   const [first, ...rest] = r.runs;
-  $("eplan").innerHTML = `<p class="muted small">Written by the AI, checked by the app, placed by you.</p>` + await bellHtml() +
+  $("eplan").innerHTML = `<p class="muted small">Written by the AI, checked by the app, placed by you.</p>` +
     planRun(first) + (rest.length ? `<details><summary class="small">${rest.length} earlier plan${rest.length === 1 ? "" : "s"} (superseded or expired)</summary>${rest.map(run => `<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px">${planRun(run)}</div>`).join("")}</details>` : "");
-  wireBell();
 }
 
 async function load() {

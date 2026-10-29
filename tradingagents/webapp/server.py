@@ -1598,13 +1598,24 @@ class App:
         agents' free-text trigger is shown, not checked. Closes are daily, so this is checked after each close."""
         from tradingagents.agents.entry_plan import plans_for
 
-        watched = [str(t).upper() for t in (self.store.get("global", "entry_alerts") or [])]
+        # Every stock with a recent plan; only a current, unexpired buy plan (Buy or Overweight) is watched.
+        try:
+            recent = [r[0].upper() for r in self.store.con.execute(
+                "SELECT DISTINCT ticker FROM entry_plans WHERE created_at >= ?",
+                ((date.today() - timedelta(days=30)).isoformat(),))]
+        except Exception:   # an older database without the table
+            recent = []
+        current = {}
+        for t in dict.fromkeys([*recent, *[str(x).upper() for x in (self.store.get("global", "entry_alerts") or [])]]):
+            run = next((r for r in plans_for(self.store.con, t) if r.get("current")), None)   # {final, trader, current}
+            row = (run or {}).get("final") or (run or {}).get("trader")
+            if row and not row.get("expired") and str(row.get("action") or "").lower() in ("buy", "overweight"):
+                current[t] = row
+        watched = list(current)
         prices = latest_prices(self.cache_dir, watched) if watched else {}
         out = []
         for t in watched:
-            runs = plans_for(self.store.con, t)
-            run = next((r for r in runs if r.get("stage") == "portfolio_manager" and not r.get("expired")
-                        and not r.get("superseded_by")), None) or next((r for r in runs if not r.get("expired")), None)
+            run = current[t]
             plan = (run or {}).get("plan") or {}
             close = prices.get(t)
             lo, hi, px = plan.get("entry_range_low"), plan.get("entry_range_high"), plan.get("entry_price")
