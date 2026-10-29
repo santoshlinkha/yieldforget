@@ -224,6 +224,20 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
+.ai-box { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;
+  font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; border: 1px solid; }
+.ai-box.good { color: #047857; background: #ecfdf5; border-color: #6ee7b7; }
+.ai-box.mid { color: #92400e; background: #fffbeb; border-color: #fcd34d; }
+.ai-box.bad { color: #b91c1c; background: #fef2f2; border-color: #fca5a5; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ai-box.good { color: #6ee7b7; background: #052e22; border-color: #047857; }
+  :root:not([data-theme="light"]) .ai-box.mid { color: #fcd34d; background: #2e2205; border-color: #92400e; }
+  :root:not([data-theme="light"]) .ai-box.bad { color: #fca5a5; background: #2e0909; border-color: #b91c1c; } }
+#sellBox .rn-ag { display: flex; align-items: center; gap: 5px; min-width: 0; }
+#sellBox .rn-ag-body { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+#sellBox .rn-ai { padding: 1px 7px; font-size: 11px; line-height: 1.4; flex: 0 0 auto; }
+#sellBox .sell-fit th, #sellBox .sell-fit td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sellBox .sell-fit td .small { display: inline; margin-left: 4px; }
 /* Trade page: every table cell on one line; what does not fit ends in an ellipsis. */
 #today table { width: 100%; table-layout: fixed; }
 #today table th, #today table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px;
@@ -1030,11 +1044,13 @@ async function loadTrade() {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
       return v == null ? "<td>–</td>" : `<td class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
     };
-    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:13%"><col style="width:17%"><col style="width:14%"><col style="width:12%"><col style="width:16%"><col style="width:14%"><col style="width:14%"></colgroup>` +
-      `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th>Sell target</th><th>Stop loss</th><th>Deadline</th></tr>` +
+    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:9%"><col style="width:13%"><col style="width:11%"><col style="width:9%"><col style="width:11%"><col style="width:11%"><col style="width:12%"><col style="width:24%"></colgroup>` +
+      `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th title="Sell target">Sell</th><th title="Stop loss">Stop</th><th>Deadline</th><th class="l">AI agents</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
-        <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
-        <tr><td></td><td colspan="6" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
+        <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td>` +
+        `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(s.ticker)}"><span class="muted">…</span></div>` +
+        `<button class="ghost small-btn rn-ai" data-agents="${esc(s.ticker)}" title="Run the AI agents on ${esc(s.ticker)}" aria-label="Run the AI agents on ${esc(s.ticker)}">AI</button></div></td></tr>
+        <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
     // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
     $("runnersTable").className = "compact runners";
@@ -1057,8 +1073,8 @@ async function loadTrade() {
       catch (e) { showError(e.message); }
       loadAgentReport();
     };
-    lastPicks = allPicks;
-    runnerAgents(allPicks);
+    lastPicks = [...allPicks, ...t.sells.filter(s => !allPicks.some(x => x.ticker === s.ticker))];
+    runnerAgents(lastPicks);
     loadAiPicks();
     // The fill is whatever the next close was: ask for it rather than pre-filling the reference close.
     if (x && $("boughtBest")) $("boughtBest").onclick = () => { showTab("portfolio"); $("pfTicker").value = x.ticker; $("pfSide").value = "buy"; $("pfPrice").value = ""; $("pfPrice").placeholder = "your actual fill price"; $("pfDate").value = x.entry?.session || ""; $("pfUnits").focus(); };
@@ -1118,9 +1134,10 @@ function agentCell(r) {
   const lr = r.last_run, short = m => String(m || "").split("/").pop().replace(":free", "");
   let h = "";
   if (r.available) {
-    const act = r.agent_action || "", cls = /BUY/.test(act) ? "pos" : /SELL|AVOID/.test(act) ? "neg" : "";
-    h = r.agent_rating ? `<span class="rn-badge ${cls}">${esc(r.agent_rating)}${act ? ` → ${esc(act)}` : ""}</span>` : `<b>saved</b>`;
-    h += `<div class="muted small rn-clip" title="${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}">${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}</div>`;
+    const rating = String(r.agent_rating || ""), low = rating.toLowerCase();
+    const tone = /^(buy|overweight)$/.test(low) ? "good" : /^(sell|underweight)$/.test(low) ? "bad" : "mid";
+    h = `<span class="ai-box ${tone}" title="${esc(rating)}${r.agent_action ? " → " + esc(r.agent_action) : ""} · ${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}">` +
+      `${esc(rating || "saved")} · ${esc(String(r.date || "").slice(5))}</span>`;
   } else h = '<span class="muted">not run yet</span>';
   if (lr && lr.status !== "ok" && (!r.available || (lr.as_of || "") >= (r.date || "")))
     h += `<div class="neg small rn-clip" title="last try ${esc((lr.finished_at || "").slice(0, 10))} failed${lr.why ? ": " + esc(lr.why) : ""}">last try failed${lr.why ? ": " + esc(lr.why) : ""}</div>`;
@@ -1128,11 +1145,11 @@ function agentCell(r) {
 }
 async function runnerAgents(list) {
   for (const x of list) {
-    const cell = document.querySelector(`[data-agentcell="${x.ticker}"]`);
+    const cells = document.querySelectorAll(`[data-agentcell="${x.ticker}"]`);
     try {
       const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
-      if (cell) cell.innerHTML = agentCell(r);
-    } catch (e) { if (cell) cell.textContent = "–"; }
+      cells.forEach(c => { c.innerHTML = agentCell(r); });
+    } catch (e) { cells.forEach(c => { c.textContent = "–"; }); }
   }
 }
 // The AI's own pool: the Screener's top stocks by Rank (quality, analyst consensus, target upside), not the model's.
