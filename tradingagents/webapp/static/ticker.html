@@ -203,14 +203,26 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .sig-more { margin-top: 8px; }
 .trend-box { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; }
 .trend-box .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
-.trend-row { display: grid; grid-template-columns: 82px 110px repeat(4, 1fr); align-items: center; gap: 8px; font-size: 12.5px; }
+.trend-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: center; gap: 4px 8px; font-size: 12px; }
+.trend-row .tr-top { grid-column: 1 / -1; display: flex; gap: 8px; align-items: baseline; }
 .tr-h { color: var(--muted); }
 .tr-part { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
-.tr-bar { width: 34px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; flex: 0 0 auto; }
+.tr-bar { width: 26px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; flex: 0 0 auto; }
 .tr-bar i { display: block; height: 100%; }
 .tr-part.up .tr-bar i { background: #059669; } .tr-part.down .tr-bar i { background: #dc2626; }
 .tr-part.side .tr-bar i { background: #2563eb; } .tr-part.unc .tr-bar i { background: #94a3b8; }
 @media (max-width: 700px) { .trend-row { grid-template-columns: 1fr 1fr; } }
+.ev-head { margin: 4px 0 6px; }
+.ev-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 42px; grid-template-areas: "name bar p" "vs vs vs";
+  align-items: center; gap: 2px 10px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.ev-name { grid-area: name; } .ev-bar { grid-area: bar; } .ev-p { grid-area: p; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ev-vs { grid-area: vs; }
+.ev-bar { position: relative; height: 8px; border-radius: 4px; background: var(--border); }
+.ev-bar i { display: block; height: 100%; border-radius: 4px; background: #94a3b8; }
+.ev-bar s { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--text); text-decoration: none; }
+.ev-row.bad .ev-bar i { background: #dc2626; } .ev-row.bad .ev-p { color: #b91c1c; }
+.ev-row.good .ev-bar i { background: #059669; } .ev-row.good .ev-p { color: #047857; }
+.ev-row.low .ev-bar i { background: #cbd5e1; }
 .sig-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .sig-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--surface-2); min-width: 0; }
 .sig-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -1207,27 +1219,29 @@ const EV_TIP = {untested: "No walk-forward study has tested this signal's model 
 const SIGNAL_DEFS = sg => `<p class="small muted">Above / below: the price trades past the level at any time in the next ${sg.horizon} trading days, intraday. ` +
     `Big loss: down at least 1.5 volatilities at day ${sg.horizon}. Deep drop: falls that far at any point. A chance in colour is at least 1.2× usual. Tested: whether a walk-forward study checked this signal on data it was not trained on; "no" means it has not been checked, so treat the chance as unverified.</p>`;
 function signalTable(sg) {
-  const f = sg.forecast, b = sg.base_rates, ev = sg.evidence || {};
-  const line = (name, key, p, base, kind) => {
-    const lift = sg.lifts[key];
-    const flat = (sg.flat || []).includes(key), rank = (sg.ranks || {})[key];
-    const cls = flat ? "muted" : lift >= 1.2 ? (kind === "good" ? "pos" : "neg") : lift != null && lift <= 0.8 ? "muted" : "";
-    const tested = EV_SHORT[ev[key]] || ev[key];
-    return `<tr><td class="l">${name}${tested ? `<div class="small muted" title="${esc(EV_TIP[ev[key]] || "")}">tested: ${esc(tested)}</div>` : ""}</td>` +
-      `<td class="${cls}" title="${lift == null ? "" : lift.toFixed(2) + "× usual"}">${pct(p, 0)}</td><td class="muted">${pct(base, 0)}</td>` +
-      `<td class="muted">${flat ? "same" : rank == null ? "–" : rank >= 0.5 ? `top ${Math.max(1, Math.round((1 - rank) * 100))}%` : `bot ${Math.max(1, Math.round(rank * 100))}%`}</td></tr>`;
+  // Each event: its chance as a bar, a tick at the usual rate, how it compares, and where it ranks today.
+  const f = sg.forecast, b = sg.base_rates;
+  const row = (name, key, p, base, good) => {
+    const lift = (sg.lifts || {})[key], flat = (sg.flat || []).includes(key), rank = (sg.ranks || {})[key];
+    const hot = !flat && lift >= 1.2, low = !flat && lift != null && lift <= 0.8;
+    const cls = hot ? (good ? "good" : "bad") : low ? "low" : "";
+    const vs = flat ? "same for every stock" : lift == null ? "" : lift >= 1.2 ? `${lift.toFixed(1)}× usual` : lift <= 0.8 ? `${lift.toFixed(1)}× usual (lower)` : "about usual";
+    const rk = flat || rank == null ? "" : rank >= 0.5 ? `top ${Math.max(1, Math.round((1 - rank) * 100))}% today` : `bottom ${Math.max(1, Math.round(rank * 100))}% today`;
+    return `<div class="ev-row ${cls}"><div class="ev-name">${name}</div>` +
+      `<div class="ev-bar"><i style="width:${Math.round((p || 0) * 100)}%"></i><s style="left:${Math.round((base || 0) * 100)}%" title="usual ${pct(base, 0)}"></s></div>` +
+      `<div class="ev-p">${pct(p, 0)}</div><div class="ev-vs muted small">${vs}${rk ? ` · ${rk}` : ""}</div></div>`;
   };
-  return `<table><tr><th class="l">Next ${sg.horizon} days</th><th>Chance</th><th>Usual</th><th title="Where this stock's chance ranks among today's stocks">Rank</th></tr>` +
-    line("Above 20-day high", "up_break", f.p_up_break, b.up_break, "good") +
-    line("Below 20-day low", "down_break", f.p_down_break, b.down_break, "bad") +
-    line("Big loss at day 20", "large_loss", f.p_large_loss, b.large_loss, "bad") +
-    line("Deep drop", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>`;
+  return `<div class="ev-head muted small">Chance in the next ${sg.horizon} sessions · the tick marks the usual rate</div>` +
+    row("Breakout above the 20-day high", "up_break", f.p_up_break, b.up_break, true) +
+    row("Breakdown below the 20-day low", "down_break", f.p_down_break, b.down_break, false) +
+    row(`Big loss at day ${sg.horizon}`, "large_loss", f.p_large_loss, b.large_loss, false) +
+    row("Deep drop along the way", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, false);
 }
 // The essentials: the verdict and why, today's action, the model's numbers, the trend and the four event chances.
 // The trend forecast for a horizon: its label and the four chances (up, down, sideways, unclear).
 function trendRow(t) {
   const part = (n, v, cls) => `<span class="tr-part ${cls}"><span class="tr-bar"><i style="width:${Math.round((v || 0) * 100)}%"></i></span>${n} ${pct(v || 0, 0)}</span>`;
-  return `<div class="trend-row"><span class="tr-h">${t.horizon} sessions</span><b class="tr-label">${esc(t.trend || "–")}</b>` +
+  return `<div class="trend-row"><div class="tr-top"><span class="tr-h">${t.horizon} sessions</span><b class="tr-label">${esc(t.trend || "–")}</b></div>` +
     part("Up", t.up, "up") + part("Down", t.down, "down") + part("Sideways", t.sideways, "side") + part("Unclear", t.unclear, "unc") + `</div>`;
 }
 function sigSummary(vd, dec, head, sg, t5) {
