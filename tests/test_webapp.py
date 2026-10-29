@@ -587,3 +587,16 @@ def test_non_agent_ai_work_uses_its_own_gemini_key_and_agents_do_not(tmp_path, m
         assert "context_google_api_key" not in attempt and "api_key" not in build_llm_kwargs(attempt)
     from tradingagents.webapp import keys
     assert "GEMINI_CONTEXT_API_KEY" in keys.known()                           # settable from Settings
+
+
+def test_the_agents_run_at_most_once_a_day_per_stock(tmp_path, monkeypatch):
+    from datetime import UTC, datetime as dt
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    g = app.store.settings("global")
+    now = dt.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    _agent_row(app, "AAA", "2026-10-20", "ok", now)                     # earlier today, another data date
+    out = app._run_agents(srv.Job(), "AAA", "2026-10-23", ["market"], g)
+    assert out["reused"] and out["once_a_day"] and out["rating"] == "Buy"
+    _agent_row(app, "BBB", "2026-10-23", "failed", now)                 # a failure today does not count
+    assert app._agents_ran_today("BBB") is None

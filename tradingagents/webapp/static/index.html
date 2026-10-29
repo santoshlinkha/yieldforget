@@ -161,14 +161,11 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .sg-table th.num, .sg-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .sg-table th.l, .sg-table td.l { text-align: left; }
 .sg-table .sg-clip { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sg-table .sg-w { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
-.sg-table .sg-w > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-table .sg-w { display: block; line-height: 1.25; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.sg-table .sg-w + .sg-w { margin-top: 4px; }
+.sg-table .sg-w > span { display: block; }
 .sg-table .sg-w b { font-weight: 600; }
-.sg-table .sg-warns .sg-clip { white-space: normal; }
-.sg-table .sg-warn summary { cursor: pointer; display: flex; gap: 4px; align-items: flex-start; list-style: none; }
-.sg-table .sg-warn summary::-webkit-details-marker { display: none; }
-.sg-table .sg-warn summary .sg-clip { flex: 1; min-width: 0; }
-.sg-table .sg-warn[open] div { white-space: normal; margin-top: 3px; }
+.sg-table td.sg-warns { white-space: normal; vertical-align: top; }
 .sg-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: 5px;
   border: 1px solid currentColor; line-height: 1.5; }
 .runners { width: 100%; table-layout: fixed; }
@@ -390,6 +387,23 @@ select:disabled { opacity: .55; cursor: not-allowed; }
 select option { background: var(--surface); color: var(--text); }
 .try .spin { display: inline-block; width: 9px; height: 9px; border-width: 2px; margin-right: 4px; vertical-align: -1px; }
 .jobline { font-size: 13px; line-height: 1.45; min-width: 260px; }
+.tip-pop { position: fixed; z-index: 1000; max-width: 280px; pointer-events: none; padding: 6px 10px; border-radius: 6px;
+  background: var(--brand-bg); color: var(--brand-text); font-size: 12.5px; font-weight: 600; line-height: 1.35;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, .18); white-space: normal; }
+.zoo-strip { margin-bottom: 16px; }
+.zoo-wbars { display: grid; grid-template-columns: minmax(90px, auto) 1fr 42px auto; gap: 8px 10px; align-items: center; font-size: 13px; }
+.zw-track { height: 10px; background: var(--chart-grid); border-radius: 4px; overflow: hidden; }
+.zw-track i { display: block; height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
+.zw-num { text-align: right; font-variant-numeric: tabular-nums; }
+.zw-ic { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.role { font-size: 12px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.role.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.job-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 8px; }
+.job-panel { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; background: var(--surface-2); }
+.job-panel .jobline { min-width: 0; flex: 1; }
+.job-panel.bad { border-color: var(--sell); }
+.job-panel.bad > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .pbar { height: 6px; border-radius: 99px; background: var(--border); overflow: hidden; margin: 2px 0 6px; }
 .pbar i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .6s ease; }
 .pbar.busy i { width: 30%; animation: pbar 1.4s ease-in-out infinite; }
@@ -511,13 +525,16 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         <div class="tiles" id="mkTiles"></div>
         <!-- Rows of two equal panels, each pair the same height. -->
         <div class="split trend-row">
-          <div class="card"><div class="econ" id="aiEcon"><p class="muted">Loading…</p></div></div>
           <div class="card">
-            <div class="card-head">
-              <h3>Why it's happening</h3>
-              <span><span class="muted" id="mkStatus"></span> <button class="ghost" id="mkExplain">Explain today's moves</button></span>
-            </div>
-            <div id="mkJob"></div>
+            <h3>Economic conditions</h3>
+            <div class="job-bar"><button class="ghost" id="aiEconRun">Refresh the brief</button><span class="muted small" id="econNote"></span></div>
+            <div class="job-slot" id="econJob"></div>
+            <div class="econ" id="aiEcon"><p class="muted">Loading…</p></div>
+          </div>
+          <div class="card">
+            <h3>Why it's happening</h3>
+            <div class="job-bar"><button class="ghost" id="mkExplain">Explain today's moves</button><span class="muted small" id="mkStatus"></span></div>
+            <div class="job-slot" id="mkJob"></div>
             <div id="mkBrief"><p class="muted">Not explained yet. One AI call reads this week's market headlines and economic data and explains the moves, citing its sources. Saved for the day.</p></div>
           </div>
         </div>
@@ -588,14 +605,21 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
         </div>
         <div id="qsModelsPanel" hidden>
-          <div class="row" style="margin:0 0 6px;align-items:center;gap:10px"><button id="zooRun">Run all models</button>
-            <span class="muted small">Every stock model, refitted every 20 sessions, ranks today's S&amp;P 500 and your watchlist.</span></div>
-          <p class="muted small">Each stock forecasting model, fitted on all history to the last close, ranks today's S&amp;P 500 (100 = its top pick). Models that predict a return also show their 20-session forecast over cash. Under each name: its tested rank correlation with the net trade result (2012–24 · 2025 on); about 0 means no skill. None of them decides anything: the internal model does, and none is validated.</p>
-          <p class="status" id="zooStatus"></p>
-          <p class="muted small" id="zooMeta"></p>
-          <div class="small" id="zooWeights"></div>
-          <div class="row" style="margin:6px 0"><input id="zooFilter" placeholder="Find a ticker" style="max-width:220px"><span class="muted small" id="zooCount"></span></div>
-          <div class="card"><div class="table-wrap"><table id="zooTable" class="compact"></table></div></div>
+          <div class="card zoo-strip">
+            <div class="job-bar" style="margin:0"><button id="zooRun">Run all models</button><span class="muted small" id="zooMeta"></span></div>
+            <div class="job-slot" id="zooStatus"></div>
+            <p id="zooRanking" class="small" style="margin:6px 0 0"></p>
+            <p class="muted small" style="margin:4px 0 0">Every stock model, fitted on all history to the last close and refitted every 20 sessions, ranks today's S&amp;P 500 and your watchlist (100 = its top pick). Tested IC: rank correlation with the net trade result on years the model had not seen (2012–24 · 2025 on); about 0 means no skill. Only the deciding ranking decides anything, and none is validated.</p>
+          </div>
+          <div class="split trend-row">
+            <div class="card"><h3>Ensemble weights</h3><div id="zooWeights"></div></div>
+            <div class="card"><h3>The models</h3><div id="zooModels"></div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Every stock</h3><input id="zooFilter" placeholder="Find a ticker" style="max-width:200px"></div>
+            <p class="muted small" id="zooCount" style="margin:0 0 6px"></p>
+            <div class="table-wrap"><table id="zooTable" class="compact"></table></div>
+          </div>
         </div>
 
       </div>
@@ -1100,11 +1124,12 @@ async function loadZoo() {
   try { d = await api("/api/model-zoo"); } catch (e) { $("zooTable").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
   const j = d.job || {};
   $("zooRun").disabled = !!j.running;
-  $("zooStatus").innerHTML = j.running ? (j.via === "morning" ? '<p class="small muted">The morning run is fitting and scoring the models:</p>' : "") + jobLine(j, j.via || "zoo") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` : "";
+  $("zooStatus").innerHTML = j.running ? `<div class="job-panel">${j.via === "morning" ? '<p class="small muted" style="margin:0">The morning run is fitting and scoring the models:</p>' : ""}${jobLine(j, j.via || "zoo")}</div>`
+    : j.error ? `<div class="job-panel bad"><span class="small"><b>Failed:</b> ${esc(j.error.slice(0, 300))}</span><button class="ghost small-btn" onclick="dismissJob('${esc(j.via || "zoo")}', loadZoo)">Dismiss</button></div>` : "";
   if (j.running) setTimeout(loadZoo, 3000);
   if (!d.available) { $("zooMeta").textContent = "No run yet: press Run all models (about 10 minutes)."; $("zooTable").innerHTML = ""; return; }
   zoo = d;
-  $("zooMeta").textContent = `Data to ${d.info_cutoff} · ${d.members} S&P 500 members${(d.watchlist || []).length ? ` + ${d.watchlist.length} of yours` : ""} · run ${d.created_at.replace("T", " ").slice(0, 16)}` +
+  $("zooMeta").textContent = `Last run ${d.created_at.replace("T", " ").slice(0, 16)} · data to ${d.info_cutoff} · ${d.members} S&P 500 members${(d.watchlist || []).length ? ` + ${d.watchlist.length} of yours` : ""}` +
     (Object.keys(d.notes || {}).length ? ` · ${Object.entries(d.notes).map(([k, v]) => `${ZOO_SHORT[k] || k} ${v}`).join("; ")}` : "");
   renderZoo();
 }
@@ -1123,16 +1148,26 @@ function renderZoo() {
   const ens = zoo.models.ensemble || {};
   const ic = k => { const r = (zoo.tested || {})[k]; return r && r.development_ic != null ? `${r.development_ic.toFixed(3)}${r.recent_ic != null ? ` · ${r.recent_ic.toFixed(3)}` : ""}` : "untested"; };
   const out = k => zoo.outputs?.[zoo.models[k].output];
-  // Lifecycle and coverage first, compact: long descriptions are in each name's tooltip.
-  $("zooWeights").innerHTML = `<p class="${ens.coverage ? "" : "note"}"><b>Ranking today:</b> ${esc(zoo.ranking_note || "")}.</p>` +
-    (ew && ens.coverage ? `<p class="muted small">Ensemble weights, learned from earlier years' out-of-sample results: ` +
-      Object.entries(ew).sort((a, b) => b[1] - a[1]).map(([k, w]) => `${esc(ZOO_SHORT[k] || k)} <b>${Math.round(w * 100)}%</b>`).join(" · ") + `</p>` : "") +
-    `<div class="table-wrap"><table class="compact zoo-fit"><caption class="sr-only">Model lifecycle and coverage</caption><tr><th class="l" scope="col" title="Model: each stock model (hover a name for its full description)">Model</th><th class="l" scope="col" title="Role: whether the model decides the daily ranking, is its fallback, or is only shown">Role</th><th scope="col" title="Stocks: how many of today's stocks the model scored">Stocks</th><th scope="col" title="Tested IC: rank correlation with the net trade result on data the model had not seen (2012-24 · 2025 on)">Tested IC</th><th class="l" scope="col" title="Its forecast: what the model's own forecast number measures (hover a row for its timing)">Its forecast</th><th scope="col" title="Column: tick to show this model as a column in the stock table below">Column</th></tr>` +
+  $("zooRanking").className = "small" + (ens.coverage ? "" : " note");
+  $("zooRanking").innerHTML = `<b>Ranking today:</b> ${esc(zoo.ranking_note || "")}.`;
+  // Left: the ensemble's learned weights as bars, each with the member's tested IC.
+  const wmax = ew ? Math.max(...Object.values(ew), 0.01) : 1;
+  $("zooWeights").innerHTML = ew && Object.keys(ew).length
+    ? `<p class="muted small" style="margin:0 0 8px">Learned from earlier years' out-of-sample results${ens.coverage ? `; it scored ${ens.coverage} of ${ens.of || ens.coverage} stocks today` : "; it scored no stock today"}.</p>` +
+      `<div class="zoo-wbars">` + Object.entries(ew).sort((a, b) => b[1] - a[1]).map(([k, w]) =>
+        `<span class="zw-name" data-tip="${esc(zoo.models[k]?.label || k)}">${esc(ZOO_SHORT[k] || k)}</span>` +
+        `<span class="zw-track"><i style="width:${Math.max(1, w / wmax * 100).toFixed(1)}%"></i></span>` +
+        `<span class="zw-num"><b>${Math.round(w * 100)}%</b></span><span class="zw-ic muted small">IC ${ic(k)}</span>`).join("") + `</div>`
+    : `<p class="muted">The ensemble has not been trained: its weights appear here once it is.</p>`;
+  // Right: every model, compact; the description is in the name's tooltip.
+  $("zooModels").innerHTML = `<div class="table-wrap"><table class="compact zoo-fit"><caption class="sr-only">The stock models</caption><tr>` +
+    `<th class="l" scope="col" data-tip="Model">Model</th><th class="l" scope="col" data-tip="Role">Role</th><th scope="col" data-tip="Stocks scored">Stocks</th>` +
+    `<th scope="col" data-tip="Tested IC (2012-24 · 2025 on)">Tested IC</th><th scope="col" data-tip="Show as a column below">Show</th></tr>` +
     models.map(k => {
-      const m = zoo.models[k], o = out(k), part = m.of && m.coverage < m.of;
-      return `<tr><th class="l" scope="row" title="${esc(m.label)}">${esc(ZOO_SHORT[k] || k)}${m.failed ? ` <span class="neg small" title="${esc(m.failed)}">failed</span>` : ""}</th><td class="l small">${esc(LIFE[m.lifecycle] || m.lifecycle || "")}</td>` +
-        `<td class="${m.coverage ? (part ? "note-text" : "") : "neg"}">${m.coverage ?? 0}${m.of ? `/${m.of}` : ""}</td><td class="small">${ic(k)}</td>` +
-        `<td class="l small" title="${o ? esc(`${o.entry} → ${o.exit}`) : ""}">${o ? esc(o.label) : '<span class="muted">rank only</span>'}</td>` +
+      const m = zoo.models[k], o = out(k), part = m.of && m.coverage < m.of, life = m.lifecycle || "";
+      return `<tr><th class="l" scope="row" data-tip="${esc(m.label + (o ? ". Forecast: " + o.label : ""))}">${esc(ZOO_SHORT[k] || k)}${m.failed ? ` <span class="neg small" data-tip="${esc(m.failed)}">failed</span>` : ""}</th>` +
+        `<td class="l"><span class="role ${life.endsWith("decision") ? "on" : ""}">${esc(LIFE[life] || life)}</span></td>` +
+        `<td class="${m.coverage ? (part ? "note-text" : "") : "neg"}">${m.coverage ?? 0}${m.of ? `<span class="muted small">/${m.of}</span>` : ""}</td><td class="small">${ic(k)}</td>` +
         `<td><input type="checkbox" data-zoocol="${esc(k)}" aria-label="Show ${esc(ZOO_SHORT[k] || k)} as a column" ${shown.includes(k) ? "checked" : ""}></td></tr>`;
     }).join("") + "</table></div>";
   document.querySelectorAll("[data-zoocol]").forEach(c => c.onchange = () => {
@@ -1152,7 +1187,7 @@ function renderZoo() {
   const pctCell = x => x ? `<td><b>${Math.round(x.pct * 100)}</b></td>` : "<td class='muted' title='not scored'>–</td>";
   const sortTh = (k, label, title, cls = "") => {
     const on = zooSort.key === k;
-    return `<th class="${cls}" scope="col" aria-sort="${on ? (zooSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${esc(k)}" title="${esc(title + "\nClick to sort by it; click again to reverse.")}">${label}${on ? (zooSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
+    return `<th class="${cls}" scope="col" aria-sort="${on ? (zooSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${esc(k)}" data-tip="${esc(title)}">${label}${on ? (zooSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
   };
   // A stock's details: every model's percentile and its own forecast, named by what it measures.
   const details = r => `<tr class="zoo-detail"><td colspan="${3 + shown.length}"><div class="zoo-grid">` +
@@ -1161,9 +1196,9 @@ function renderZoo() {
         `${x.forecast != null && o ? `<span class="small" title="${esc(o.label)}">${spct(x.forecast, 1)} ${k === "ensemble" ? "net" : k.startsWith("chronos2") ? "from t" : "vs cash"}</span>` : ""}` +
         `${x.rank ? `<span class="muted small">#${x.rank} of ${x.of}</span>` : ""}</div>`; }).join("") +
     `</div><p class="muted small" style="margin:6px 0 0">Percentile among today's stocks (100 = that model's top pick). ${models.filter(k => !r.m[k]).length ? `Not scored by: ${models.filter(k => !r.m[k]).map(k => esc(ZOO_SHORT[k] || k)).join(", ")}.` : ""} <a href="/ticker/${encodeURIComponent(r.t)}" target="_blank" rel="noopener">Open ${esc(r.t)}</a></p></td></tr>`;
-  $("zooTable").innerHTML = `<caption class="sr-only">Each stock's percentile by the deciding ranking, the ensemble and the mean of the models (100 = top); click a stock for every model</caption><tr>${sortTh("t", "Ticker", "Sort by ticker", "l")}` +
-    shown.map(k => sortTh(k, esc(ZOO_SHORT[k] || k), `${zoo.models[k].label}. ${zoo.models[k].coverage} stocks.`)).join("") +
-    `${sortTh("avg", "Mean (N)", "Equal-weight mean of the fitted models' percentiles that scored the stock; N can differ by stock. Not the learned ensemble.")}</tr>` +
+  $("zooTable").innerHTML = `<caption class="sr-only">Each stock's percentile by the deciding ranking, the ensemble and the mean of the models (100 = top); click a stock for every model</caption><tr>${sortTh("t", "Ticker", "Ticker", "l")}` +
+    shown.map(k => sortTh(k, esc(ZOO_SHORT[k] || k), String(zoo.models[k].label).split(". ")[0])).join("") +
+    `${sortTh("avg", "Mean (N)", "Mean of the models (N models)")}</tr>` +
     rows.slice(0, q ? 600 : 150).map(r => `<tr class="zoo-row"><th class="l" scope="row"><button type="button" class="th-sort zoo-open" data-zoorow="${esc(r.t)}" aria-expanded="${zooOpen.has(r.t)}" title="Every model's view of ${esc(r.t)}">${zooOpen.has(r.t) ? "▾" : "▸"} <b>${esc(r.t)}</b></button>${(zoo.watchlist || []).includes(r.t) ? ' <span class="muted small">yours</span>' : ""}</th>` +
       `${shown.map(k => pctCell(r.m[k])).join("")}<td><b>${r.avg == null ? "–" : Math.round(r.avg * 100)}</b> <span class="muted small">(${r.n})</span></td></tr>` +
       (zooOpen.has(r.t) ? details(r) : "")).join("");
@@ -1598,7 +1633,7 @@ const SG_COLS = [["rank", "Rank", "The screen rank (quality and analysts), the s
   ["action", "Action", "What the latest daily decision says for the stock (ENTER, WAIT, HOLD, EXIT, REDUCE; 'paper enter' while the model is experimental). Hover for the reasons"],
   ["trend", "Trend", "The trend model's call over the next 20 sessions (up, down, sideways, or no clear trend) and its probability"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
   ["lift_down", "Breakdown", "Breakdown lift: P(trading below the 20-day low within 20 sessions, intraday) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss at the 20-session end)"],
-  ["warnings", "Warnings", "Signals that stand out against today's other stocks (breakout, breakdown, crash, deep drawdown). The first is shown; click +N for the rest"],
+  ["warnings", "Warnings", "Signals that stand out against today's other stocks (breakout, breakdown, crash, deep drawdown), one under another"],
   ["quality_score", "Quality", "The quality score (0-100), as in the first view"],
   ["analyst_mean", "Cons.", "Analyst consensus, 1 strong buy to 5 strong sell"]];
 const ACT_ORDER = {ENTER: 0, EXIT: 1, REDUCE: 2, HOLD: 3, WAIT: 4};
@@ -1630,14 +1665,20 @@ function qsValue(r, k) {
 }
 const qsPct = v => v == null ? "missing" : (100 * v).toFixed(0);
 const qsParts = r => `quality ${qsPct(r.quality_pct)} + consensus ${qsPct(r.analyst_pct)} + target upside ${qsPct(r.upside_pct)} (percentiles), averaged`;
+// The full names of the screener's columns, for the header tooltip (shortened labels only).
+const QS_FULL = {combined_score: "Screen score", quality_rank: "Quality rank", quality_score: "Quality score",
+  moat_passed: "Moat checks passed", strength_flags: "Financial strength", valuation_flags: "Valuation flags",
+  implied_growth: "Implied growth", forward_pe: "Forward P/E", analyst_mean: "Analyst consensus", analysts: "Number of analysts",
+  target_upside: "Price-target upside", model_rank: "Model rank", lift_up: "Breakout likelihood", lift_down: "Breakdown risk",
+  p_large_loss: "Probability of a large loss"};
 // Fixed column widths per view: sorting never reshapes the table; it fills its panel and scrolls inside it when the
 // window is narrower than the columns need. Long text is cut with "…" and shown whole on hover.
 const QS_WIDTHS = {
   quality: {rank: 54, ticker: 176, combined_score: 64, quality_rank: 68, quality_score: 66, moat_passed: 56,
             strength_flags: 74, valuation_flags: 80, implied_growth: 96, forward_pe: 66, analyst_mean: 112, analysts: 70,
             target_upside: 66},
-  signals: {rank: 52, ticker: 164, verdict: 104, model_rank: 72, action: 100, trend: 106, lift_up: 78, lift_down: 88,
-            p_large_loss: 64, warnings: 210, quality_score: 66, analyst_mean: 56}};
+  signals: {rank: 52, ticker: 176, verdict: 112, model_rank: 76, action: 108, trend: 110, lift_up: 80, lift_down: 90,
+            p_large_loss: 66, warnings: 150, quality_score: 70, analyst_mean: 70}};
 // The explanation boxes above the table (column meanings, how scores are measured): Hide / Show, remembered here.
 // The body is hidden with display directly, so no page style can keep it showing.
 function setBox(body, button, key, on) {
@@ -1658,10 +1699,11 @@ function fitScreen(view, cols) {
   // Shares of the panel's width (from each column's weight), so the table always fits the panel exactly.
   const total = cols.reduce((sum, [c]) => sum + (w[c] || 90), 0);
   t.insertAdjacentHTML("afterbegin", "<colgroup>" + cols.map(([c]) => `<col style="width:${((w[c] || 90) / total * 100).toFixed(2)}%">`).join("") + "</colgroup>");
-  // Hover: the header's full name and meaning; a click sorts by it (again: the other way).
+  // Hover: the column's full name (its meaning is in the box above); a click sorts by it.
   t.querySelectorAll("th[data-k]").forEach(th => {
     const c = cols.find(x => x[0] === th.dataset.k);
-    if (c) th.title = `${c[1]}${c[2] ? ": " + c[2] : ""}\nClick to sort by it; click again to reverse.`;
+    th.removeAttribute("title");
+    if (c) th.dataset.tip = QS_FULL[c[0]] || c[1];
   });
   t.querySelectorAll("td").forEach(td => { if (!td.title && td.textContent.length > 14) td.title = td.textContent.trim(); });
   $("qsLegend").innerHTML = `<dl class="col-legend">` +
@@ -1723,7 +1765,7 @@ const liftCell = (v, bad) => v == null ? "–" : `<span class="${v >= 1.2 ? (bad
 function renderSignals(shown, arrow) {
   $("qsTable").classList.add("sg-table");
   const num = ["rank", "model_rank", "lift_up", "lift_down", "p_large_loss", "quality_score", "analyst_mean"];
-  $("qsTable").innerHTML = "<tr>" + SG_COLS.map(([c, l, tip]) => `<th data-k="${c}" title="${esc(tip || l)}" style="cursor:pointer" class="${num.includes(c) ? "num" : "l"}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
+  $("qsTable").innerHTML = "<tr>" + SG_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${num.includes(c) ? "num" : "l"}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
     shown.map(r => {
       const g = qsSignal(r) || {}, d = g.decision, sg = g.signal && g.signal.status === "ok" ? g.signal : null, v = g.verdict;
       const badge = (text, cls) => `<span class="sg-badge ${cls}">${esc(text)}</span>`;
@@ -1734,9 +1776,9 @@ function renderSignals(shown, arrow) {
         const [name, ...rest] = String(w.text).split(": "), cls = w.level === "info" ? "pos" : "neg";
         return `<span class="sg-w"><b class="${cls}">${esc(name)}</b>${rest.length ? `<span class="muted">${esc(rest.join(": "))}</span>` : ""}</span>`;
       };
+      // Every warning, one under another, wrapping onto as many lines as it needs.
       const warnCell = !sg ? "<span class='muted'>no forecast</span>" : !warns.length ? "<span class='muted'>none</span>"
-        : warns.length === 1 ? `<div class="sg-clip" title="${esc(warns[0].text)}">${warnLine(warns[0])}</div>`
-        : `<details class="sg-warn"><summary><span class="sg-clip" title="${esc(warns[0].text)}">${warnLine(warns[0])}</span> <span class="muted">+${warns.length - 1}</span></summary>${warns.slice(1).map(w => `<div>${warnLine(w)}</div>`).join("")}</details>`;
+        : warns.map(warnLine).join("");
       return `<tr><td class="num">${r.rank}</td>` +
         `<td class="l sg-name"><b>${tk(r.ticker)}</b><div class="muted small sg-clip" title="${esc(r.name || "")}">${esc(r.name || "")}</div></td>` +
         `<td class="l" title="${esc(v ? v.label + ": " + v.summary : "")}">${v ? badge(v.action, VERDICT_CLS[v.action] || "") : "<span class='muted'>–</span>"}` +
@@ -1794,11 +1836,11 @@ let aiData = null, aiPicked = null, aiAll = false;
 const AI_PICK = 3;   // pre-selected: Trading holdings, then the best-ranked BUY verdicts
 const AI_ANALYSTS = [["market", "technical"], ["fundamentals", "fundamentals"], ["news", "news & economy"], ["social", "sentiment"]];
 function aiBrief(b) {
-  if (!b) return `<h4>Economic conditions</h4><p class="muted small">No economic brief saved yet. <button class="ghost" id="aiEconRun">Write today's brief (AI, about $0.02)</button></p>`;
-  return `<h4>Economic conditions <span class="muted small" style="font-weight:400">as of ${esc(b.as_of)}${b.model ? " · " + esc(b.model) : ""}</span></h4>` +
+  if (!b) return `<p class="muted small">No economic brief saved yet. One AI call (about $0.02) writes it with today's explanation.</p>`;
+  return `<p class="muted small" style="margin:0 0 4px">As of ${esc(b.as_of)}${b.model ? " · " + esc(b.model) : ""}</p>` +
     `<div class="small">${miniMarkdown(b.summary || "")}</div>` +
     ((b.trends || []).length ? `<ul class="small" style="margin:6px 0 0 18px;padding:0">${b.trends.slice(0, 4).map(t => `<li><b>${esc(t.title)}</b>${t.direction ? ` (${esc(t.direction)})` : ""}</li>`).join("")}</ul>` : "") +
-    `<p class="muted small" style="margin:6px 0 0">The news analyst also reads global economic news for every stock. <button class="ghost" id="aiEconRun">Refresh the brief</button></p>`;
+    `<p class="muted small" style="margin:6px 0 0">The news analyst also reads global economic news for every stock.</p>`;
 }
 function aiRender() {
   const d = aiData;
@@ -1868,6 +1910,29 @@ function jobLine(j, name) {
     (j.stuck ? `<div class="note small">No progress for ${mins(j.idle)}: a download or a provider is not answering. ` +
       `<button class="ghost" onclick="stopJob('${name}')">Stop waiting</button></div>` : "") + `</div>`;
 }
+// A generic Dismiss for a finished job's error.
+async function dismissJob(name, then) {
+  try { await api("/api/jobs/dismiss", {job: name}); } catch (e) { showError(e.message); }
+  if (then) then();
+}
+const tipPop = document.createElement("div");
+tipPop.className = "tip-pop"; tipPop.setAttribute("role", "tooltip"); tipPop.hidden = true;
+document.body.appendChild(tipPop);
+function showTip(el) {
+  tipPop.textContent = el.dataset.tip; tipPop.hidden = false;
+  const r = el.getBoundingClientRect(), w = tipPop.offsetWidth, h = tipPop.offsetHeight;
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8);
+  const top = r.top - h - 8 >= 8 ? r.top - h - 8 : r.bottom + 8;
+  tipPop.style.left = left + "px"; tipPop.style.top = top + "px";
+}
+for (const ev of ["mouseover", "focusin"]) document.addEventListener(ev, e => {
+  const el = e.target.closest?.("[data-tip]");
+  if (el) showTip(el); else tipPop.hidden = true;
+});
+for (const ev of ["mouseout", "focusout"]) document.addEventListener(ev, e => {
+  if (e.target.closest?.("[data-tip]") && !e.relatedTarget?.closest?.("[data-tip]")) tipPop.hidden = true;
+});
+document.addEventListener("scroll", () => { tipPop.hidden = true; }, true);
 async function stopJob(name) {
   try { await fetch("/api/jobs/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({job: name})}); }
   finally { location.reload(); }
@@ -1917,14 +1982,41 @@ async function loadDecisions() {
     $("dcLots").innerHTML = "<tr><th class='l'>Ticker</th><th>Action</th><th>Shares</th><th>Entered</th><th>Entry</th><th>Now</th><th>Unrealized</th><th>Levels (risk / profit)</th><th>Deadline</th><th class='l'>Reason</th></tr>" +
       (r.lots.length ? r.lots.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"><b>${x.action}</b>${x.fraction ? ` ${pct(x.fraction, 0)}` : ""}</td><td>${(+x.shares).toFixed(4)}</td><td>${esc(x.entry_date)}</td><td>${x.entry_px ? usd(x.entry_px) : "–"}</td><td>${isFinite(x.price) ? usd(x.price) : "–"}</td><td>${x.unrealized == null ? "–" : spct(x.unrealized)}</td><td>${spct(x.risk_level)} / ${spct(x.profit_level)}</td><td>${esc(x.deadline)}</td><td class="l small">${esc(x.reasons.join("; "))}${x.execute ? ` (at the close of ${esc(x.execute)})` : ""}</td></tr>`).join("")
         : "<tr><td colspan='10' class='l muted'>No stock positions.</td></tr>");
-    $("dcEntries").innerHTML = "<tr><th class='l'>Ticker</th><th>Action</th><th>Paper</th><th>Size</th><th>Expected net (± sd)</th><th>vs SPY</th><th>P(profit)</th><th>P(large loss)</th><th>Cost</th><th class='l'>Blocked by</th></tr>" +
-      r.entries.slice(0, 15).map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"><b>${x.action}</b></td><td>${x.paper_action ? "PAPER ENTER" : "–"}</td><td>${x.dollars ? usd(x.dollars) : "–"}</td><td>${spct(x.expected_net)} <span class="muted">± ${pct(x.net_sd, 1)}</span></td><td>${spct(x.expected_excess_vs_spy)}</td><td>${pct(x.p_win, 0)}</td><td>${isFinite(x.p_risk) ? pct(x.p_risk, 0) : "missing"}</td><td>${pct(x.cost_rt, 2)}</td><td class="l small">${esc((x.blocked || []).join("; "))}</td></tr>`).join("");
+    dcTop = r.entries.slice(0, 15);
+    renderDcEntries();
     $("dcNotes").innerHTML = r.limitations.map(n => `<p class="muted small">${esc(n)}</p>`).join("");
   }
   const sh = d.shadow;
   $("dcShadow").innerHTML = sh ? `<p>Since ${esc(sh.since)} with ${usd(sh.capital)}: value ${usd(sh.value)} vs SPY ${usd(sh.spy_value)} (same capital, same day). Round trips ${sh.round_trips}; average excess per trade ${sh.excess_vs_spy == null ? "–" : spct(sh.excess_vs_spy)}; win rate ${sh.win_rate == null ? "–" : pct(sh.win_rate, 0)}.</p><p class="muted small">Follows the frozen PAPER ENTER decisions with the same execution rules. This record, not the backtest, is what can validate the policy.</p>` : "<p class='muted'>Starts with the first decision.</p>";
   $("dcHistory").innerHTML = "<tr><th class='l'>Data to</th><th>Executes</th><th>Mode</th><th class='l'>Actions</th><th>Settings</th></tr>" +
     d.history.map(h => `<tr><td class="l">${esc(h.info_cutoff)}</td><td>${esc(h.execution_date)}</td><td>${esc(h.mode)}</td><td class="l small">${Object.entries(h.summary || {}).filter(([, n]) => n).map(([a, n]) => `${a} ${n}`).join(", ")}${h.paper_enters ? `, paper ${h.paper_enters}` : ""}</td><td>v${h.settings_version}</td></tr>`).join("");
+}
+// The decision's top 15 entries, sortable by any column (click a header; again to reverse). What blocks an
+// entry is on its Action's hover.
+var dcTop = [], dcSort = {key: null, dir: -1};   // var: loadDecisions may run before this line
+var DC_COLS = [["ticker", "Ticker", x => x.ticker, "l"], ["action", "Action", x => x.action, ""],
+  ["paper", "Paper", x => x.paper_action ? 1 : 0, ""], ["size", "Size", x => x.dollars || 0, ""],
+  ["net", "Expected net (± sd)", x => x.expected_net, ""], ["spy", "vs SPY", x => x.expected_excess_vs_spy, ""],
+  ["p_win", "P(profit)", x => x.p_win, ""], ["p_risk", "P(large loss)", x => isFinite(x.p_risk) ? x.p_risk : null, ""],
+  ["cost", "Cost", x => x.cost_rt, ""]];
+function renderDcEntries() {
+  const col = DC_COLS.find(c => c[0] === dcSort.key);
+  const rows = col ? [...dcTop].sort((a, b) => {
+    const x = col[2](a), y = col[2](b);
+    if (x == null) return 1; if (y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * dcSort.dir;
+  }) : dcTop;
+  $("dcEntries").innerHTML = "<tr>" + DC_COLS.map(([k, label, , cls]) => {
+    const on = dcSort.key === k;
+    return `<th class="${cls}" aria-sort="${on ? (dcSort.dir < 0 ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-dcsort="${k}">${label}${on ? (dcSort.dir < 0 ? " ▾" : " ▴") : ""}</button></th>`;
+  }).join("") + "</tr>" +
+    rows.map(x => `<tr><td class="l"><b>${tk(x.ticker)}</b></td><td class="${ACT[x.action] || ""}"${(x.blocked || []).length ? ` data-tip="${esc("Blocked by: " + x.blocked.join("; "))}"` : ""}><b>${x.action}</b></td><td>${x.paper_action ? "PAPER ENTER" : "–"}</td><td>${x.dollars ? usd(x.dollars) : "–"}</td><td>${spct(x.expected_net)} <span class="muted">± ${pct(x.net_sd, 1)}</span></td><td>${spct(x.expected_excess_vs_spy)}</td><td>${pct(x.p_win, 0)}</td><td>${isFinite(x.p_risk) ? pct(x.p_risk, 0) : "missing"}</td><td>${pct(x.cost_rt, 2)}</td></tr>`).join("");
+  $("dcEntries").querySelectorAll("button[data-dcsort]").forEach(btn => btn.onclick = () => {
+    const k = btn.dataset.dcsort;
+    dcSort = {key: k, dir: dcSort.key === k ? -dcSort.dir : (k === "ticker" || k === "cost" || k === "p_risk" ? 1 : -1)};
+    renderDcEntries();
+    $("dcEntries").querySelector(`button[data-dcsort="${k}"]`)?.focus();
+  });
 }
 $("dcRun").onclick = () => startDecision($("dcTrain").checked, loadDecisions);
 
@@ -2048,12 +2140,24 @@ function renderMarket(m) {
   $("mkLaggards").innerHTML = sp.laggards_1m.map(mover).join("");
   renderBrief(m.brief, m.explain);
 }
+// One AI call writes both the economic brief and the explanation, so both panels show the same job:
+// a small progress panel while it runs, and its error with a Dismiss button when it failed.
+function explainPanel(job) {
+  if (job.running) return `<div class="job-panel">${jobLine(job, "explain")}</div>`;
+  if (job.error) return `<div class="job-panel bad"><span class="small"><b>Failed:</b> ${esc(job.error.slice(0, 200))}</span>` +
+    `<button class="ghost small-btn" onclick="dismissExplain()">Dismiss</button></div>`;
+  return "";
+}
+async function dismissExplain() {
+  try { renderBrief(null, await api("/api/jobs/dismiss", {job: "explain"})); } catch (e) { showError(e.message); }
+}
 function renderBrief(b, job) {
-  $("mkExplain").disabled = job.running;
-  $("mkExplain").textContent = b ? "Explain again" : "Explain today's moves";
-  $("mkStatus").textContent = "";
-  $("mkJob").innerHTML = job.running ? jobLine(job, "explain") : "";       // the progress bar while it works
-  if (job.error && !job.running) $("mkStatus").textContent = "Failed: " + job.error.slice(0, 200);
+  for (const id of ["mkExplain", "aiEconRun"]) $(id).disabled = job.running;
+  if (b !== null) {
+    $("mkExplain").textContent = b ? "Explain again" : "Explain today's moves";
+    $("aiEconRun").textContent = b ? "Refresh the brief" : "Write today's brief";
+  }
+  $("mkJob").innerHTML = $("econJob").innerHTML = explainPanel(job);
   if (!b) return;
   const arrow = d => d === "up" ? '<span class="arrow pos">▲</span>' : d === "down" ? '<span class="arrow neg">▼</span>' : '<span class="arrow muted">◆</span>';
   const headlineList = () => `<h2 style="font-size:13px;margin-top:12px">Headlines it read (numbers match its sources)</h2><ol class="src" style="padding-left:22px">` +
@@ -2168,13 +2272,7 @@ function miniMarkdown(text) {
   return renderMarkdown(text);
 }
 
-function renderEcon(brief) {
-  $("aiEcon").innerHTML = aiBrief(brief);
-  $("aiEconRun").onclick = async () => {
-    try { await api("/api/market/explain", {}); $("aiEconRun").disabled = true; $("aiEconRun").textContent = "Writing…"; pollExplain(); }
-    catch (e) { showError(e.message); }
-  };
-}
+function renderEcon(brief) { $("aiEcon").innerHTML = aiBrief(brief); }
 async function loadMarket() {
   try { const m = await api("/api/market"); renderMarket(m); renderEcon(m.brief); return m; }
   catch (e) { $("mkAsOf").textContent = "Market data unavailable: " + e.message; }
@@ -2184,7 +2282,7 @@ async function pollExplain() {
   if (j.running) { renderBrief(null, j); setTimeout(pollExplain, 2000); }
   else loadMarket();
 }
-$("mkExplain").onclick = async () => {
+$("mkExplain").onclick = $("aiEconRun").onclick = async () => {
   try { await api("/api/market/explain", {}); pollExplain(); } catch (e) { showError(e.message); }
 };
 

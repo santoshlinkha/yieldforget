@@ -191,6 +191,18 @@ def test_models_fitted_for_a_cutoff_are_reused_not_refitted(batch_env):
     assert second["models"]["20"]["artifact"]["sha256"] == first["models"]["20"]["artifact"]["sha256"]
 
 
+def test_the_same_batch_on_the_same_inputs_loads_the_saved_run(batch_env):
+    from tradingagents.stocks.pipeline import run_batch
+
+    con, cache, config, data = batch_env
+    first = run_batch(con, cache, ["S00"], None, config)
+    again = run_batch(con, cache, ["S00"], None, config)
+    assert again["reused"] and again["run_id"] == first["run_id"]
+    assert con.execute("SELECT COUNT(*) FROM stock_runs").fetchone()[0] == 1
+    forced = run_batch(con, cache, ["S00"], None, config, force=True)
+    assert forced["run_id"] != first["run_id"] and not forced.get("reused")
+
+
 def test_company_facts_are_fetched_once_then_read_from_the_cache(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(FU, "_get", lambda url: calls.append(url) or {"facts": {"us-gaap": {}}})

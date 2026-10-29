@@ -200,13 +200,22 @@ def study(close: pd.DataFrame, progress=None) -> dict:
     return out, panel, feats
 
 
-def run(cache_dir: Path, store=None, progress=None) -> dict:
-    """Study, then fit on every labelled row and forecast the latest date; saved for the page."""
+def run(cache_dir: Path, store=None, progress=None, force: bool = False) -> dict:
+    """Study, then fit on every labelled row and forecast the latest date; saved for the page. When the saved
+    forecast was made from the same prices and code, it is returned as it is (``force`` runs it anyway)."""
     from tradingagents.research.prices import bars
+    from tradingagents.stocks import input_keys as K
 
     say = progress or (lambda *_: None)
     t0 = time.time()
     close = bars(["SPY", *SECTORS, *DRIVERS], cache_dir)["Close"]
+    cut = close["SPY"].dropna().index[-1]
+    input_key = K.key({"cutoff": str(cut.date()), "prices": K.prices_hash(close, cut), "version": VERSION,
+                       "code": K.code_hash("research/sector_model.py")})
+    saved = latest(cache_dir)
+    if not force and saved and saved.get("input_key") == input_key:
+        say("sector model: same inputs as the saved forecast, loaded it")
+        return {**saved, "reused": True}
     say("sector model: walk-forward study")
     report, panel, feats = study(close, say)
     full = features(close)
@@ -221,6 +230,7 @@ def run(cache_dir: Path, store=None, progress=None) -> dict:
                                        "expected_excess": round(float(r["expected_excess"]), 4)}
                                       for i, (t, r) in enumerate(now.iterrows())]}
     report["seconds"] = round(time.time() - t0, 1)
+    report["input_key"] = input_key
     folder = Path(cache_dir) / "sector_model"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "latest.json").write_text(json.dumps(report, default=float, indent=1), encoding="utf-8")

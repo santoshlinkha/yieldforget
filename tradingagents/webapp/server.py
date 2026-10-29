@@ -110,6 +110,14 @@ class Job:
         threading.Thread(target=run, daemon=True).start()
         return True
 
+    def dismiss(self) -> bool:
+        """Clear the last error of a job that is not running (the page's Dismiss)."""
+        with self.switch:
+            if self.running or not self.error:
+                return False
+            self.error, self.attempts = None, []
+            return True
+
     def stop_waiting(self) -> bool:
         """Give up on a run that has made no progress for ``STUCK_AFTER`` seconds. Python cannot kill the thread:
         it may still finish in the background, but its result is ignored and a new run can start."""
@@ -909,7 +917,7 @@ class App:
 
             progress = Counted(stage)
             job.log = progress.tickers       # per-stock status, read while it runs
-            out = run_batch(self.store.con, self.cache_dir, names, sources, config, progress)
+            out = run_batch(self.store.con, self.cache_dir, names, sources, config, progress, force=bool(body.get("force")))
             job.fraction = 1.0
             return out
 
@@ -1122,6 +1130,14 @@ class App:
         record = {"ticker": ticker, "as_of": day, "analysts": analysts, "evidence": evidence or {},
                   "attempts": attempts, "started_at": now_utc()}
         if not force:
+            today_run = self._agents_ran_today(ticker)
+            if today_run:   # at most one successful run a day per stock: the saved one is the answer
+                job.progress = (f"{ticker}: the agents already analyzed it today "
+                                f"({today_run['finished_at'][11:16]} UTC, data to {today_run['as_of']}); not run again")
+                return {"ticker": ticker, "rating": today_run["rating"], "how": "reused", "reused": True,
+                        "provider": today_run["actual_provider"], "model": today_run["actual_model"],
+                        "final": {"action": today_run["final_action"]}, "fell_back": bool(today_run["fell_back"]),
+                        "once_a_day": True}
             done = self._same_agent_run(record)
             if done and (folder / "complete_report.md").is_file():
                 job.progress = (f"{ticker} as of {day}: already analyzed with the same data, analysts, evidence and "
@@ -1145,6 +1161,17 @@ class App:
     @staticmethod
     def _agent_chain(attempts: list[dict]) -> list:
         return [(c["llm_provider"], c["deep_think_llm"], sorted((c.get("agent_models") or {}).items())) for c in attempts]
+
+    def _agents_ran_today(self, ticker: str):
+        """Today's successful agent run on ``ticker`` (local calendar day), if any: the agents run once a day."""
+        start = datetime.combine(date.today(), datetime.min.time()).astimezone().astimezone(
+            __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            return self.store.con.execute(
+                "SELECT * FROM agent_runs WHERE ticker = ? AND status = 'ok' AND finished_at >= ?"
+                " ORDER BY finished_at DESC LIMIT 1", (ticker.upper(), start)).fetchone()
+        except Exception:   # an older database without the table
+            return None
 
     def _same_agent_run(self, record: dict):
         """The newest successful run with exactly these inputs: ticker, data date, analysts, model evidence and the
@@ -2370,6 +2397,13 @@ def make_handler(app: App):
                     self._json({"saved": saved, "keys": keys.listing()})
                 elif self.path == "/api/sector-forecast":
                     self._started(app.start_sector(), "The sector model")
+                elif self.path == "/api/jobs/dismiss":
+                    name = str(body.get("job") or "")
+                    job = getattr(app, name, None) if name in JOB_NAMES else None
+                    if not isinstance(job, Job):
+                        raise ValueError(f"unknown job {name!r}")
+                    job.dismiss()
+                    self._json(job.state())
                 elif self.path == "/api/jobs/stop":
                     name = str(body.get("job") or "")
                     job = getattr(app, name, None) if name in JOB_NAMES else None

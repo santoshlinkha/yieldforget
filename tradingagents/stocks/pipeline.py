@@ -201,8 +201,26 @@ def forecast_rows(fitted: dict, rows: pd.DataFrame, weights: dict) -> pd.DataFra
     return out
 
 
+def _batch_key(requested, data, cutoff, config: BatchConfig) -> str:
+    """What a batch depends on: its stocks and settings, the close and its prices, the code; with news, the day."""
+    from . import input_keys as K
+
+    return K.key({"asked": sorted({str(t).upper() for t in requested}), "tickers": sorted(data.requested), "universe": sorted(data.stocks), "horizons": list(config.horizons),
+                  "config": config.key(), "news": str(datetime.now(UTC).date()) if config.news else False,
+                  "cutoff": str(cutoff.date()), "prices": K.prices_hash(data.close, cutoff),
+                  "code": K.code_hash(*(f"stocks/{f.name}" for f in sorted(Path(__file__).parent.glob("*.py"))))})
+
+
+def _same_batch(con, cutoff, input_key: str):
+    for row in con.execute("SELECT id, requested_json, rejected_json, costs_json FROM stock_runs WHERE info_cutoff = ?"
+                           " ORDER BY created_at DESC LIMIT 20", (str(cutoff.date()),)):
+        if (json.loads(row["costs_json"] or "{}")).get("input_key") == input_key:
+            return row
+    return None
+
+
 def run_batch(con, cache_dir: Path, requested: list[str], sources: dict[str, str] | None = None,
-              config: BatchConfig | None = None, progress: Progress | None = None) -> dict:
+              config: BatchConfig | None = None, progress: Progress | None = None, force: bool = False) -> dict:
     """Forecast every requested stock at the latest close and save the run; see the module docstring."""
     from tradingagents.ledger.db import now_utc, transaction
     from tradingagents.ledger.recommendations import code_version
@@ -219,6 +237,16 @@ def run_batch(con, cache_dir: Path, requested: list[str], sources: dict[str, str
         progress.ticker(t, "rejected", why)
     sessions = data.close.index
     cutoff = data.close["SPY"].dropna().index[-1]
+    input_key = _batch_key(requested, data, cutoff, config)
+    same = None if force else _same_batch(con, cutoff, input_key)
+    if same is not None:   # same inputs: the saved forecasts are the answer
+        progress("same inputs as the saved run: loaded it, nothing recomputed")
+        for t in data.requested:
+            progress.ticker(t, "done", "reused the saved run (same inputs)")
+        return {"run_id": same["id"], "info_cutoff": str(cutoff.date()),
+                "earliest_execution": str(next_session(cutoff.date())), "requested": data.requested,
+                "rejected": data.rejected, "tickers": progress.tickers, "reused": True,
+                "seconds": round(time.time() - started, 1)}
     all_dates = pd.DatetimeIndex([])
     plans = {}
     for h in config.horizons:
@@ -292,7 +320,7 @@ def run_batch(con, cache_dir: Path, requested: list[str], sources: dict[str, str
                      hashlib.sha256(json.dumps(P.features_for(config.groups)).encode()).hexdigest()[:12],
                      th.version(), json.dumps(asdict(th)), json.dumps(models, default=str),
                      json.dumps(provenance, default=str), json.dumps(config.key(), default=str),
-                     json.dumps({"device": device, "device_reason": why, "paid_ai_usd": 0.0}),
+                     json.dumps({"device": device, "device_reason": why, "paid_ai_usd": 0.0, "input_key": input_key}),
                      time.time() - started))
         con.executemany("INSERT INTO stock_forecasts VALUES (?, ?, ?, ?, ?, ?)", rows)
     return {"run_id": run_id, "info_cutoff": str(cutoff.date()), "earliest_execution": str(next_session(cutoff.date())),
