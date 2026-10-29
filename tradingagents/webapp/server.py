@@ -203,6 +203,23 @@ def _short_error(exc: Exception) -> str:
     return text[:80]
 
 
+def _cooldown(provider: str, model: str, exc_text: str, now: datetime) -> tuple[str, datetime, str] | None:
+    """How long a failure will keep repeating, so the provider is skipped until then: ``(key, until, why)``, or None
+    for a failure worth trying again at once. Out of credit and a free daily limit hold for the whole key (every
+    model on it); a rate limit, for that model."""
+    from datetime import UTC
+
+    text = exc_text.lower()
+    if "free-models-per-day" in text or "free daily limit" in text:
+        reset = (now.astimezone(UTC) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return provider, reset, "free daily limit reached (resets 00:00 UTC)"
+    if "prepayment credits are depleted" in text or "402" in text or "insufficient" in text and "credit" in text:
+        return provider, now + timedelta(hours=6), "out of credit (top up, or the key is skipped for 6 hours)"
+    if "429" in text or "rate limit" in text or "resource_exhausted" in text or "quota" in text:
+        return f"{provider}/{model}", now + timedelta(minutes=10), "rate limited"
+    return None
+
+
 def _today() -> str:
     return date.today().isoformat()
 
@@ -1060,10 +1077,27 @@ class App:
         from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
         from tradingagents.optimizer.ai_views import analyze
 
+        from datetime import UTC
+
+        cooling = dict(self.store.get("global", "ai_cooldowns") or {})
+        now = datetime.now(UTC)
+        cooling = {k: v for k, v in cooling.items() if datetime.fromisoformat(v["until"]) > now}
+
+        def cool(cfg):
+            hit = cooling.get(cfg["llm_provider"]) or cooling.get(f"{cfg['llm_provider']}/{cfg['deep_think_llm']}")
+            return hit
+
         for n, cfg in enumerate(attempts, 1):
             if evidence:
                 cfg = {**cfg, "quant_evidence": {ticker.upper(): evidence}}
             who = f"{cfg['llm_provider']} ({cfg['deep_think_llm']})"
+            hit = cool(cfg)
+            if hit:   # it would fail the same way: not tried, and not counted against the budget
+                until = datetime.fromisoformat(hit["until"]).astimezone().strftime("%H:%M")
+                job.attempts.append({"provider": cfg["llm_provider"], "model": cfg["deep_think_llm"],
+                                     "state": "skipped", "why": f"{hit['why']}; skipped until {until}"})
+                errors.append(f"{who}: skipped, {hit['why']}")
+                continue
             job.attempts.append({"provider": cfg["llm_provider"], "model": cfg["deep_think_llm"], "state": "trying"})
             job.progress = (f"{ticker} as of {day}: try {n} of {len(attempts)} on {who}"
                             f"{' after ' + str(n - 1) + ' failed' if n > 1 else ''}; a few minutes")
@@ -1083,8 +1117,13 @@ class App:
                 job.attempts[-1].update(state="failed", why=str(exc)[:120])
             except Exception as exc:  # out of credit, bad key, rate limit, unreachable: the next provider, if any
                 logger.warning("analysis on %s failed: %s", who, exc)
-                errors.append(f"{who}: {str(exc)[:200]}")
+                errors.append(f"{who}: {_short_error(exc)}")
                 job.attempts[-1].update(state="failed", why=_short_error(exc))
+                held = _cooldown(cfg["llm_provider"], cfg["deep_think_llm"], str(exc), datetime.now(UTC))
+                if held:
+                    cooling[held[0]] = {"until": held[1].isoformat(), "why": held[2]}
+                    with self.lock:
+                        self.store.set("global", "ai_cooldowns", cooling)
             else:
                 job.attempts[-1]["state"] = "ok"
                 job.log += [f"{ticker}: {e} -> moved on" for e in errors]
@@ -1098,7 +1137,8 @@ class App:
                         source=who, evidence={"model_decision": out["final"].get("decision_id")})
                 return out
             job.log.append(f"{ticker}: {errors[-1]}")
-        raise ValueError("No AI provider could run the agents. " + " | ".join(errors))
+        # One short line per provider; the raw errors are in the log.
+        raise ValueError("No AI provider could run the agents: " + "; ".join(dict.fromkeys(errors)))
 
     def manual_prompt(self, ticker: str, day: str) -> dict:
         """The TradingAgents team's own prompts for running the analysis in a chat app; calls no AI."""
@@ -2130,6 +2170,7 @@ def make_handler(app: App):
                     from tradingagents.webapp import keys
                     with app.lock:
                         saved = keys.save(str(body.get("env") or ""), str(body.get("value") or ""))
+                        app.store.set("global", "ai_cooldowns", {})    # a new or topped-up key is tried again
                     self._json({"saved": saved, "keys": keys.listing()})
                 elif self.path == "/api/sector-forecast":
                     self._started(app.start_sector(), "The sector model")

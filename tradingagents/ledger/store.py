@@ -40,6 +40,9 @@ GLOBAL_DEFAULTS = {
     "ai_analysts": ["market"],
     "ai_shortlist": 10,
     "ai_fallbacks": [],       # other providers a failed paid call may move to; none by default
+    # Providers skipped after a failure that will repeat until a reset or a top-up (out of credit, a free daily
+    # limit, a rate limit): "provider" or "provider/model" -> {"until": UTC ISO time, "why": short reason}.
+    "ai_cooldowns": {},
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).
     # (Inkling's free tier refuses this app: "only available on agentic harnesses".)
     "ai_openrouter_models": ["nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-31b-it:free"],

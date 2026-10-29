@@ -106,58 +106,127 @@ def _clip(y: pd.Series, q=(0.01, 0.99)) -> pd.Series:
     return y.clip(*y.quantile(list(q)))
 
 
-def fit_xgb_rank(train, test, feats, device="cpu"):
+# Each model is fitted once (``FIT``) into an object whose ``predict(rows)`` scores rows; the fitted objects are kept
+# and reused for ``retrain_every_sessions`` sessions (``run``). ``fit_<name>(train, test, feats, device)`` fits and
+# scores in one call, as the studies use them.
+
+class Booster:
+    def __init__(self, model, feats):
+        self.model, self.feats = model, list(feats)
+
+    def predict(self, rows):
+        return self.model.predict(rows[self.feats])
+
+
+class Design:
+    """Standardized design matrix, with the training medians, means and spreads (picklable)."""
+
+    def __init__(self, frame, cols):
+        self.cols = list(cols)
+        self.med = frame[self.cols].median()
+        filled = frame[self.cols].fillna(self.med)
+        self.mu, self.sd = filled.mean(), filled.std().replace(0, 1).fillna(1)
+
+    def __call__(self, f):
+        return ((f[self.cols].fillna(self.med) - self.mu) / self.sd).fillna(0).to_numpy()
+
+
+class RidgeModel:
+    def __init__(self, design, ridge):
+        self.design, self.ridge = design, ridge
+
+    def predict(self, rows):
+        return self.ridge.predict(self.design(rows))
+
+
+class PerStockRidge:
+    def __init__(self, models: dict):
+        self.models = models
+
+    def predict(self, rows):
+        out = pd.Series(np.nan, index=rows.index)
+        for t, te in rows.groupby(level="ticker"):
+            if t in self.models:
+                out[te.index] = self.models[t].predict(te)
+        return out.to_numpy()
+
+
+def fitted_xgb_rank(train, feats, device="cpu"):
     from .adapters import Ranker
 
-    return Ranker(device).fit(train, feats).predict(test)
+    return Ranker(device).fit(train, feats)
 
 
-def fit_lambdarank(train, test, feats, device="cpu"):
+def fitted_lambdarank(train, feats, device="cpu"):
     import lightgbm as lgb
 
     tr = train.sort_index(level="date")
     y = tr["label"].groupby(level="date").rank(pct=True).mul(5).clip(upper=4.999).astype(int)
     grp = tr.groupby(level="date").size().to_numpy()
-    m = lgb.train({**LGB, "objective": "lambdarank", "metric": "ndcg"}, lgb.Dataset(tr[feats], y, group=grp), 300)
-    return m.predict(test[feats])
+    return Booster(lgb.train({**LGB, "objective": "lambdarank", "metric": "ndcg"}, lgb.Dataset(tr[feats], y, group=grp),
+                             300), feats)
 
 
-def fit_lgbm_regression(train, test, feats, device="cpu"):
+def fitted_lgbm_regression(train, feats, device="cpu"):
     import lightgbm as lgb
 
-    return lgb.train({**LGB, "objective": "regression"}, lgb.Dataset(train[feats], _clip(train["label"])), 300
-                     ).predict(test[feats])
+    return Booster(lgb.train({**LGB, "objective": "regression"}, lgb.Dataset(train[feats], _clip(train["label"])), 300),
+                   feats)
 
 
 def _design(frame, cols):
-    med = frame[cols].median()
-    mu, sd = frame[cols].fillna(med).mean(), frame[cols].fillna(med).std().replace(0, 1).fillna(1)
-    return lambda f: ((f[cols].fillna(med) - mu) / sd).fillna(0).to_numpy()
+    return Design(frame, cols)
 
 
-def fit_ridge_pooled(train, test, feats, device="cpu"):
+def fitted_ridge_pooled(train, feats, device="cpu"):
     from sklearn.linear_model import Ridge
 
-    z = _design(train, feats)
-    return Ridge(alpha=1000.0).fit(z(train), _clip(train["label"])).predict(z(test))
+    z = Design(train, feats)
+    return RidgeModel(z, Ridge(alpha=1000.0).fit(z(train), _clip(train["label"])))
 
 
-def fit_ridge_per_stock(train, test, feats, device="cpu", min_rows: int = 80):
+def fitted_ridge_per_stock(train, feats, device="cpu", min_rows: int = 80, tickers=None):
     """A ridge regression on each stock's own history; stocks with too little history get no forecast."""
     from sklearn.linear_model import Ridge
 
     cols = [c for c in feats if c in train]
-    out = pd.Series(np.nan, index=test.index)
-    have = set(train.index.get_level_values("ticker"))
-    for t, te in test.groupby(level="ticker"):
-        if t not in have:
+    models = {}
+    for t in (tickers if tickers is not None else sorted(set(train.index.get_level_values("ticker")))):
+        if t not in set(train.index.get_level_values("ticker")):
             continue
         own = train.xs(t, level="ticker", drop_level=False)
         if len(own) < min_rows:
             continue
-        z = _design(own, cols)
-        out[te.index] = Ridge(alpha=50.0).fit(z(own), _clip(own["label"], (0.02, 0.98))).predict(z(te))
-    return out.to_numpy()
+        z = Design(own, cols)
+        models[t] = RidgeModel(z, Ridge(alpha=50.0).fit(z(own), _clip(own["label"], (0.02, 0.98))))
+    return PerStockRidge(models)
+
+
+def fit_xgb_rank(train, test, feats, device="cpu"):
+    return fitted_xgb_rank(train, feats, device).predict(test)
+
+
+def fit_lambdarank(train, test, feats, device="cpu"):
+    return fitted_lambdarank(train, feats, device).predict(test)
+
+
+def fit_lgbm_regression(train, test, feats, device="cpu"):
+    return fitted_lgbm_regression(train, feats, device).predict(test)
+
+
+def fit_ridge_pooled(train, test, feats, device="cpu"):
+    return fitted_ridge_pooled(train, feats, device).predict(test)
+
+
+def fit_ridge_per_stock(train, test, feats, device="cpu", min_rows: int = 80):
+    """Fitted only for the stocks being scored, as before."""
+    tickers = sorted(set(test.index.get_level_values("ticker")))
+    return fitted_ridge_per_stock(train, feats, device, min_rows, tickers).predict(test)
+
+
+FIT = {"xgb_rank": fitted_xgb_rank, "xgb_rank_all": fitted_xgb_rank, "lgbm_lambdarank": fitted_lambdarank,
+       "lgbm_regression": fitted_lgbm_regression, "ridge_pooled": fitted_ridge_pooled,
+       "ridge_per_stock": fitted_ridge_per_stock}
 
 
 FITTED = {"xgb_rank": (fit_xgb_rank, "base"), "xgb_rank_all": (fit_xgb_rank, "all"),

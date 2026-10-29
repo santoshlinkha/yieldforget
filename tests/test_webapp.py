@@ -459,3 +459,29 @@ def test_a_failed_run_message_can_be_dismissed_and_a_saved_analysis_deleted(tmp_
     for bad in (("../etc", "2026-10-23", None), ("AAA", "2026-10-23/../..", None), ("AAA", "2026-10-23", "../x")):
         with pytest.raises(ValueError):
             app.delete_agent_report(*bad)
+
+
+def test_a_provider_out_of_credit_or_at_its_free_limit_is_skipped_until_it_can_work(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    now = datetime(2026, 10, 29, 3, 0, tzinfo=UTC)
+    key, until, why = srv._cooldown("openrouter", "m:free", "Error code: 429 - Rate limit exceeded: free-models-per-day", now)
+    assert key == "openrouter" and until == datetime(2026, 10, 30, tzinfo=UTC) and "free daily limit" in why
+    key, until, _ = srv._cooldown("google", "gemini-3.8-flash", "402 RESOURCE_EXHAUSTED prepayment credits are depleted", now)
+    assert key == "google" and until.hour == 9
+    assert srv._cooldown("google", "x", "429 rate limit", now)[0] == "google/x"
+    assert srv._cooldown("google", "x", "connection reset", now) is None
+
+    calls = []
+    import tradingagents.optimizer.ai_views as views
+    monkeypatch.setattr(views, "analyze", lambda *a, **k: calls.append(a[2]["llm_provider"]) or (_ for _ in ()).throw(
+        RuntimeError("402 RESOURCE_EXHAUSTED: prepayment credits are depleted")))
+    g = app.store.settings("global")
+    attempts = [{"llm_provider": "google", "deep_think_llm": "a"}, {"llm_provider": "google", "deep_think_llm": "b"}]
+    job = srv.Job()
+    with pytest.raises(ValueError) as err:
+        app._try_agents(job, "AAA", "2026-10-28", ["market"], tmp_path / "f", 0.0, {}, attempts, [])
+    assert calls == ["google"]                                         # the second Google model was not tried
+    assert [a["state"] for a in job.attempts] == ["failed", "skipped"] and len(str(err.value)) < 300
+    assert "google" in app.store.get("global", "ai_cooldowns")
