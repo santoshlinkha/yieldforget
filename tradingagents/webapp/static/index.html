@@ -232,6 +232,17 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
+.brief-sum { margin: 0 0 8px; }
+.trend-card { border-radius: 8px; padding: 7px 10px; margin-bottom: 6px; background: var(--surface-2); }
+.trend-h { display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin-bottom: 2px; }
+.trend-h .conf { margin-left: auto; }
+.watch-h { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; color: var(--muted); margin: 10px 0 4px; }
+.watch-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.watch-chips span { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface-2); }
+#trend .sig-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+#trend .sig-tile { border-radius: 8px; padding: 6px 9px; background: var(--surface-2); }
+#trend .sig-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+#trend .sig-tile .v { font-size: 18px; font-weight: 700; }
 .rot-group { margin-top: 10px; }
 .rot-gh { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
 .rot-card { border-radius: 8px; padding: 7px 10px; margin-bottom: 6px; background: var(--surface-2); border-left: 3px solid var(--border-strong); }
@@ -705,7 +716,7 @@ details[open] > summary::after { content: "Hide"; }
         <div class="split trend-row">
           <div class="card">
             <h3>S&amp;P 500 under the surface</h3>
-            <p class="muted" id="mkBreadth"></p>
+            <div id="mkBreadth"></div>
             <div class="movers">
               <div><h4>Best, last month</h4><ol id="mkLeaders"></ol></div>
               <div><h4>Worst, last month</h4><ol id="mkLaggards"></ol></div>
@@ -1010,6 +1021,13 @@ function showError(msg) { const e = $("error"); e.textContent = msg || ""; e.cla
 // A newer read of the same endpoint cancels the older one, so a slow, stale answer never overwrites a fresh one.
 // A cancelled read never settles: its caller simply stops (nothing to show, nothing to report).
 const inflight = new Map();
+// A per-item read (one stock's report or plan) that is never cancelled: many run side by side, for different stocks.
+async function apiItem(path) {
+  const res = await fetch(path);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
 async function api(path, body) {
   let opts = {};
   if (body === undefined) {
@@ -1165,7 +1183,7 @@ async function loadTrade() {
       // Only the picks not yet analysed on today's data: the same stock on the same data is never run twice.
       const todo = [];
       for (const x of allPicks) {
-        try { const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker)); if (!(r.available && r.date === t.data_to)) todo.push(x.ticker); }
+        try { const r = await apiItem("/api/agent-report?ticker=" + encodeURIComponent(x.ticker)); if (!(r.available && r.date === t.data_to)) todo.push(x.ticker); }
         catch (e) { todo.push(x.ticker); }
       }
       if (!todo.length) { showError("Every pick was already analysed on today's data."); return; }
@@ -1293,7 +1311,7 @@ async function runnerAgents(list) {
   for (const x of list) {
     const cells = document.querySelectorAll(`[data-agentcell="${x.ticker}"]`);
     try {
-      const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
+      const r = await apiItem("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
       cells.forEach(c => {
         c.innerHTML = agentCell(r);
         const btn = c.parentElement && c.parentElement.querySelector(".rn-ai");
@@ -1329,7 +1347,7 @@ async function loadAiPicks() {
   if (!scr || !(scr.picks || []).length) { $("aiPickBox").innerHTML = ""; return; }
   const seen = [];
   for (const p of scr.picks.slice(0, 5)) {
-    try { seen.push({ticker: p.ticker, pick: p, r: await api("/api/agent-report?ticker=" + encodeURIComponent(p.ticker))}); }
+    try { seen.push({ticker: p.ticker, pick: p, r: await apiItem("/api/agent-report?ticker=" + encodeURIComponent(p.ticker))}); }
     catch (e) { seen.push({ticker: p.ticker, pick: p, r: {available: false}}); }
   }
   renderAiPick(seen, scr);
@@ -1342,7 +1360,7 @@ const AI_RANK = {buy: 5, overweight: 4, hold: 3, underweight: 2, sell: 1};
 // budget is split across the ones the team would buy, at the team's own entry price, sell target and stop.
 async function renderAiPick(seen, scr) {
   // The agents' own prices for every stock they analysed; the budget (Amount) only for the ones they would buy.
-  const plans = await Promise.all(seen.map(x => api("/api/entry-plans?ticker=" + encodeURIComponent(x.ticker)).catch(() => ({runs: []}))));
+  const plans = await Promise.all(seen.map(x => apiItem("/api/entry-plans?ticker=" + encodeURIComponent(x.ticker)).catch(() => ({runs: []}))));
   const buys = seen.filter(x => x.r.available && aiWord(x.r.agent_rating, false)[0] === "BUY");
   const a = (lastTrade && lastTrade.allocation) || {weights: {}, budget: 0};
   const raw = buys.map(b => a.weights[b.ticker] ?? 1 / buys.length), sum = raw.reduce((x, y) => x + y, 0) || 1;
@@ -1720,20 +1738,20 @@ async function loadSectorForecast() {
   let d;
   try { d = await api("/api/sector-forecast"); } catch (e) { $("secBox").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
   const j = d.job || {}, r = d.report, w = d.winners || {};
-  let h = `<div class="card-head sector-forecast-head"><b class="sector-forecast-title">Next 20 sessions: which sector leads (machine-learning forecast)</b>` +
+  let h = `<div class="card-head sector-forecast-head"><h3 style="margin:0">Sector forecast <span class="muted small" style="font-weight:400">next 20 sessions</span></h3>` +
     `<button class="ghost small-btn" id="secRun" ${j.running ? "disabled" : ""}>${r ? "Run again" : "Run the sector model"}</button></div>`;
   if (j.running) h += jobLine(j, "sector");
   if (!r) h += `<p class="muted small">Not run yet. It studies 2008-2026 and forecasts in a few seconds, on this computer.</p>`;
   else {
     const st = r.status || {}, hold = (r.parts || {}).holdout || {}, lr = hold.lambdarank || {};
-    h += `<p class="muted small">LightGBM LambdaRank ranks the 11 sector funds by their expected return over SPY for the 20 sessions after the next close, from each sector's momentum and stage and the market drivers (rates, curve, oil, dollar, credit, VIX). Data to ${esc(r.forecast.as_of)}.</p>` +
-      (st.validated ? "" : `<div class="note">Not validated: ${esc(st.why || "")}. On 2025-26 data it never saw, its order matched the real order with a rank correlation of ${(lr.ic || 0).toFixed(2)}. Shown for reference, not as a signal.</div>`) +
+    h += (st.validated ? "" : `<div class="note small"><details><summary><span><b>Not validated:</b> shown for reference, not a signal</span></summary>` +
+        `<div style="margin-top:4px">${esc(st.why || "")}. On 2025-26 data it never saw, its order matched the real order with a rank correlation of ${(lr.ic || 0).toFixed(2)}. ` +
+        `LightGBM LambdaRank ranks the 11 sector funds by expected return over SPY for the 20 sessions after the next close, from each sector's momentum and stage and the market drivers.</div></details></div>`) +
       `<table class="compact sector-forecast-table"><tr><th class="l">#</th><th class="l">Sector</th><th>Expected vs SPY</th><th class="l">Probable winner (internal stock model)</th></tr>` +
       r.forecast.sectors.map(x => { const win = w[x.ticker];
         return `<tr${x.rank <= 3 ? ' class="chosen"' : ""}><td class="l">${x.rank}</td><td class="l"><b>${tk(x.ticker)}</b> ${esc(x.name)}</td><td>${spct(x.expected_excess, 1)}</td>` +
           `<td class="l">${win ? `<b>${tk(win.ticker)}</b> <span class="muted small">${esc(win.name)} · #${win.rank} of ${win.of}</span>` : '<span class="muted">–</span>'}</td></tr>`; }).join("") + "</table>" +
-      `<p class="muted small">Rotation into: ${r.forecast.sectors.slice(0, 3).map(x => esc(x.name)).join(", ")}; out of: ${r.forecast.sectors.slice(-3).map(x => esc(x.name)).join(", ")}. ` +
-      `Probable winner: the stock the internal model ranks highest in that sector today (also experimental).</p>`;
+      `<p class="muted small">Top three shaded. Probable winner: the stock the internal model ranks highest in that sector today (experimental).</p>`;
   }
   $("secBox").innerHTML = h;
   $("secRun").onclick = async () => { try { await api("/api/sector-forecast", {}); } catch (e) { if (!/already running/.test(e.message)) showError(e.message); } loadSectorForecast(); };
@@ -2480,7 +2498,10 @@ function renderMarket(m) {
     title: `${t.count} names. Best ${t.best[0]} ${signed(t.best[1], "price")}, worst ${t.worst[0]} ${signed(t.worst[1], "price")}`})), 0.1);
 
   const sp = o.sp500;
-  $("mkBreadth").textContent = sp.count ? `${Math.round(sp.up_1m * 100)}% of the ${sp.count} members rose over the last month; ${Math.round(sp.above_50 * 100)}% trade above their 50-day average and ${Math.round(sp.above_200 * 100)}% above their 200-day average. When the index falls but most members hold up, the drop is concentrated in a few large companies.` : "S&P 500 member prices not loaded yet.";
+  $("mkBreadth").innerHTML = sp.count ? `<div class="sig-tiles" title="When the index falls but most members hold up, the drop is concentrated in a few large companies">` +
+    [["Rose last month", sp.up_1m], ["Above 50-day avg", sp.above_50], ["Above 200-day avg", sp.above_200]].map(([k, v]) =>
+      `<div class="sig-tile"><div class="k">${k}</div><div class="v ${v >= 0.5 ? "pos" : "neg"}">${Math.round(v * 100)}%</div></div>`).join("") +
+    `</div><div class="muted small" style="margin-top:4px">of the ${sp.count} S&amp;P 500 members</div>` : "S&P 500 member prices not loaded yet.";
   const mover = x => `<li><strong>${tk(x.ticker)}</strong> <span class="${x.change >= 0 ? "pos" : "neg"}">${signed(x.change, "price")}</span> <span class="muted">${esc(x.name.replace(/ \(.*\)$/, ""))}</span></li>`;
   $("mkLeaders").innerHTML = sp.leaders_1m.map(mover).join("");
   $("mkLaggards").innerHTML = sp.laggards_1m.map(mover).join("");
@@ -2513,12 +2534,14 @@ function renderBrief(b, job) {
       `<p class="muted">Written by ${esc(b.model)} as free text, so its sources are numbers into the list above. AI-written: check them before relying on it.</p>`;
     return;
   }
-  $("mkBrief").innerHTML = `<p>${esc(b.summary)}</p>` +
-    (b.trends || []).map(t => `<div class="trend"><h3>${arrow(t.direction)} ${esc(t.title)} <span class="conf ${t.confidence === "low" ? "low" : ""}">${esc(t.confidence)} confidence</span></h3>
-      <p><b>What:</b> ${esc(t.what)}</p><p><b>Why:</b> ${esc(t.why)}</p>
-      <div class="src">${t.sources.length ? "Sources: " + t.sources.map(s => s.link ? `<a href="${esc(s.link)}" target="_blank" rel="noopener">${esc(s.title)}</a> (${esc(s.publisher)})` : `${esc(s.title)} (${esc(s.publisher)})`).join(" · ") : "No headline cited, so treat the why as unconfirmed."}</div></div>`).join("") +
-    (b.watch && b.watch.length ? `<h2 style="font-size:13px;margin-top:12px">Worth watching</h2><ul class="muted" style="margin:0;padding-left:18px">${b.watch.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "") +
-    `<p class="muted" style="margin-top:12px">Written by ${esc(b.model)} from ${b.headlines.length} headlines (week to ${esc(b.as_of)}) and FRED data. AI-written: open the sources before relying on it. It explains the past, it does not predict.</p>`;
+  $("mkBrief").innerHTML = `<p class="brief-sum">${esc(b.summary)}</p>` +
+    (b.trends || []).map(t => `<div class="trend-card"><div class="trend-h">${arrow(t.direction)} <b>${esc(t.title)}</b>` +
+      `<span class="conf ${t.confidence === "low" ? "low" : ""}">${esc(t.confidence)}</span></div><div class="small">${esc(t.what)}</div>` +
+      `<details class="small"><summary><span class="muted">Why, and its sources</span></summary><p style="margin:4px 0">${esc(t.why)}</p>` +
+      `<div class="src">${t.sources.length ? t.sources.map(s => s.link ? `<a href="${esc(s.link)}" target="_blank" rel="noopener">${esc(s.title)}</a> (${esc(s.publisher)})` : `${esc(s.title)} (${esc(s.publisher)})`).join(" · ") : "No headline cited, so treat the why as unconfirmed."}</div></details></div>`).join("") +
+    (b.watch && b.watch.length ? `<div class="watch-h">Worth watching</div><div class="watch-chips">${b.watch.map(w => `<span>${esc(w)}</span>`).join("")}</div>` : "") +
+    `<details class="small" style="margin-top:8px"><summary><span class="muted">${b.headlines.length} headlines it read · written by ${esc(b.model)}, week to ${esc(b.as_of)}</span></summary>${headlineList()}` +
+    `<p class="muted small">AI-written from headlines and FRED data: open the sources before relying on it. It explains the past; it does not forecast.</p></details>`;
 }
 // Headings, bold, italics, bullets and rules from the model's free text; everything else is escaped.
 function mdInline(t) {
