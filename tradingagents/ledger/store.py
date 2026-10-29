@@ -47,6 +47,8 @@ GLOBAL_DEFAULTS = {
     # Providers skipped after a failure that will repeat until a reset or a top-up (out of credit, a free daily
     # limit, a rate limit): "provider" or "provider/model" -> {"until": UTC ISO time, "why": short reason}.
     "ai_cooldowns": {},
+    # "Ask the AI to pick" (Trade page): once a calendar day; {"date", "tickers", "asked_at"} of the last time.
+    "ai_pick_state": {},
     # TimesFM 3.0: research only, scored in the Models view once the owner accepts its non-commercial license.
     "timesfm3": {"enabled": False, "license_accepted": None},
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).

@@ -1073,11 +1073,16 @@ async function loadTrade() {
           `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = false;
+    const asked = (t.ai_pick || {}).today;       // once a day: the button rests until tomorrow
+    $("runnersAll").disabled = !!asked;
+    $("runnersAll").textContent = asked ? `Asked today (${esc((t.ai_pick.asked_at || "").slice(11, 16))})` : "Ask the AI to pick";
     $("runnersAll").onclick = async () => {
       const pool = await aiPool();
       if (!pool.length) { showError("The Screener has no ranked stocks yet: build it first."); return; }
-      try { await api("/api/ai-decisions", {tickers: pool, analysts: ["market", "social", "news", "fundamentals"], date: t.data_to}); }
-      catch (e) { showError(e.message); }
+      try {
+        await api("/api/ai-decisions", {tickers: pool, analysts: ["market", "social", "news", "fundamentals"], date: t.data_to, ai_pick: true});
+        $("runnersAll").disabled = true; $("runnersAll").textContent = "Asked today";
+      } catch (e) { showError(e.message); }
       loadAgentReport();
     };
     lastPicks = [...allPicks, ...t.sells.filter(s => !allPicks.some(x => x.ticker === s.ticker))];

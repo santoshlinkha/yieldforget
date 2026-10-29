@@ -423,6 +423,8 @@ class App:
                         patient[e["ticker"]] = {"price": round(dip["price"], 2), "chance": dip["chance"],
                                                 "stop": round(dip["stop"], 2), "target": round(dip["profit"], 2)}
         out = trade.plan(decision, inc["budget"]["available"], patient)
+        asked = self.store.get("global", "ai_pick_state") or {}
+        out["ai_pick"] = {**asked, "today": asked.get("date") == _today()}
         picks = ([out["best"]] if out.get("best") else []) + list(out.get("runners_up") or [])
         if picks:
             out["allocation"] = self._allocation(picks, inc["budget"]["available"])
@@ -1706,6 +1708,11 @@ class App:
             raise ValueError("at most 20 tickers per run")
         day = self._check_day(str(body.get("date") or self._last_session()))
         analysts = self._analysts(body, g)
+        if body.get("ai_pick"):      # "Ask the AI to pick": once a calendar day
+            asked = g.get("ai_pick_state") or {}
+            if asked.get("date") == _today():
+                raise ValueError(f"The AI already picked today ({', '.join(asked.get('tickers') or [])}); "
+                                 "it can be asked again tomorrow")
 
         def work(job):
             done, failed = {}, {}
@@ -1725,7 +1732,12 @@ class App:
                 job.log.append(f"{t}: {out['rating']} ({'reused' if out['how'] == 'cache' else 'new'})")
             return {"ticker": None, "done": done, "failed": failed, "date": day}
 
-        return self.analysis.start(work)
+        started = self.analysis.start(work)
+        if started and body.get("ai_pick"):
+            with self.lock:
+                self.store.set("global", "ai_pick_state", {"date": _today(), "tickers": tickers,
+                                                          "asked_at": datetime.now().isoformat(timespec="minutes")})
+        return started
 
     def request_log(self, ticker: str, day: str, run: str | None = None) -> dict:
         """Every model request of a saved agent run and its reply (read from the run's folder); ``run`` names an
