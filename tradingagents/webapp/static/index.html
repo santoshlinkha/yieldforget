@@ -226,6 +226,8 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .live-steps li { margin: 2px 0; }
 .ai-box { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;
   font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; border: 1px solid; }
+a.ai-box { text-decoration: none; cursor: pointer; }
+a.ai-box:hover { filter: brightness(.95); text-decoration: underline; }
 .ai-box.good { color: #047857; background: #ecfdf5; border-color: #6ee7b7; }
 .ai-box.mid { color: #92400e; background: #fffbeb; border-color: #fcd34d; }
 .ai-box.bad { color: #b91c1c; background: #fef2f2; border-color: #fca5a5; }
@@ -1055,10 +1057,10 @@ async function loadTrade() {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
       return v == null ? "<td>–</td>" : `<td class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
     };
-    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:11%"><col style="width:16%"><col style="width:12%"><col style="width:11%"><col style="width:12%"><col style="width:12%"><col style="width:14%"><col style="width:12%"></colgroup>` +
+    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:8%"><col style="width:17%"><col style="width:12%"><col style="width:11%"><col style="width:12%"><col style="width:12%"><col style="width:16%"><col style="width:12%"></colgroup>` +
       `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th title="Sell target">Sell</th><th title="Stop loss">Stop</th><th>Deadline</th><th title="The AI agents' call on today's data; AI: not run today (click to run)">AI</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
-        <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td>` +
+        <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td title="${esc(s.deadline || "")}">${esc(String(s.deadline || "–").replace(/^20(\d\d-)/, "$1"))}</td>` +
         `<td><button class="ai-call" data-agents="${esc(s.ticker)}" data-aicall="${esc(s.ticker)}" title="Run the AI agents on ${esc(s.ticker)}">AI</button></td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
@@ -1169,8 +1171,8 @@ function agentCell(r, held = false) {
   let h = "";
   if (r.available) {
     const [word, tone] = aiWord(r.agent_rating, held);
-    h = `<span class="ai-box ${tone}" title="${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}">` +
-      `${word} · ${esc(String(r.date || "").slice(5))}</span>`;
+    h = `<a class="ai-box ${tone}" href="/ticker/${encodeURIComponent(r.ticker)}#reports" target="_blank" rel="noopener" ` +
+      `title="Read the report (${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""})">${word}</a>`;
   }
   return h;   // not run (or only failed): blank, so the cell shows just its AI button
 }
@@ -1182,7 +1184,7 @@ async function runnerAgents(list) {
       cells.forEach(c => {
         c.innerHTML = agentCell(r);
         const btn = c.parentElement && c.parentElement.querySelector(".rn-ai");
-        if (btn) btn.hidden = !!(r.available && r.date === agentDay);        // decided today: no second run
+        if (btn) btn.hidden = !!r.available;        // analysed already: its report instead of a run button
       });
       const today = r.available && r.date === agentDay;
       const call = today && r.agent_rating ? aiWord(r.agent_rating, true) : null;      // the Sell table: stocks you hold

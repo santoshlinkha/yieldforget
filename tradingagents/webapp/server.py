@@ -230,7 +230,8 @@ def _cooldown(provider: str, model: str, exc_text: str, now: datetime) -> tuple[
     a per-minute rate limit for ``RATE_LIMIT_HOLD``, or longer when the provider asks for longer."""
     text = exc_text.lower()
     if "free-models-per-day" in text or "free daily limit" in text:
-        return provider, _next_midnight(now, "UTC"), "free daily limit reached (resets 00:00 UTC)"
+        # Only the key's free models are limited; its paid models still answer.
+        return f"{provider}/*:free", _next_midnight(now, "UTC"), "free daily limit reached (resets 00:00 UTC)"
     if "prepayment credits are depleted" in text or "402" in text or "insufficient" in text and "credit" in text:
         return provider, now + timedelta(hours=6), "out of credit (top up, or the key is skipped for 6 hours)"
     limited = "429" in text or "rate limit" in text or "resource_exhausted" in text or "quota" in text
@@ -1380,8 +1381,10 @@ class App:
             return cfg["llm_provider"] + ("#2" if cfg.get("alt_api_key") else "")
 
         def cool(cfg):
-            # A limit on the key, or on either model the agents would call, stops the whole attempt.
-            return cooling.get(keyed(cfg)) or next(
+            # A limit on the key, on its free models (when the run would use one), or on either model the agents
+            # would call, stops the whole attempt.
+            free = any(str(m).endswith(":free") for m in models(cfg))
+            return cooling.get(keyed(cfg)) or (cooling.get(f"{keyed(cfg)}/*:free") if free else None) or next(
                 (cooling[k] for k in (f"{keyed(cfg)}/{m}" for m in models(cfg)) if k in cooling), None)
 
         def with_second_keys(attempts):
@@ -1438,7 +1441,7 @@ class App:
                 if held:
                     limited = True
                     # Which of the run's models hit the limit is not known, so a model limit holds them all.
-                    keys = [held[0]] if held[0] == keyed(cfg) else [f"{keyed(cfg)}/{m}" for m in models(cfg)]
+                    keys = [held[0]] if held[0] in (keyed(cfg), f"{keyed(cfg)}/*:free") else                         [f"{keyed(cfg)}/{m}" for m in models(cfg)]
                     for k in keys:
                         cooling[k] = {"until": held[1].isoformat(), "why": held[2]}
                     with self.lock:

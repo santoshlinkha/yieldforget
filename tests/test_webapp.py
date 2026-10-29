@@ -473,7 +473,7 @@ def test_a_provider_out_of_credit_or_at_its_free_limit_is_skipped_until_it_can_w
     srv, app = _agent_app(tmp_path, monkeypatch)
     now = datetime(2026, 10, 29, 3, 0, tzinfo=UTC)
     key, until, why = srv._cooldown("openrouter", "m:free", "Error code: 429 - Rate limit exceeded: free-models-per-day", now)
-    assert key == "openrouter" and until == datetime(2026, 10, 30, tzinfo=UTC) and "free daily limit" in why
+    assert key == "openrouter/*:free" and until == datetime(2026, 10, 30, tzinfo=UTC) and "free daily limit" in why
     key, until, _ = srv._cooldown("google", "gemini-3.8-flash", "402 RESOURCE_EXHAUSTED prepayment credits are depleted", now)
     assert key == "google" and until.hour == 9
     assert srv._cooldown("google", "x", "429 rate limit", now)[0] == "google/x"
@@ -672,3 +672,20 @@ def test_a_limit_stops_sending_to_that_model_until_it_resets_and_a_second_key_ta
     sent.clear()
     app._try_agents(srv.Job(), "BBB", "2026-10-28", ["market"], tmp_path / "f", 0.0, {}, [cfg], [])
     assert sent == [("sk-or-second", 1)]                                   # the limited key is not sent to again
+
+
+def test_a_free_daily_limit_pauses_only_the_free_models_of_that_key(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    monkeypatch.delenv("OPENROUTER_API_KEY_2", raising=False)                # one key: its free models are paused
+    until = (datetime.now(UTC) + timedelta(hours=3)).isoformat()
+    app.store.set("global", "ai_cooldowns", {"openrouter/*:free": {"until": until, "why": "free daily limit reached"}})
+    sent = []
+    import tradingagents.optimizer.ai_views as views
+    monkeypatch.setattr(views, "analyze", lambda t, d, cfg, *a, **k: (sent.append(cfg["deep_think_llm"]), ({"rating": "Buy"}, "agents"))[1])
+    monkeypatch.setattr(app, "_write_decision", lambda *a, **k: {})
+    attempts = [{"llm_provider": "openrouter", "deep_think_llm": "x:free", "quick_think_llm": "x:free"},
+                {"llm_provider": "openrouter", "deep_think_llm": "paid", "quick_think_llm": "paid"}]
+    out = app._try_agents(srv.Job(), "AAA", "2026-10-28", ["market"], tmp_path / "f", 0.0, {}, attempts, [])
+    assert sent == ["paid"] and out["model"] == "paid"                     # the free model skipped, the paid one ran
