@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<title>Ticker · Yieldforge</title>
+<title>Ticker · AlphaDesk</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -244,7 +244,7 @@ select option { background: var(--surface); color: var(--text); }
 </style>
 </head>
 <body>
-<header class="appbar"><div class="wrap"><a href="/">← Yieldforge</a><span class="muted small" id="asof"></span></div></header>
+<header class="appbar"><div class="wrap"><a href="/">← AlphaDesk</a><span class="muted small" id="asof"></span></div></header>
 <main class="wrap">
   <div class="title"><h1 id="sym">…</h1><span class="name" id="nm"></span><span class="px" id="px"></span><span id="vbadge"></span></div>
   <p class="muted small" id="desc"></p>
@@ -513,7 +513,7 @@ async function loadEntryPlans() {
 
 async function load() {
   loadEntryPlans();
-  document.title = `${symbol} · Yieldforge`;
+  document.title = `${symbol} · AlphaDesk`;
   $("sym").textContent = symbol;
   let d;
   try {
