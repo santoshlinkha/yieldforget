@@ -1604,6 +1604,35 @@ class App:
             raise ValueError("which ticker?")
         return {"ticker": ticker, "runs": plans_for(self.store.con, ticker), "today": _today()}
 
+    _INTRADAY: dict = {}
+
+    def intraday(self, symbol: str, span: str) -> dict:
+        """Intraday prices for the 1D (5-minute bars) and 5D (30-minute bars) chart, with SPY, from Yahoo; cached for
+        5 minutes. Display only: no model reads them."""
+        import time as _time
+
+        import pandas as pd
+        import yfinance as yf
+
+        symbol = symbol.strip().upper()
+        if span not in ("1d", "5d") or not re.fullmatch(r"[A-Z0-9.\-^]{1,12}", symbol):
+            raise ValueError("span is 1d or 5d, with a ticker")
+        key = (symbol, span)
+        hit = self._INTRADAY.get(key)
+        if hit and _time.time() - hit[0] < 300:
+            return hit[1]
+        interval = "5m" if span == "1d" else "30m"
+        frames = {t: yf.Ticker(t).history(period=span, interval=interval)["Close"].dropna() for t in (symbol, "SPY")}
+        close = frames[symbol]
+        if close.empty:
+            raise ValueError("Yahoo has no intraday prices for it now")
+        spy = frames["SPY"].reindex(close.index).ffill()
+        local = close.index.tz_convert("America/New_York") if close.index.tz is not None else close.index
+        out = {"dates": [d.strftime("%Y-%m-%d %H:%M") for d in local], "close": [round(float(v), 4) for v in close],
+               "spy": [None if pd.isna(v) else round(float(v), 4) for v in spy], "interval": interval}
+        self._INTRADAY[key] = (_time.time(), out)
+        return out
+
     def entry_alerts(self) -> dict:
         """The watched entry plans against the latest close. The price part of an entry condition is checkable: a range
         is met when the close is inside it, a limit when the close is at or below it, a market entry at once. The
@@ -2060,6 +2089,8 @@ class App:
                 out[name] = {"error": str(exc)[:300]}
 
         def price():
+            import pandas as pd
+
             b = bars([symbol, "SPY"], self.cache_dir)
             close = b["Close"][symbol].dropna()
             if close.empty:
@@ -2081,7 +2112,10 @@ class App:
                     if b["Volume"][symbol].notna().any() else None,
                     "chart": {"dates": [d.strftime("%Y-%m-%d") for d in weekly.index],
                               "close": [round(float(v), 4) for v in weekly],
-                              "spy": [round(float(v), 4) for v in spy.loc[weekly.index]]}}
+                              "spy": [round(float(v), 4) for v in spy.loc[weekly.index]]},
+                    "daily": {"dates": [d.strftime("%Y-%m-%d") for d in close.index[-1300:]],
+                              "close": [round(float(v), 4) for v in close.iloc[-1300:]],
+                              "spy": [None if pd.isna(v) else round(float(v), 4) for v in spy.iloc[-1300:]]}}
 
         def mine():
             today = _today()
@@ -2543,6 +2577,8 @@ def make_handler(app: App):
                     self._json(app.signals(query.get("ticker")))
                 elif url.path == "/api/analyze":
                     self._json(app.analysis_state())
+                elif url.path == "/api/intraday":
+                    self._json(app.intraday(query.get("symbol", ""), query.get("span", "1d")))
                 elif url.path == "/api/entry-alerts":
                     self._json(app.entry_alerts())
                 elif url.path == "/api/entry-plans":

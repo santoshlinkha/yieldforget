@@ -231,6 +231,12 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .sig-chip { border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; font-size: 12px; white-space: nowrap; }
 .sig-chip.hot { border-color: var(--sell, #dc2626); color: var(--sell, #dc2626); }
 .sig-chip.good { border-color: var(--buy, #047857); color: var(--buy, #047857); }
+.ranges { display: flex; gap: 2px; flex-wrap: wrap; margin-top: 10px; }
+.rng { font: inherit; font-size: 12px; font-weight: 600; padding: 3px 10px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); cursor: pointer; }
+.rng:hover { background: var(--surface-2); }
+.rng.on { background: var(--accent-soft, #eff4ff); color: var(--accent, #2563eb); }
+.rng-chg { font-size: 15px; font-weight: 700; margin: 2px 0 2px; }
 .plan-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-top: 6px; }
 .plan-tile { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; background: var(--surface-2); min-width: 0; }
 .plan-tile.wide { grid-column: 1 / -1; }
@@ -370,7 +376,7 @@ details[open] > summary::after { content: "Hide"; }
   <div id="err"></div>
   <div class="grid">
     <div id="colL">
-      <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div id="chart" style="margin-top:12px"></div><div id="trendBox" style="margin-top:12px"></div></div>
+      <div class="card"><h2>Price</h2><div class="stats" id="stats"></div><div class="ranges" id="ranges" role="group" aria-label="Chart range"></div><div id="chart" style="margin-top:6px"></div><div id="trendBox" style="margin-top:12px"></div></div>
       <div class="card"><h2>Wall Street analyst ratings</h2><div id="analysts"></div></div>
       <div class="card"><h2>Wall Street EPS and revenue estimates</h2><div id="estimates"></div></div>
       <div class="card"><h2>Quality checklist</h2>
@@ -444,12 +450,42 @@ function chart(c) {
   [0.5, 0.75, 1, 1.5, 2, 3, 5, 10, 20].filter(v => Math.log(v) >= lo && Math.log(v) <= hi).forEach(v => {
     g += `<line x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}" stroke="var(--chart-grid)"/><text x="${L - 6}" y="${sy(v) + 4}" text-anchor="end">${money(v * c.close[0], c.close[0] < 10 ? 2 : 0)}</text>`;
   });
-  let last = "";
-  c.dates.forEach((d, i) => { const y = d.slice(0, 4); if (y !== last && i > 0) { if (+y % 2 === 0) g += `<text x="${sx(i)}" y="${H - 6}" text-anchor="middle">${y}</text>`; } last = y; });
+  const span = n > 1 ? (new Date(c.dates[n - 1].slice(0, 10)) - new Date(c.dates[0].slice(0, 10))) / 864e5 : 0;
+  const key = c.dates[0].length > 10 ? (span < 1 ? d => d.slice(11, 13) : d => d.slice(0, 10))
+    : span <= 400 ? d => d.slice(0, 7) : d => d.slice(0, 4);
+  const label = d => c.dates[0].length > 10 ? (span < 1 ? d.slice(11, 16) : new Date(d.slice(0, 10) + "T12:00").toLocaleDateString(undefined, {weekday: "short"}))
+    : span <= 400 ? new Date(d.slice(0, 7) + "-15").toLocaleDateString(undefined, {month: "short"}) : d.slice(0, 4);
+  const step = Math.max(1, Math.ceil(new Set(c.dates.map(key)).size / 8));
+  let last = "", count = 0;
+  c.dates.forEach((d, i) => { const k = key(d); if (k !== last && i > 0) { if (count++ % step === 0) g += `<text x="${sx(i)}" y="${H - 6}" text-anchor="middle">${label(d)}</text>`; } last = k; });
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(symbol)} price against SPY">${g}${line(b, "--s2", 1.25)}${line(a, "--s1", 2)}</svg>
     <div class="legend"><span style="--c: var(--s1)">${esc(symbol)}</span><span style="--c: var(--s2)">SPY, scaled to the same start</span></div>`;
 }
 
+// Chart ranges like a quote page: 1D and 5D from intraday bars, the rest from daily closes, Max from weekly.
+const RANGES = [["1D", "1d"], ["5D", "5d"], ["1M", 21], ["6M", 126], ["YTD", "ytd"], ["1Y", 252], ["5Y", 1260], ["Max", "max"]];
+function drawRanges(p) {
+  let current = "1Y";
+  try { current = localStorage.getItem("chartRange") || "1Y"; } catch (e) { /* default */ }
+  const slice = (src, n) => ({dates: src.dates.slice(-n), close: src.close.slice(-n), spy: src.spy.slice(-n)});
+  const show = async key => {
+    current = key;
+    try { localStorage.setItem("chartRange", key); } catch (e) { /* not remembered */ }
+    $("ranges").innerHTML = RANGES.map(([k]) => `<button type="button" class="rng${k === current ? " on" : ""}" data-rng="${k}">${k}</button>`).join("");
+    $("ranges").querySelectorAll("[data-rng]").forEach(b => b.onclick = () => show(b.dataset.rng));
+    const what = RANGES.find(r => r[0] === key)[1], d = p.daily || p.chart;
+    try {
+      let c;
+      if (what === "1d" || what === "5d") c = await getJSON(`/api/intraday?symbol=${encodeURIComponent(symbol)}&span=${what}`);
+      else if (what === "max") c = p.chart;
+      else if (what === "ytd") { const y = d.dates[d.dates.length - 1].slice(0, 4); const i = d.dates.findIndex(x => x.startsWith(y)); c = slice(d, d.dates.length - Math.max(0, i - 1)); }
+      else c = slice(d, what + 1);
+      const first = c.close[0], lastP = c.close[c.close.length - 1], chg = lastP / first - 1;
+      $("chart").innerHTML = `<div class="rng-chg ${chg >= 0 ? "pos" : "neg"}">${spct(chg, 2)} <span class="muted small">${key === "1D" ? "today" : "over " + key}</span></div>` + chart(c);
+    } catch (e) { $("chart").innerHTML = `<p class="muted small">${esc(e.message)}</p>`; }
+  };
+  show(RANGES.some(r => r[0] === current) ? current : "1Y");
+}
 function quality(q) {
   const ST = {ok: "pass", warn: "check", flag: "flag", info: "info"};
   return q.sections.map((sec, i) => {
@@ -737,7 +773,7 @@ async function load() {
       ["3 years", spct(r["3y"])], ["5 years", spct(r["5y"])], ["52-wk high", money(p.high_52w)], ["52-wk low", money(p.low_52w)],
       ["Volatility 3m", pct(p.vol_3m)], ["Worst drop ever", pct(p.max_drawdown)], ["Avg volume 1m", big(p.volume_1m)]]
       .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
-    $("chart").innerHTML = chart(p.chart);
+    drawRanges(p);
   } else $("stats").innerHTML = failed(p) || "";
 
   $("news").innerHTML = failed(d.news) || (d.news.length ? d.news.map(a => `<li><a href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}</a>
@@ -1266,9 +1302,7 @@ function sigSummary(vd, dec, head, sg, t5) {
   if (sg && sg.status === "ok") {
     const f = sg.forecast, lift = k => (sg.lifts || {})[k] || 0;
     const chip = (name, p, key, good) => `<span class="sig-chip${lift(key) >= 1.2 ? (good ? " good" : " hot") : ""}" title="${lift(key).toFixed(2)}× usual">${name} ${pct(p, 0)}</span>`;
-    h += `<div class="sig-line small"><span class="muted">Next ${sg.horizon} sessions:</span> ` + chip("Breakout", f.p_up_break, "up_break", true) +
-      chip("Breakdown", f.p_down_break, "down_break", false) + chip("Big loss", f.p_large_loss, "large_loss", false) +
-      chip("Deep drop", f.p_deep_drawdown, "deep_drawdown", false) + `</div>`;
+    h += `<div class="sig-events">${signalTable(sg)}</div>`;   // shown, not folded
     const w = sg.warnings || [];
     if (w.length) h += `<details class="small sig-warn"><summary><b class="neg">${w.length} warning${w.length === 1 ? "" : "s"}</b></summary>` +
       `<ul>${w.map(x => `<li>${esc(x.text)}</li>`).join("")}</ul></details>`;
@@ -1316,7 +1350,6 @@ async function loadSignals() {
   if (sg && sg.status === "ok") {
     const f = sg.forecast;
     const tp = [["up", f.trend_up], ["down", f.trend_down], ["sideways", f.trend_sideways], ["unclear", f.trend_unclear]];
-    h += signalTable(sg);
     h += sg.warnings.length ? `<ul class="small">${sg.warnings.map(w => `<li class="${w.level === "high" ? "down" : w.level === "warn" ? "neg" : "pos"}">${esc(w.text)}</li>`).join("")}</ul>`
       : `<p class="small muted">No breakout, breakdown or crash warning for this stock today.</p>`;
     const flatNames = {large_loss: "large-loss (crash)", deep_drawdown: "deep-drawdown", up_break: "breakout", down_break: "breakdown"};
