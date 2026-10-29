@@ -55,6 +55,8 @@ GLOBAL_DEFAULTS = {
     "ai_daily_scans": 25,
     # The owner's own five for the agents (Trade page, AI's pick).
     "ai_my_picks": [],
+    # Tickers whose agents' entry plan should notify the owner when its entry price condition is met.
+    "entry_alerts": [],
     # TimesFM 3.0: research only, scored in the Models view once the owner accepts its non-commercial license.
     "timesfm3": {"enabled": False, "license_accepted": None},
     # Free OpenRouter models tried in order when the providers before them fail (openrouter in ai_fallbacks).

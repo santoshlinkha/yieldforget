@@ -224,6 +224,12 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 .live-steps { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 170px; overflow: auto; }
 .live-steps li { margin: 2px 0; }
+.notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; }
+.alert-strip { display: grid; gap: 6px; margin: 0 0 12px; }
+.alert-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; font-size: 13px; border: 1px solid; }
+.alert-item.entry { border-color: #6ee7b7; background: #ecfdf5; color: #065f46; }
+.alert-item.exit { border-color: #fca5a5; background: #fef2f2; color: #991b1b; }
+.alert-item span { color: inherit; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .scan-plan { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .scan-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .scan-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
@@ -565,6 +571,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         <div class="row"><button id="tdRun" title="The internal model's decision for the next session, from the latest close (free, on this machine)">Make today's decision</button>
           <label class="check" title="Fit this week's models if they are missing (minutes). Off: only saved models are used."><input type="checkbox" id="tdTrain"> fit models if needed</label>
           <span class="muted small" id="tdStatus"></span></div></div>
+      <div class="alert-strip" id="alertStrip" hidden></div>
       <!-- 1. Today's trade: what to buy (left), what to sell and the alternatives (right). -->
       <div class="split trade-top">
         <div>
@@ -1056,7 +1063,15 @@ async function loadTrade() {
     // dated reference for sizing and for the illustrative dollar levels; stop and target follow the actual fill.
     $("buyBox").innerHTML = (x ? `<p class="small" style="margin:0 0 8px">Buy at the close of <b>${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever it is (the rule the model was tested on). Sell when a close reaches <span class="pos">Sell</span> or <span class="neg">Stop</span>, or ${x.horizon} sessions after buying.</p>` : "") +
       "";
-    $("pickNotes").innerHTML = (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
+    const notes = t.notes || [], shown = store.get("pickNotesShown", false);
+    $("pickNotes").innerHTML = notes.length ? `<div class="notes-head"><span class="muted small">${notes.length} warning${notes.length === 1 ? "" : "s"} about the model</span>` +
+      `<button class="ghost small-btn" id="pickNotesBtn">${shown ? "Hide" : "Show"}</button></div>` +
+      `<div id="pickNotesBody"${shown ? "" : " hidden"}>${notes.map(n => `<div class="note">${esc(n)}</div>`).join("")}</div>` : "";
+    if ($("pickNotesBtn")) $("pickNotesBtn").onclick = () => {
+      const on = $("pickNotesBody").hidden;
+      $("pickNotesBody").hidden = !on; $("pickNotesBtn").textContent = on ? "Hide" : "Show"; store.set("pickNotesShown", on);
+    };
+    renderAlerts(t);
     // Net: the profit or loss so far in dollars (shares × (last close − your fill)), before the sale's cost.
     const netCell = s => {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
@@ -1131,6 +1146,44 @@ async function loadTrade() {
 
   loadRecord();
 }
+// --- entry alerts: a browser notification when a watched entry plan's price condition is met (after each close) ---
+function notifyOnce(key, title, body) {
+  let seen = false;
+  try { seen = !!localStorage.getItem(key); localStorage.setItem(key, "1"); } catch (e) { /* no storage: may repeat */ }
+  if (!seen && "Notification" in window && Notification.permission === "granted") new Notification(title, {body});
+}
+async function renderAlerts(t) {
+  let a = {alerts: []};
+  try { a = await api("/api/entry-alerts"); } catch (e) { /* none shown */ }
+  const today = a.checked || new Date().toISOString().slice(0, 10);
+  const entries = (a.alerts || []).filter(x => x.met).map(x => ({kind: "entry", ticker: x.ticker,
+    text: `entry condition met: last close ${x.close != null ? usd(x.close) : "?"} (${x.rule})`}));
+  const exits = (t.sells || []).filter(s => s.action === "EXIT" || s.action === "REDUCE").map(s => ({kind: "exit", ticker: s.ticker,
+    text: `${s.action === "EXIT" ? "sell" : "reduce"}${s.execute ? " at the close of " + s.execute : ""}: ${(s.reasons || [])[0] || ""}`}));
+  const items = [...entries, ...exits];
+  for (const x of items) notifyOnce(`alert:${x.kind}:${x.ticker}:${today}`, `${x.kind === "entry" ? "Entry" : "Exit"}: ${x.ticker}`, x.text);
+  const perm = "Notification" in window ? Notification.permission : "unsupported";
+  $("alertStrip").hidden = !items.length && perm !== "default";
+  $("alertStrip").innerHTML = items.map(x => `<div class="alert-item ${x.kind}"><b>${x.kind === "entry" ? "ENTRY" : "EXIT"}</b> ${tk(x.ticker)} <span>${esc(x.text)}</span></div>`).join("") +
+    (perm === "default" ? `<button class="ghost small-btn" id="alertsOn">🔔 Turn on notifications for entries and exits</button>` : "");
+  if ($("alertsOn")) $("alertsOn").onclick = async () => { await Notification.requestPermission(); renderAlerts(t); };
+}
+async function checkEntryAlerts() {
+  let a;
+  try { a = await (await fetch("/api/entry-alerts")).json(); } catch (e) { return; }
+  const today = a.checked || new Date().toISOString().slice(0, 10);
+  for (const x of a.alerts || []) {
+    if (!x.met) continue;
+    const key = `alert:entry:${x.ticker}:${today}`;
+    let seen = false;
+    try { seen = !!localStorage.getItem(key); localStorage.setItem(key, "1"); } catch (e) { /* no storage: may repeat */ }
+    if (seen) continue;
+    const body = `${x.ticker}: last close ${x.close != null ? "$" + x.close.toFixed(2) : "?"} (${x.rule}).` + (x.trigger ? ` Agents' condition: ${x.trigger}` : "");
+    if ("Notification" in window && Notification.permission === "granted") new Notification(`Entry condition met: ${x.ticker}`, {body});
+  }
+}
+checkEntryAlerts();
+setInterval(checkEntryAlerts, 5 * 60 * 1000);
 // --- the TradingAgents team on the model's pick: run it, watch it, read its full report ---
 let agentTicker = null, agentDay = null, agentPolling = false, agentWasRunning = false, lastPicks = [], lastTrade = null;
 async function loadAgentReport() {

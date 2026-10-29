@@ -1592,6 +1592,37 @@ class App:
             raise ValueError("which ticker?")
         return {"ticker": ticker, "runs": plans_for(self.store.con, ticker), "today": _today()}
 
+    def entry_alerts(self) -> dict:
+        """The watched entry plans against the latest close. The price part of an entry condition is checkable: a range
+        is met when the close is inside it, a limit when the close is at or below it, a market entry at once. The
+        agents' free-text trigger is shown, not checked. Closes are daily, so this is checked after each close."""
+        from tradingagents.agents.entry_plan import plans_for
+
+        watched = [str(t).upper() for t in (self.store.get("global", "entry_alerts") or [])]
+        prices = latest_prices(self.cache_dir, watched) if watched else {}
+        out = []
+        for t in watched:
+            runs = plans_for(self.store.con, t)
+            run = next((r for r in runs if r.get("stage") == "portfolio_manager" and not r.get("expired")
+                        and not r.get("superseded_by")), None) or next((r for r in runs if not r.get("expired")), None)
+            plan = (run or {}).get("plan") or {}
+            close = prices.get(t)
+            lo, hi, px = plan.get("entry_range_low"), plan.get("entry_range_high"), plan.get("entry_price")
+            kind = str(plan.get("entry_type") or "").lower()
+            met, rule = None, "no entry price in the plan"
+            if close is not None and plan:
+                if lo is not None and hi is not None:
+                    met, rule = float(lo) <= close <= float(hi), f"close inside {lo}–{hi}"
+                elif px is not None and "limit" in kind:
+                    met, rule = close <= float(px), f"close at or below {px}"
+                elif px is not None:
+                    met, rule = True, "market entry"
+            out.append({"ticker": t, "met": met, "close": close, "rule": rule, "trigger": plan.get("trigger"),
+                        "entry_price": px, "range": [lo, hi] if lo is not None else None,
+                        "analysis_date": (run or {}).get("analysis_date"), "expires": plan.get("expires_at"),
+                        "has_plan": bool(plan)})
+        return {"watching": watched, "alerts": out, "checked": _today()}
+
     def _write_decision(self, ticker: str, day: str, folder: Path, result: dict, cfg: dict | None,
                         models: str | None = None) -> dict:
         """The run's final decision as one action, written first in its reports (0_FINAL_DECISION.md)."""
@@ -2489,6 +2520,8 @@ def make_handler(app: App):
                     self._json(app.signals(query.get("ticker")))
                 elif url.path == "/api/analyze":
                     self._json(app.analysis_state())
+                elif url.path == "/api/entry-alerts":
+                    self._json(app.entry_alerts())
                 elif url.path == "/api/entry-plans":
                     self._json(app.entry_plans(query.get("ticker", "")))
                 elif url.path == "/api/manual-prompt":

@@ -188,6 +188,12 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .plan-sum { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .plan-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; margin-bottom: 4px; }
 .plan-kv td { padding: 3px 6px; border: 0; font-size: 13px; }
+.bell-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.sig-sum { display: grid; gap: 6px; }
+.sig-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+.sig-chip { border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; font-size: 12px; white-space: nowrap; }
+.sig-chip.hot { border-color: var(--sell, #dc2626); color: var(--sell, #dc2626); }
+.sig-chip.good { border-color: var(--buy, #047857); color: var(--buy, #047857); }
 .plan-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-top: 6px; }
 .plan-tile { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; background: var(--surface-2); min-width: 0; }
 .plan-tile.wide { grid-column: 1 / -1; }
@@ -598,14 +604,53 @@ function policyHtml(p) {
   return h;
 }
 
+// --- entry alerts: a browser notification when a watched entry plan's price condition is met (after each close) ---
+async function checkEntryAlerts() {
+  let a;
+  try { a = await (await fetch("/api/entry-alerts")).json(); } catch (e) { return; }
+  const today = a.checked || new Date().toISOString().slice(0, 10);
+  for (const x of a.alerts || []) {
+    if (!x.met) continue;
+    const key = `alert:entry:${x.ticker}:${today}`;
+    let seen = false;
+    try { seen = !!localStorage.getItem(key); localStorage.setItem(key, "1"); } catch (e) { /* no storage: may repeat */ }
+    if (seen) continue;
+    const body = `${x.ticker}: last close ${x.close != null ? "$" + x.close.toFixed(2) : "?"} (${x.rule}).` + (x.trigger ? ` Agents' condition: ${x.trigger}` : "");
+    if ("Notification" in window && Notification.permission === "granted") new Notification(`Entry condition met: ${x.ticker}`, {body});
+  }
+}
+checkEntryAlerts();
+setInterval(checkEntryAlerts, 5 * 60 * 1000);
+// The bell: notify me when this stock's entry condition is met (asks the browser for permission once).
+async function bellHtml() {
+  let a = {watching: [], alerts: []};
+  try { a = await getJSON("/api/entry-alerts"); } catch (e) { /* shown off */ }
+  const on = a.watching.includes(symbol), st = (a.alerts || []).find(x => x.ticker === symbol);
+  return `<div class="bell-row"><button class="ghost small-btn" id="bellBtn" aria-pressed="${on}">${on ? "🔔 Notifying" : "🔔 Notify me"}</button>` +
+    `<span class="muted small">${on ? (st && st.met ? `<b class="pos">Entry condition met</b> (${esc(st.rule)})` : st && st.met === false ? `waiting: ${esc(st.rule)}` : "no price condition to check") : "a browser notification when the entry price condition is met (checked after each close)"}</span></div>`;
+}
+async function wireBell() {
+  const b = $("bellBtn");
+  if (!b) return;
+  b.onclick = async () => {
+    const a = await getJSON("/api/entry-alerts").catch(() => ({watching: []}));
+    const on = a.watching.includes(symbol);
+    if (!on && "Notification" in window && Notification.permission === "default") await Notification.requestPermission();
+    const list = on ? a.watching.filter(t => t !== symbol) : [...a.watching, symbol];
+    try { await getJSON("/api/settings", {scope: "global", values: {entry_alerts: list}}); } catch (e) { showErr(e); return; }
+    loadEntryPlans();
+  };
+}
+function showErr(e) { $("eplan").insertAdjacentHTML("afterbegin", `<p class="neg small">${esc(e.message)}</p>`); }
 async function loadEntryPlans() {
   let r;
   try { r = await getJSON("/api/entry-plans?ticker=" + encodeURIComponent(symbol)); }
   catch (e) { $("eplan").innerHTML = `<p class="neg">${esc(e.message)}</p>`; return; }
   if (!r.runs.length) { $("eplan").innerHTML = `<p class="muted small">No entry plan yet. An agent run or a pasted chat answer adds one; the app checks it against the as-traded close and this account (settled cash, caps, timing, no day trading) and executes nothing.</p>`; return; }
   const [first, ...rest] = r.runs;
-  $("eplan").innerHTML = `<p class="muted small">Written by the AI, checked by the app, placed by you.</p>` +
+  $("eplan").innerHTML = `<p class="muted small">Written by the AI, checked by the app, placed by you.</p>` + await bellHtml() +
     planRun(first) + (rest.length ? `<details><summary class="small">${rest.length} earlier plan${rest.length === 1 ? "" : "s"} (superseded or expired)</summary>${rest.map(run => `<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px">${planRun(run)}</div>`).join("")}</details>` : "");
+  wireBell();
 }
 
 async function load() {
@@ -1126,11 +1171,33 @@ function signalTable(sg) {
     `<p class="small muted">Above / below: the price trades past the level at any time in the next ${sg.horizon} trading days, intraday. ` +
     `Big loss: down at least 1.5 volatilities at day ${sg.horizon}. Deep drop: falls that far at any point. A chance in colour is at least 1.2× usual. Tested: whether a walk-forward study checked this signal on data it was not trained on; "no" means it has not been checked, so treat the chance as unverified.</p>`;
 }
+// The essentials: the verdict and why, today's action, the model's numbers, the trend and the four event chances.
+function sigSummary(vd, dec, head, sg) {
+  let h = `<div class="sig-sum">`;
+  if (vd) {
+    const vm = vd.model;
+    h += `<div class="sig-line"><span class="verdict big ${vd.action}">${vd.action}</span><span>${esc(vd.summary || vd.label || "")}</span></div>`;
+    if (vm) h += `<div class="sig-line muted small">Model rank <b>#${vm.rank}</b> of ${vm.of} · expected ${spct(vm.expected_net, 2)} after costs over ${vm.horizon} sessions` +
+      `${vm.p_win != null ? ` · P(profit) ${pct(vm.p_win, 0)}` : ""}</div>`;
+  }
+  if (dec) h += `<div class="sig-line small"><b>Today:</b> <span class="${ACTION_CLS[dec.action] || ""}">${esc(dec.action)}</span>` +
+    `${dec.paper_action ? ` <span class="muted">(${esc(dec.paper_action)})</span>` : ""} <span class="muted">· for the close of ${esc(head.executes)}</span></div>`;
+  if (sg && sg.status === "ok") {
+    const f = sg.forecast, lift = k => (sg.lifts || {})[k] || 0;
+    const chip = (name, p, key, good) => `<span class="sig-chip${lift(key) >= 1.2 ? (good ? " good" : " hot") : ""}" title="${lift(key).toFixed(2)}× usual">${name} ${pct(p, 0)}</span>`;
+    h += `<div class="sig-line small"><b>Trend:</b> ${esc(sg.trend)} ` + chip("Breakout", f.p_up_break, "up_break", true) +
+      chip("Breakdown", f.p_down_break, "down_break", false) + chip("Big loss", f.p_large_loss, "large_loss", false) +
+      chip("Deep drop", f.p_deep_drawdown, "deep_drawdown", false) + `</div>`;
+    if ((sg.warnings || []).length) h += `<div class="sig-line small neg">${sg.warnings.map(w => esc(w.text)).join(" · ")}</div>`;
+  }
+  return h + `</div>`;
+}
 async function loadSignals() {
   let s;
   try { s = await getJSON("/api/signals?ticker=" + encodeURIComponent(symbol)); }
   catch (e) { $("sig").innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
   const row = s.rows[0] || {}, dec = row.decision, sg = row.signal, head = s.decision, vd = row.verdict;
+  const summary = sigSummary(vd, dec, head, sg);
   let h = "";
   if (vd) {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
@@ -1192,6 +1259,7 @@ async function loadSignals() {
   } else {
     h += `<p class="small muted">${sg ? esc((sg.reasons || []).join("; ") || sg.status) : "No trend, breakout or crash forecast saved for this stock yet."}</p>`;
   }
+  h = summary + `<details class="sig-more"><summary class="small"><b>Details</b> <span class="muted">(the tests, context, entry levels, trade outcome model, every signal)</span></summary>${h}</details>`;
   h += `<div class="row"><button class="ghost sm" id="sigRun">${sg ? "Refresh" : "Compute"} signals for ${esc(symbol)}</button><span class="muted small" id="sigState"></span></div>`;
   $("sig").innerHTML = h;
   $("sigRun").onclick = async () => {
