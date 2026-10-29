@@ -25,6 +25,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -41,6 +42,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.ledger import capital, imports as csv_import, recommendations
 from tradingagents.ledger.accounting import SLEEVES
 from tradingagents.ledger.ai_gateway import Budget, Gateway, Policy, Price
+from tradingagents.ledger.db import transaction
 from tradingagents.ledger.store import Store
 from tradingagents.optimizer.ai_views import collect_ratings
 from tradingagents.optimizer.data import fetch_closes, latest_prices
@@ -166,6 +168,67 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+_MISSING = object()
+
+
+def _number(body: dict, key: str, default=_MISSING) -> float:
+    """A finite number from a request body; ``default`` when absent or blank, an error otherwise."""
+    value = body.get(key)
+    if value is None or value == "":
+        if default is _MISSING:
+            raise ValueError(f"{key} is required")
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{key} must be a finite number")
+    return number
+
+
+_OP_ID = re.compile(r"[A-Za-z0-9_.:-]{8,100}")
+
+
+def _op_id(body: dict) -> str:
+    """The page's id for this user action (kept across retries), or a fresh one."""
+    given = body.get("op_id")
+    if given is None:
+        return uuid.uuid4().hex
+    if not isinstance(given, str) or not _OP_ID.fullmatch(given):
+        raise ValueError("op_id must be 8-100 letters, digits, '-', '_', '.' or ':'")
+    return given
+
+
+MAX_BODY = 8 * 1024 * 1024        # a broker CSV export fits easily
+_LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
+_HOST = re.compile(r"(\[[0-9a-f:]+\]|[^:]+)(?::(\d+))?")
+
+
+def write_refusal(headers, csrf_token: str, port: int) -> str | None:
+    """Why a state-changing request must be refused, or None.
+
+    The server binds to loopback only, but a page on another site can still make the
+    browser send a request to it. A write must therefore name this server as its Host
+    (no DNS rebinding), come from this page's own origin when the browser says where it
+    comes from, send JSON (which a cross-site form cannot do without a CORS preflight
+    this server never grants), and carry the token printed into the page it was served.
+    """
+    host = (headers.get("Host") or "").strip().lower()
+    parts = _HOST.fullmatch(host)
+    if not parts or parts[1] not in _LOOPBACK or (parts[2] and parts[2] != str(port)):
+        return "the request is not addressed to this local server"
+    origin = headers.get("Origin")
+    if origin is not None and origin.lower() != f"http://{host}":
+        return "the request comes from another site"
+    if (headers.get("Sec-Fetch-Site") or "").lower() == "cross-site":
+        return "the request comes from another site"
+    if (headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+        return "a write must send JSON (Content-Type: application/json)"
+    if not csrf_token or not secrets.compare_digest(headers.get("X-CSRF-Token") or "", csrf_token):
+        return "the page's session token is missing or stale; reload the page"
+    return None
+
+
 class App:
     """What the handlers share: the records, the files, the cache and the background jobs."""
 
@@ -179,6 +242,7 @@ class App:
         self.store = Store(portfolio_path.parent)
         self.owner = f"web-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.lock = threading.Lock()   # one writer at a time on the shared connection
+        self.csrf_token = secrets.token_urlsafe(32)   # printed into the pages; every write must return it
         self.ai, self.backtest, self.tracker, self.explain, self.forecast = Job(), Job(), Job(), Job(), Job()
         self.moat_jobs: dict[str, Job] = {}
         self.daily = Job()   # the daily Chronos-2 record, apart from the runs started on the page
@@ -1612,22 +1676,29 @@ class App:
     # --- writes to the books ---
 
     def ledger_write(self, path: str, body: dict) -> dict:
+        """One user action on the books. ``op_id`` names the action: the page sends the same id
+        when it retries, so a retry is answered with the first event (``applied: false``);
+        a request without one is a new action, never merged with an identical earlier one."""
         led, day = self.store.ledger, body.get("date") or _today()
+        op_id = _op_id(body)
         with self.lock:
+            applied = led.find_operation(op_id) is None and led.find_operation(op_id, "out") is None
             if path == "/api/ledger/contribution":
-                out = {"event": led.contribute(float(body["amount"]), day, sleeve=body.get("sleeve", "trading"),
-                                               settle_date=body.get("settle_date"), note=body.get("note"))}
+                out = {"event": led.contribute(_number(body, "amount"), day, sleeve=body.get("sleeve", "trading"),
+                                               settle_date=body.get("settle_date"), note=body.get("note"),
+                                               op_id=op_id)}
             elif path == "/api/ledger/fill":
-                event, warnings = led.fill(body["sleeve"], body["side"], body["ticker"], float(body["quantity"]),
-                                           float(body["price"]), day, fee=float(body.get("fee") or 0.0),
-                                           note=body.get("note"), strict=not body.get("broker_record"))
+                event, warnings = led.fill(body["sleeve"], body["side"], str(body["ticker"]),
+                                           _number(body, "quantity"), _number(body, "price"), day,
+                                           fee=_number(body, "fee", 0.0), note=body.get("note"),
+                                           strict=not body.get("broker_record"), op_id=op_id)
                 out = {"event": event, "warnings": warnings}
             elif path == "/api/ledger/transfer":
                 out = {"transfer": led.transfer(body["from"], body["to"], day, ticker=body.get("ticker"),
-                                                quantity=float(body.get("quantity") or 0.0),
-                                                cash=float(body.get("cash") or 0.0),
-                                                price=float(body["price"]) if body.get("price") else None,
-                                                note=body.get("note"))}
+                                                quantity=_number(body, "quantity", 0.0),
+                                                cash=_number(body, "cash", 0.0),
+                                                price=_number(body, "price", None),
+                                                note=body.get("note"), op_id=op_id)}
             elif path == "/api/ledger/import":
                 rows = csv_import.preview(led, body["csv"], body.get("sleeve", "trading"))
                 out = {"rows": [asdict(r) for r in rows]}
@@ -1637,7 +1708,38 @@ class App:
                 raise ValueError(f"unknown ledger action {path}")
             if path != "/api/ledger/import" or body.get("commit"):
                 self.after_ledger_change()
+        if path != "/api/ledger/import":
+            out.update(op_id=op_id, applied=applied)
         return out
+
+    def save_holdings(self, body: dict) -> dict:
+        """The Settings holdings editor: share counts, and settled cash when it changed.
+
+        Answers with what the database now holds, so the page shows saved values, not
+        what it sent. A cash change must say whether it is a deposit/withdrawal or a
+        correction (see ``Store.adjust_cash``); without that it is refused, not guessed.
+        """
+        wanted = {str(p["ticker"]).strip().upper(): _number(p, "quantity") for p in body.get("positions", [])}
+        day = _today()
+        cash_out = None
+        target = _number(body, "cash", None)
+        with self.lock:
+            with transaction(self.store.con):     # both or neither
+                events = self.store.adjust_holdings(wanted, day, note=body.get("note"))
+                now = self.store.ledger.state("trading", day).cash.settled
+                if target is not None and abs(target - now) >= 0.005:
+                    if body.get("cash_mode") not in Store.CASH_MODES:
+                        raise ValueError("say whether the cash change is money in or out of the IRA "
+                                         "(a deposit or withdrawal) or a correction of the books")
+                    cash_out = self.store.adjust_cash(target, day, body["cash_mode"], note=body.get("cash_note"),
+                                                      op_id=_op_id(body))
+            self.after_ledger_change()
+            state = self.store.ledger.state("trading", day)
+        return {"ok": True, "adjustments": events, "cash_change": cash_out,
+                "saved": {"positions": [{"ticker": t, "quantity": q} for t, q in sorted(state.positions.items())],
+                          "cash_settled": round(state.cash.settled, 2),
+                          "cash_unsettled": round(state.cash.unsettled, 2),
+                          "cash_reserved": round(state.cash.reserved, 2)}}
 
 
 def make_handler(app: App):
@@ -1658,7 +1760,18 @@ def make_handler(app: App):
 
         def _body(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
-            return json.loads(self.rfile.read(length) or b"{}")
+            if length < 0 or length > MAX_BODY:
+                raise ValueError(f"the request body is larger than {MAX_BODY // (1024 * 1024)} MB")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("the request body must be a JSON object")
+            return body
+
+        def _page(self, name: str):
+            """A page, with this run's write token in it (see ``write_refusal``)."""
+            html = (STATIC / name).read_bytes().replace(
+                b"<head>", b'<head>\n<meta name="csrf-token" content="' + app.csrf_token.encode() + b'">', 1)
+            self._send(HTTPStatus.OK, html, "text/html; charset=utf-8")
 
         def _started(self, started: bool, what: str):
             # 409 says exactly what is busy, so the page can say so instead of guessing.
@@ -1672,11 +1785,11 @@ def make_handler(app: App):
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             try:
                 if url.path in ("/", "/index.html"):
-                    self._send(HTTPStatus.OK, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+                    self._page("index.html")
                 elif url.path in ("/favicon.svg", "/favicon.ico"):
                     self._send(HTTPStatus.OK, (STATIC / "favicon.svg").read_bytes(), "image/svg+xml")
                 elif url.path.startswith("/ticker/"):
-                    self._send(HTTPStatus.OK, (STATIC / "ticker.html").read_bytes(), "text/html; charset=utf-8")
+                    self._page("ticker.html")
                 elif url.path == "/api/ticker":
                     self._json(app.ticker(query.get("symbol", "")))
                 elif url.path == "/api/sector-forecast":
@@ -1695,9 +1808,11 @@ def make_handler(app: App):
                 elif url.path == "/api/report":
                     self._send(HTTPStatus.OK, app.report(query.get("path", "")).encode(), "text/plain; charset=utf-8")
                 elif url.path == "/api/state":
-                    context, _ = app.store.portfolio("combined", _today())
+                    context, cash = app.store.portfolio("combined", _today())
                     config = read_config(app.universe_path)
                     self._json({"portfolio": context.model_dump(exclude_none=True), "universe": config,
+                                "cash": {"settled": round(cash.settled, 2), "unsettled": round(cash.unsettled, 2),
+                                         "reserved": round(cash.reserved, 2)},
                                 "groups": GROUPS, "watchlist": app.store.get("global", "stock_watchlist") or []})
                 elif url.path == "/api/trade":
                     self._json(_finite(app.trade()))
@@ -1769,6 +1884,18 @@ def make_handler(app: App):
                 self._json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def do_POST(self):
+            refused = write_refusal(self.headers, app.csrf_token, self.server.server_address[1])
+            if refused:
+                try:      # read what was sent (within the limit), or the refusal arrives as a reset connection
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = -1
+                if 0 <= length <= MAX_BODY:
+                    self.rfile.read(length)
+                else:
+                    self.close_connection = True
+                self._json({"error": refused}, HTTPStatus.FORBIDDEN)
+                return
             try:
                 body = self._body()
                 if self.path.startswith("/api/ledger/"):
@@ -1778,11 +1905,7 @@ def make_handler(app: App):
                 elif self.path == "/api/forecasts/run":
                     self._started(app.start_forecast(body), "A forecast run")
                 elif self.path == "/api/portfolio":
-                    wanted = {p["ticker"].upper(): float(p["quantity"]) for p in body.get("positions", [])}
-                    with app.lock:
-                        events = app.store.adjust_holdings(wanted, _today(), note=body.get("note"))
-                        app.after_ledger_change()
-                    self._json({"ok": True, "adjustments": events})
+                    self._json(app.save_holdings(body))
                 elif self.path == "/api/settings":
                     with app.lock:
                         for key, value in (body.get("values") or {}).items():

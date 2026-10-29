@@ -19,6 +19,12 @@ An internal transfer is two events with one ``transfer_id``: the same shares or
 cash leave one sleeve and enter the other at the same price, so the combined
 account is unchanged, and for each sleeve the transfer is a capital flow, not
 profit. Contributions and withdrawals are the account's only external flows.
+
+Every check of what a sleeve holds runs inside the same write transaction as the
+event it allows, so two writers on different connections cannot both spend the
+same dollar. A user's action carries an ``op_id``: retrying it returns the event
+already recorded, while two separate actions with identical contents are two
+events. Imports without an ``op_id`` keep content (or broker reference) dedupe.
 """
 
 from __future__ import annotations
@@ -88,6 +94,31 @@ class Ledger:
 
     # --- writing ---
 
+    def _op_uid(self, op_id: str, leg: str = "") -> str:
+        return _uid(self.account_id, "op", str(op_id), leg)
+
+    def find_operation(self, op_id: str, leg: str = "") -> int | None:
+        """The event an earlier attempt of this user action recorded, if any."""
+        row = self.con.execute("SELECT id FROM events WHERE event_uid = ?", (self._op_uid(op_id, leg),)).fetchone()
+        return row["id"] if row else None
+
+    def _retried(self, op_id: str | None, leg: str = "", **expected) -> int | None:
+        """The event an earlier attempt of ``op_id`` recorded; refuses an id reused for a different event."""
+        if not op_id:
+            return None
+        row = self.con.execute("SELECT * FROM events WHERE event_uid = ?", (self._op_uid(op_id, leg),)).fetchone()
+        if row is None:
+            return None
+        for key, want in expected.items():
+            got = row[key]
+            if key in ("quantity", "price", "cash"):
+                same = abs(float(got or 0.0) - float(want or 0.0)) < 1e-6
+            else:
+                same = got == want
+            if not same:
+                raise LedgerError(f"operation {op_id} was already recorded with a different {key}")
+        return row["id"]
+
     def record(self, kind: str, sleeve: str, trade_date, *, settle_date=None, ticker=None, quantity=0.0,
                price=None, cash=0.0, transfer_id=None, order_id=None, source="manual", source_ref=None,
                note=None, supersedes=None, uid=None) -> tuple[int, bool]:
@@ -120,51 +151,77 @@ class Ledger:
             self.con.execute("INSERT INTO event_voids VALUES (?, ?, ?, ?)", (event_id, now_utc(), reason, replaced_by))
 
     def contribute(self, amount: float, trade_date, sleeve="trading", settle_date=None, source="manual",
-                   source_ref=None, note=None) -> int:
+                   source_ref=None, note=None, op_id: str | None = None) -> int:
         """New money from outside the IRA: an external flow, never profit."""
         if amount <= 0:
             raise LedgerError("a contribution must be positive")
-        return self.record("contribution", sleeve, trade_date, settle_date=settle_date, cash=amount,
-                           source=source, source_ref=source_ref, note=note)[0]
+        with transaction(self.con):
+            done = self._retried(op_id, kind="contribution", sleeve=sleeve, cash=amount)
+            if done is not None:
+                return done
+            return self.record("contribution", sleeve, trade_date, settle_date=settle_date, cash=amount,
+                               source=source, source_ref=source_ref, note=note,
+                               uid=self._op_uid(op_id) if op_id else None)[0]
 
-    def withdraw(self, amount: float, trade_date, sleeve="trading", source="manual", note=None) -> int:
+    def withdraw(self, amount: float, trade_date, sleeve="trading", source="manual", note=None,
+                 op_id: str | None = None) -> int:
         if amount <= 0:
             raise LedgerError("a withdrawal must be positive")
-        if self.state(sleeve, trade_date).cash.available < amount - EPS:
-            raise LedgerError(f"{sleeve} has less than ${amount:,.2f} of settled, unreserved cash")
-        return self.record("withdrawal", sleeve, trade_date, cash=-amount, source=source, note=note)[0]
+        with transaction(self.con):
+            done = self._retried(op_id, kind="withdrawal", sleeve=sleeve, cash=-amount)
+            if done is not None:
+                return done
+            if self.state(sleeve, trade_date).cash.available < amount - EPS:
+                raise LedgerError(f"{sleeve} has less than ${amount:,.2f} of settled, unreserved cash")
+            return self.record("withdrawal", sleeve, trade_date, cash=-amount, source=source, note=note,
+                               uid=self._op_uid(op_id) if op_id else None)[0]
 
     def fill(self, sleeve: str, side: str, ticker: str, quantity: float, price: float, trade_date, *,
              fee: float = 0.0, settle_date=None, order_id=None, source="manual", source_ref=None,
-             strict: bool = True, note=None, uid=None) -> tuple[int, list[str]]:
+             strict: bool = True, note=None, uid=None, op_id: str | None = None,
+             consumes: str | None = None) -> tuple[int, list[str]]:
         """A buy or sell that happened. Buys spend settled cash at once; sale proceeds
         settle the next session. ``strict`` refuses what the books cannot pay for;
-        a broker's own record (``strict=False``) is kept with a warning instead."""
+        a broker's own record (``strict=False``) is kept with a warning instead.
+
+        ``op_id`` names the user's action, so a retry returns the first event instead
+        of spending twice. ``consumes`` releases that reservation in the same
+        transaction, so the cash it held is what pays for the buy."""
         if side not in ("buy", "sell") or quantity <= 0 or price <= 0:
             raise LedgerError("a fill needs side buy or sell, a positive quantity and a positive price")
         ticker = ticker.upper()
-        state = self.state(sleeve, trade_date)
-        warnings = []
-        if side == "buy":
-            cost = quantity * price + fee
-            if cost > state.cash.available + 0.005:
-                warnings.append(f"buy of ${cost:,.2f} {ticker} is more than {sleeve}'s ${state.cash.available:,.2f} "
-                                f"of settled, unreserved cash")
-            cash, settle, qty = -cost, trade_date, quantity
-        else:
-            if quantity > state.positions.get(ticker, 0.0) + 1e-6:
-                warnings.append(f"sells {quantity:g} {ticker} but {sleeve} holds {state.positions.get(ticker, 0.0):g}")
-            cash, qty = quantity * price - fee, -quantity
-            settle = settle_date or next_session(trade_date)
-        if warnings and strict:
-            raise LedgerError("; ".join(warnings))
-        event_id, _ = self.record("fill", sleeve, trade_date, settle_date=settle, ticker=ticker, quantity=qty,
-                                  price=price, cash=cash, order_id=order_id, source=source,
-                                  source_ref=source_ref, note=note, uid=uid)
+        uid = uid or (self._op_uid(op_id) if op_id else None)
+        with transaction(self.con):
+            done = self._retried(op_id, kind="fill", sleeve=sleeve, ticker=ticker,
+                                 quantity=quantity if side == "buy" else -quantity, price=price)
+            if done is not None:
+                return done, []
+            if consumes:
+                self.release(consumes)
+            state = self.state(sleeve, trade_date)
+            warnings = []
+            if side == "buy":
+                cost = quantity * price + fee
+                if cost > state.cash.available + 0.005:
+                    warnings.append(f"buy of ${cost:,.2f} {ticker} is more than {sleeve}'s "
+                                    f"${state.cash.available:,.2f} of settled, unreserved cash")
+                cash, settle, qty = -cost, trade_date, quantity
+            else:
+                if quantity > state.positions.get(ticker, 0.0) + 1e-6:
+                    warnings.append(f"sells {quantity:g} {ticker} but {sleeve} holds "
+                                    f"{state.positions.get(ticker, 0.0):g}")
+                cash, qty = quantity * price - fee, -quantity
+                settle = settle_date or next_session(trade_date)
+            if warnings and strict:
+                raise LedgerError("; ".join(warnings))
+            event_id, _ = self.record("fill", sleeve, trade_date, settle_date=settle, ticker=ticker, quantity=qty,
+                                      price=price, cash=cash, order_id=order_id, source=source,
+                                      source_ref=source_ref, note=note, uid=uid)
         return event_id, warnings
 
     def transfer(self, from_sleeve: str, to_sleeve: str, trade_date, *, ticker: str | None = None,
-                 quantity: float = 0.0, cash: float = 0.0, price: float | None = None, note=None) -> str:
+                 quantity: float = 0.0, cash: float = 0.0, price: float | None = None, note=None,
+                 op_id: str | None = None) -> str:
         """Move shares (at ``price``, for the flow's value) or settled cash between sleeves.
 
         The combined account does not change. Only what the source sleeve really
@@ -175,9 +232,13 @@ class Ledger:
             raise LedgerError("a transfer needs two different sleeves")
         if bool(ticker) == bool(cash):
             raise LedgerError("transfer either shares (ticker, quantity, price) or cash, not both")
-        state = self.state(from_sleeve, trade_date)
         transfer_id = uuid.uuid4().hex
+        out_uid, in_uid = (self._op_uid(op_id, "out"), self._op_uid(op_id, "in")) if op_id else (None, None)
         with transaction(self.con):
+            done = self._retried(op_id, "out", kind="transfer", sleeve=from_sleeve)
+            if done is not None:
+                return self.con.execute("SELECT transfer_id FROM events WHERE id = ?", (done,)).fetchone()[0]
+            state = self.state(from_sleeve, trade_date)
             if ticker:
                 ticker = ticker.upper()
                 if quantity <= 0 or price is None or price <= 0:
@@ -186,25 +247,27 @@ class Ledger:
                     raise LedgerError(f"{from_sleeve} holds {state.positions.get(ticker, 0.0):g} {ticker}, "
                                       f"not {quantity:g}")
                 self.record("transfer", from_sleeve, trade_date, ticker=ticker, quantity=-quantity, price=price,
-                            transfer_id=transfer_id, note=note)
+                            transfer_id=transfer_id, note=note, uid=out_uid)
                 self.record("transfer", to_sleeve, trade_date, ticker=ticker, quantity=quantity, price=price,
-                            transfer_id=transfer_id, note=note)
+                            transfer_id=transfer_id, note=note, uid=in_uid)
             else:
                 if cash <= 0:
                     raise LedgerError("a cash transfer must be positive")
                 if cash > state.cash.available + 0.005:
                     raise LedgerError(f"{from_sleeve} has ${state.cash.available:,.2f} of settled, unreserved cash, "
                                       f"not ${cash:,.2f}; unsettled proceeds cannot move until they settle")
-                self.record("transfer", from_sleeve, trade_date, cash=-cash, transfer_id=transfer_id, note=note)
-                self.record("transfer", to_sleeve, trade_date, cash=cash, transfer_id=transfer_id, note=note)
+                self.record("transfer", from_sleeve, trade_date, cash=-cash, transfer_id=transfer_id, note=note,
+                            uid=out_uid)
+                self.record("transfer", to_sleeve, trade_date, cash=cash, transfer_id=transfer_id, note=note,
+                            uid=in_uid)
         return transfer_id
 
     def reserve(self, sleeve: str, amount: float, kind: str = "order", ref: str | None = None, as_of=None) -> str:
-        state = self.state(sleeve, as_of or now_utc()[:10])
-        if amount > state.cash.available + 0.005:
-            raise LedgerError(f"cannot reserve ${amount:,.2f}: {sleeve} has ${state.cash.available:,.2f} available")
         rid = uuid.uuid4().hex
         with transaction(self.con):
+            state = self.state(sleeve, as_of or now_utc()[:10])
+            if amount > state.cash.available + 0.005:
+                raise LedgerError(f"cannot reserve ${amount:,.2f}: {sleeve} has ${state.cash.available:,.2f} available")
             self.con.execute("INSERT INTO reservations VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
                              (rid, self.account_id, sleeve, kind, amount, ref, now_utc()))
         return rid

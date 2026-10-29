@@ -54,9 +54,24 @@ def server(tmp_path, monkeypatch):
     httpd.shutdown()
 
 
-def _call(base, path, body=None):
+_TOKENS = {}
+
+
+def _token(base):
+    """The write token the server prints into its page, read the way the browser gets it."""
+    if base not in _TOKENS:
+        with urllib.request.urlopen(base + "/", timeout=30) as res:
+            page = res.read().decode()
+        _TOKENS[base] = page.split('name="csrf-token" content="', 1)[1].split('"', 1)[0]
+    return _TOKENS[base]
+
+
+def _call(base, path, body=None, headers=None):
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"})
+    sent = {"Content-Type": "application/json"}
+    if data is not None:
+        sent["X-CSRF-Token"] = _token(base)
+    req = urllib.request.Request(base + path, data=data, headers={**sent, **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=120) as res:
             return res.status, json.loads(res.read())
@@ -245,3 +260,67 @@ def test_a_recorded_buy_shows_in_the_portfolio_with_its_value_but_sgov_does_not(
     assert status == 200 and "SGOV" not in held and set(held) == {"AAA", "BBB"}       # SGOV is never listed
     assert held["AAA"]["units"] == 12 and held["AAA"]["value"] == 1200.0               # 10 held + 2 bought, at 100
     assert p["trades"][0]["ticker"] == "AAA" and p["trades"][0]["quantity"] == 2 and p["bought"] == 180.0
+
+
+def _raw_post(base, path, data: bytes, headers: dict):
+    req = urllib.request.Request(base + path, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as res:
+            return res.status
+    except urllib.error.HTTPError as err:
+        return err.code
+
+
+def test_writes_from_another_site_or_without_the_page_token_are_refused(server):
+    base, tmp_path, _ = server
+    body = json.dumps({"values": {"ai_shortlist": 7}}).encode()
+    token = _token(base)
+    good = {"Content-Type": "application/json", "X-CSRF-Token": token}
+    port = base.rsplit(":", 1)[1]
+    refused = [
+        {**good, "Origin": "https://evil.example"},                         # another site
+        {**good, "Host": "evil.example:" + port},                           # DNS rebinding
+        {**good, "Content-Type": "text/plain"},                             # a form-like simple request
+        {"Content-Type": "application/json"},                               # no token
+        {**good, "X-CSRF-Token": "stale"},                                  # a token from another run
+        {**good, "Sec-Fetch-Site": "cross-site"},
+    ]
+    for path in ("/api/settings", "/api/ledger/contribution", "/api/portfolio", "/api/keys", "/api/decisions/run"):
+        for headers in refused:
+            assert _raw_post(base, path, body, headers) == 403, (path, headers)
+    from tradingagents.ledger.store import Store
+    assert Store(tmp_path).get("global", "ai_shortlist") == 10            # nothing was written
+    assert _raw_post(base, "/api/settings", body, {**good, "Origin": base}) == 200
+    assert _raw_post(base, "/api/settings", b"[1, 2]", good) == 400        # not a JSON object
+
+
+def test_two_identical_manual_fills_are_two_trades_and_a_retry_is_one(server):
+    base, tmp_path, _ = server
+    _call(base, "/api/ledger/contribution", {"amount": 1000, "date": "2026-10-19"})
+    fill = {"sleeve": "trading", "side": "buy", "ticker": "SYNTH", "quantity": 1, "price": 80, "date": "2026-10-19"}
+    s1, a = _call(base, "/api/ledger/fill", fill)
+    s2, b = _call(base, "/api/ledger/fill", fill)
+    assert s1 == s2 == 200 and a["event"] != b["event"] and a["applied"] and b["applied"]
+    s3, again = _call(base, "/api/ledger/fill", {**fill, "op_id": b["op_id"]})
+    assert s3 == 200 and again["event"] == b["event"] and again["applied"] is False
+    books = _call(base, "/api/ledger")[1]["sleeves"]["trading"]
+    assert books["positions"]["SYNTH"]["quantity"] == 2
+    assert _call(base, "/api/ledger/fill", {**fill, "price": "nan"})[0] == 400
+    assert _call(base, "/api/ledger/fill", {**fill, "op_id": "x"})[0] == 400
+
+
+def test_a_cash_edit_is_saved_reloaded_and_must_say_what_it_is(server):
+    base, tmp_path, _ = server
+    state = _call(base, "/api/state")[1]
+    positions = state["portfolio"]["positions"]
+    before = state["cash"]["settled"]
+    status, out = _call(base, "/api/portfolio", {"positions": positions, "cash": before + 1234})
+    assert status == 400 and "correction" in out["error"]
+    assert _call(base, "/api/state")[1]["cash"]["settled"] == before          # refused means nothing saved
+    status, out = _call(base, "/api/portfolio", {"positions": positions, "cash": before + 1234, "cash_mode": "flow"})
+    assert status == 200 and out["saved"]["cash_settled"] == pytest.approx(before + 1234)
+    assert out["cash_change"]["mode"] == "flow"
+    assert _call(base, "/api/state")[1]["cash"]["settled"] == pytest.approx(before + 1234)   # survives a reload
+    status, out = _call(base, "/api/portfolio", {"positions": positions, "cash": before + 1000,
+                                                 "cash_mode": "correction"})
+    assert status == 200 and out["saved"]["cash_settled"] == pytest.approx(before + 1000)

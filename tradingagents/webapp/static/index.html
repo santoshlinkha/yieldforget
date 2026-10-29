@@ -594,7 +594,10 @@ select option { background: var(--surface); color: var(--text); }
           <h3>Holdings</h3>
           <div class="table-wrap"><table class="editor" id="holdings"></table></div>
           <div class="row"><div style="flex:1"><label for="cash">Settled cash (spendable today)</label><input type="number" id="cash" step="0.01" min="0"></div></div>
+          <div class="row" id="cashModeRow" hidden><div style="flex:1"><label for="cashMode">What is the cash change?</label>
+            <select id="cashMode"><option value="">Choose…</option><option value="flow">Money deposited into or withdrawn from the IRA (excluded from performance)</option><option value="correction">A correction: the books were wrong (an audited adjustment)</option></select></div></div>
           <div class="row"><button class="ghost" id="addHolding">Add ticker</button><button id="saveHoldings">Save holdings</button></div>
+          <p class="small" id="holdingsMsg" role="status" aria-live="polite"></p>
         </div>
         <div class="card" id="agentsCard" style="grid-column:1 / -1">
           <h3>Agent models</h3>
@@ -626,6 +629,13 @@ select option { background: var(--surface); color: var(--text); }
 </div>
 
 <script>
+// Every write carries the token the server printed into this page; a page on another site cannot read it.
+const CSRF = document.querySelector('meta[name="csrf-token"]')?.content || "";
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => (opts.method || "GET").toUpperCase() === "POST"
+  ? nativeFetch(url, {...opts, headers: {...(opts.headers || {}), "X-CSRF-Token": CSRF}}) : nativeFetch(url, opts);
+// One id per user action, reused only when the same action is retried, so the books record it once.
+const newOpId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const SERIES = ["--s1", "--s2", "--s3", "--s4"];
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -814,12 +824,19 @@ async function loadPortfolio() {
 $("pfSave").onclick = async () => {
   const ticker = $("pfTicker").value.trim().toUpperCase(), units = +$("pfUnits").value, price = +$("pfPrice").value;
   if (!ticker || !(units > 0) || !(price > 0)) { $("pfMsg").innerHTML = '<span class="neg">Enter a ticker, the units and the price.</span>'; return; }
+  const body = {sleeve: "trading", side: $("pfSide").value, ticker, quantity: units, price, date: $("pfDate").value, broker_record: true, note: "recorded on the Portfolio tab"};
+  // The same trade sent again after a failure is a retry (same id); a new click after a success is a new trade.
+  const key = JSON.stringify(body);
+  if (!fillOp || fillOp.key !== key) fillOp = {key, id: newOpId()};
   try {
-    const r = await api("/api/ledger/fill", {sleeve: "trading", side: $("pfSide").value, ticker, quantity: units, price, date: $("pfDate").value, broker_record: true, note: "recorded on the Portfolio tab"});
-    $("pfMsg").innerHTML = `<span class="pos">Saved: ${esc($("pfSide").value)} ${units} ${esc(ticker)} at ${usd(price)}.</span>` + ((r.warnings || []).length ? ` <span class="muted">${esc(r.warnings.join("; "))}</span>` : "");
+    const r = await api("/api/ledger/fill", {...body, op_id: fillOp.id});
+    fillOp = null;
+    $("pfMsg").innerHTML = (r.applied === false ? `<span class="muted">Already recorded (a retry of the same trade).</span>`
+        : `<span class="pos">Saved: ${esc(body.side)} ${units} ${esc(ticker)} at ${usd(price)}.</span>`) + ((r.warnings || []).length ? ` <span class="muted">${esc(r.warnings.join("; "))}</span>` : "");
     $("pfUnits").value = ""; loadPortfolio(); loadTrade();
-  } catch (e) { $("pfMsg").innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+  } catch (e) { $("pfMsg").innerHTML = `<span class="neg">Not saved: ${esc(e.message)}</span>`; }
 };
+let fillOp = null;
 
 const ZOO_SHORT = {xgb_rank: "XGB (54)", xgb_rank_all: "XGB (all)", lgbm_lambdarank: "LambdaRank", lgbm_regression: "LGBM reg.",
   ridge_pooled: "Ridge", ridge_per_stock: "Ridge per stock", chronos2: "Chronos-2", chronos2_covariates: "Chronos-2 + market",
@@ -1529,7 +1546,9 @@ function readRows(table) {
 const HOLD_COLS = [{key: "ticker", label: "Ticker", type: "text"}, {key: "quantity", label: "Shares", type: "number"}];
 function drawEditors() {
   editorRows($("holdings"), state.portfolio.positions, HOLD_COLS);
-  $("cash").value = state.portfolio.cash ?? 0;
+  $("cash").value = state.cash?.settled ?? 0;
+  $("cashMode").value = "";
+  $("cashModeRow").hidden = true;
   $("groups").innerHTML = Object.entries(state.groups).map(([key, label]) =>
     `<label class="check" style="margin:6px 0"><input type="checkbox" data-group="${key}" ${state.universe.groups.includes(key) ? "checked" : ""}> ${esc(label)}</label>`).join("");
   $("universe").value = state.universe.extra.join(", ");
@@ -1542,11 +1561,25 @@ document.addEventListener("click", e => {
   drawEditors();
 });
 $("addHolding").onclick = () => { state.portfolio.positions = readRows($("holdings")); state.portfolio.positions.push({ticker: "", quantity: 0}); drawEditors(); };
+// A changed cash figure must say what it is: money in or out of the IRA, or a correction of the books.
+$("cash").oninput = () => { $("cashModeRow").hidden = Math.abs((+$("cash").value || 0) - (state.cash?.settled ?? 0)) < 0.005; };
+let holdingsOp = null;
 $("saveHoldings").onclick = async () => {
+  const body = {positions: readRows($("holdings")).filter(r => r.quantity), cash: +$("cash").value || 0,
+                cash_mode: $("cashMode").value || null};
+  const key = JSON.stringify(body);
+  if (!holdingsOp || holdingsOp.key !== key) holdingsOp = {key, id: newOpId()};
+  $("holdingsMsg").textContent = "Saving…";
   try {
-    state.portfolio = {...state.portfolio, positions: readRows($("holdings")).filter(r => r.quantity), cash: +$("cash").value || 0};
-    await api("/api/portfolio", state.portfolio); drawEditors(); loadTrade();
-  } catch (e) { showError(e.message); }
+    const r = await api("/api/portfolio", {...body, op_id: holdingsOp.id});
+    holdingsOp = null;
+    state = await api("/api/state");       // show what the database holds, not what was sent
+    drawEditors(); loadTrade();
+    const c = r.cash_change;
+    $("holdingsMsg").innerHTML = `<span class="pos">✓ Saved.</span> Settled cash is now ${usd(r.saved.cash_settled)}` +
+      (c ? ` (${c.mode === "flow" ? (c.change > 0 ? "deposit" : "withdrawal") : "correction"} of ${usd(Math.abs(c.change))})` : "") +
+      `; ${r.adjustments.length} share adjustment${r.adjustments.length === 1 ? "" : "s"}.`;
+  } catch (e) { $("holdingsMsg").innerHTML = `<span class="neg">Not saved: ${esc(e.message)}</span>`; }
 };
 $("saveUniverse").onclick = async () => {
   const groups = [...document.querySelectorAll("[data-group]")].filter(c => c.checked).map(c => c.dataset.group);

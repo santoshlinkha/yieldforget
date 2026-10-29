@@ -264,10 +264,10 @@ class Store:
     def adjust_holdings(self, wanted: dict[str, float], as_of, sleeve: str = "trading", note: str | None = None) -> list[int]:
         """Bring the account's share counts to ``wanted`` with audited adjustment events: for
         corrections the broker's records cannot supply. Refuses to take a holding below zero."""
-        combined = self.ledger.state(None, as_of).positions
-        own = self.ledger.state(sleeve, as_of).positions
         ids = []
         with transaction(self.con):
+            combined = self.ledger.state(None, as_of).positions
+            own = self.ledger.state(sleeve, as_of).positions
             for t in sorted(set(combined) | set(wanted)):
                 delta = float(wanted.get(t, 0.0)) - combined.get(t, 0.0)
                 if abs(delta) < 1e-9:
@@ -278,6 +278,39 @@ class Store:
                 ids.append(self.ledger.record("adjustment", sleeve, as_of, ticker=t, quantity=delta, source="manual",
                                               note=note or "holdings edited in the app", uid=uuid.uuid4().hex)[0])
         return ids
+
+    CASH_MODES = ("flow", "correction")
+
+    def adjust_cash(self, settled: float, as_of, mode: str, sleeve: str = "trading", note: str | None = None,
+                    op_id: str | None = None) -> dict:
+        """Bring settled cash to ``settled``, saying what the difference is.
+
+        ``mode='flow'``: money really entered or left the IRA, recorded as a contribution or
+        withdrawal (an external flow, so performance excludes it). ``mode='correction'``: the
+        books were wrong, recorded as an audited ``adjustment`` (not a flow, the same as a
+        corrected share count). Returns the event and the canonical saved cash.
+        """
+        if mode not in self.CASH_MODES:
+            raise ValueError(f"say whether the cash change is a deposit/withdrawal ('flow') or a correction, not {mode!r}")
+        if not settled >= 0:
+            raise ValueError("settled cash cannot be negative")
+        event = None
+        with transaction(self.con):
+            delta = round(float(settled) - self.ledger.state(sleeve, as_of).cash.settled, 2)
+            if abs(delta) >= 0.005:
+                if mode == "flow" and delta > 0:
+                    event = self.ledger.contribute(delta, as_of, sleeve=sleeve, note=note or "cash edited in the app",
+                                                   op_id=op_id)
+                elif mode == "flow":
+                    event = self.ledger.withdraw(-delta, as_of, sleeve=sleeve, note=note or "cash edited in the app",
+                                                 op_id=op_id)
+                else:
+                    event = self.ledger.record("adjustment", sleeve, as_of, cash=delta, source="manual",
+                                               note=note or "cash corrected in the app",
+                                               uid=self.ledger._op_uid(op_id) if op_id else uuid.uuid4().hex)[0]
+            cash = self.ledger.state(sleeve, as_of).cash
+        return {"event": event, "change": delta, "mode": mode, "settled": round(cash.settled, 2),
+                "unsettled": round(cash.unsettled, 2), "reserved": round(cash.reserved, 2)}
 
 
 def open_store(folder: str | Path) -> Store:

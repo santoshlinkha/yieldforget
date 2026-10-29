@@ -1,4 +1,5 @@
 import sys
+import uuid
 from enum import StrEnum
 from typing import Annotated
 
@@ -283,7 +284,8 @@ def book_contribute(amount: float, sleeve: str = "trading", day: str = typer.Opt
     from datetime import date
 
     store = _book_store(portfolio)
-    store.ledger.contribute(amount, day or date.today(), sleeve=sleeve, settle_date=settle_date)
+    store.ledger.contribute(amount, day or date.today(), sleeve=sleeve, settle_date=settle_date,
+                            op_id=uuid.uuid4().hex)   # each command is its own deposit
     _export(store, portfolio)
     console.print(f"Recorded a ${amount:,.2f} contribution to {sleeve}.")
 
@@ -300,7 +302,7 @@ def book_fill(side: str, ticker: str, quantity: float, price: float, sleeve: str
 
     store = _book_store(portfolio)
     _, warnings = store.ledger.fill(sleeve, side.lower(), ticker, quantity, price, day or date.today(), fee=fee,
-                                    strict=not broker_record)
+                                    strict=not broker_record, op_id=uuid.uuid4().hex)
     _export(store, portfolio)
     console.print(f"Recorded: {side} {quantity:g} {ticker.upper()} at ${price:,.4f} in {sleeve}.")
     for w in warnings:

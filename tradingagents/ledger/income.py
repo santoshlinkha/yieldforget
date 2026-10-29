@@ -21,7 +21,7 @@ lists where the daily deposit could go instead, with each fund's yield and worst
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -106,7 +106,9 @@ def budget_set_on(store) -> date | None:
     """The day the trading budget was last set (its newest settings-history entry)."""
     row = store.con.execute("SELECT changed_at FROM settings_history WHERE scope = 'capital' AND key = 'trading_budget_usd'"
                             " AND source != 'migration' ORDER BY id DESC LIMIT 1").fetchone()   # the default is not a choice
-    return date.fromisoformat(row[0][:10]) if row else None
+    # changed_at is UTC; trades are dated on this computer's calendar, so compare like with like
+    # (in the evening west of Greenwich the UTC date is already tomorrow).
+    return datetime.fromisoformat(row[0].replace("Z", "+00:00")).astimezone().date() if row else None
 
 
 def budget(store, cache_dir, as_of: date | None = None) -> dict:
