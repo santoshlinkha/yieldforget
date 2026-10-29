@@ -146,3 +146,29 @@ def test_yahoo_tables_become_records_whatever_their_index():
     dated = pd.DataFrame({"Firm": ["X"]}, index=pd.DatetimeIndex(["2026-10-20"], name="GradeDate"))
     assert _records(numbered) == [{"period": "0m", "buy": 18}, {"period": "-1m", "buy": 19}]
     assert _records(dated) == [{"GradeDate": "2026-10-20", "Firm": "X"}]
+
+
+def test_a_file_that_cannot_be_replaced_leaves_its_dates_as_they_were(tmp_path, monkeypatch):
+    import pathlib
+
+    from tradingagents.dataflows import local_store
+
+    days = pd.bdate_range("2026-01-01", "2026-10-30")
+    yahoo, store = FakeYahoo(days), MarketStore(tmp_path)
+    store.bars(["AAA"], yahoo, now=_at(2026, 10, 26, 17))
+    real_replace = pathlib.Path.replace
+
+    def locked(self, target):
+        if str(self).endswith(".tmp"):
+            raise PermissionError("the file is open in another process")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", locked)
+    monkeypatch.setattr(local_store.time, "sleep", lambda s: None)
+    closes = store.bars(["AAA"], yahoo, now=_at(2026, 10, 27, 17))["Close"]["AAA"]
+    meta = store.con.execute("SELECT last_date FROM bars_meta WHERE ticker = 'AAA'").fetchone()[0]
+    assert meta == "2026-10-26" == closes.index[-1].date().isoformat()     # the file and its dates agree
+    assert not list(tmp_path.rglob("*.tmp"))
+    monkeypatch.setattr(pathlib.Path, "replace", real_replace)
+    after = store.bars(["AAA"], yahoo, now=_at(2026, 10, 27, 18))["Close"]["AAA"]
+    assert after.index[-1] == pd.Timestamp("2026-10-27")                   # asked again once the lock is gone

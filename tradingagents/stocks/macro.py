@@ -32,6 +32,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from tradingagents.dataflows.net import get_scrubbed
+
 logger = logging.getLogger(__name__)
 
 URL = "https://api.stlouisfed.org/fred/series/observations"
@@ -65,8 +67,8 @@ def _fetch(series: str, vintages: bool, cache_dir: Path) -> list[dict]:
     rows = []
     for attempt in range(4):
         try:
-            response = requests.get(URL, params=params, timeout=60)
-            response.raise_for_status()
+            # Scrubbed: the key is a query parameter, and requests quotes the whole URL in its errors.
+            response = get_scrubbed(URL, params=params, timeout=60, secret=key)
             rows = [{"date": o["date"], "value": float(o["value"]), "from": o.get("realtime_start")}
                     for o in response.json().get("observations", []) if o["value"] not in (".", "")]
             break

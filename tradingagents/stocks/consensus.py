@@ -60,14 +60,18 @@ def _known_after_day(times: pd.DatetimeIndex, sessions: pd.DatetimeIndex) -> np.
 
 
 def _known_after_close(times: pd.DatetimeIndex, sessions: pd.DatetimeIndex) -> np.ndarray:
-    """Session position from which an earnings report is known: its own day if before 16:00 New York time on a
-    session day, else the next session."""
+    """Session position from which an earnings report is known: its own day if before that session's close
+    (16:00 New York time, 13:00 on a half day), else the next session."""
+    from tradingagents.ledger.sessions import session_close
+
     t = pd.DatetimeIndex(times)
     t = t.tz_convert("America/New_York") if t.tz is not None else t
     days = t.tz_localize(None).normalize() if t.tz is not None else t.normalize()
     pos = sessions.searchsorted(days, side="left")
     same = (pos < len(sessions)) & (sessions[np.minimum(pos, len(sessions) - 1)] == days)
-    return pos + (same & (t.hour >= 16)).astype(int)
+    closes = {d: session_close(d).hour for d in set(days.date)}
+    close_hour = np.array([closes[d] for d in days.date])
+    return pos + (same & (t.hour >= close_hour)).astype(int)
 
 
 def ticker_features(actions: pd.DataFrame, reports: pd.DataFrame, positions: np.ndarray, sessions: pd.DatetimeIndex,

@@ -100,13 +100,16 @@ def _stamp(t: datetime) -> str:
 
 
 def last_final_session(now: datetime | None = None) -> date:
-    """The latest session whose close is final: today after 4:30 pm New York, else the one before."""
-    from tradingagents.ledger.sessions import is_session, previous_session
+    """The latest session whose close is final: today from 30 minutes after its close (4:30 pm New
+    York, 1:30 pm on a half day), else the one before."""
+    from tradingagents.ledger.sessions import is_session, previous_session, session_close
 
     local = (now or _now()).astimezone(NEW_YORK)
     today = local.date()
-    if is_session(today) and (local.hour, local.minute) >= (16, 30):
-        return today
+    if is_session(today):
+        final_at = datetime.combine(today, session_close(today)) + timedelta(minutes=30)
+        if local.replace(tzinfo=None) >= final_at:
+            return today
     return previous_session(today)
 
 
@@ -153,7 +156,9 @@ class MarketStore:
         self._memo[ticker] = (mtime, frame)
         return frame
 
-    def _write(self, ticker: str, frame: pd.DataFrame, full: bool, now: datetime):
+    def _write(self, ticker: str, frame: pd.DataFrame, full: bool, now: datetime) -> bool:
+        """Replace the ticker's file, then record its dates; ``False`` (metadata untouched) when
+        the file could not be replaced, so the next call sees the old dates and asks again."""
         path = self._file(ticker)
         # Several processes may update one ticker at once: each writes its own file, and the
         # rename is retried while Windows has the target open; the last writer wins, and all
@@ -168,6 +173,9 @@ class MarketStore:
                 time.sleep(0.05 * (attempt + 1))
         else:
             tmp.unlink(missing_ok=True)
+            logger.warning("could not replace the cached bars of %s (the file stayed locked); "
+                           "its dates are left as they were", ticker)
+            return False
         now = _stamp(now)
         first = frame.index[0].date().isoformat() if len(frame) else None
         last = frame.index[-1].date().isoformat() if len(frame) else None
@@ -176,6 +184,7 @@ class MarketStore:
             " ON CONFLICT(ticker) DO UPDATE SET first_date = excluded.first_date, last_date = excluded.last_date,"
             " checked_at = excluded.checked_at, full_at = COALESCE(excluded.full_at, bars_meta.full_at)",
             (ticker, first, last, now, now if full else None))
+        return True
 
     def _checked_empty(self, ticker: str, now: datetime):
         self.con.execute("INSERT INTO bars_meta (ticker, checked_at) VALUES (?, ?) ON CONFLICT(ticker)"

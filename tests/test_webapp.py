@@ -324,3 +324,39 @@ def test_a_cash_edit_is_saved_reloaded_and_must_say_what_it_is(server):
     status, out = _call(base, "/api/portfolio", {"positions": positions, "cash": before + 1000,
                                                  "cash_mode": "correction"})
     assert status == 200 and out["saved"]["cash_settled"] == pytest.approx(before + 1000)
+
+
+def test_an_abandoned_run_cannot_overwrite_the_new_runs_progress_or_log():
+    from tradingagents.webapp import server as srv
+
+    gate, wrote = threading.Event(), threading.Event()
+
+    def slow(j):
+        gate.wait(5)
+        j.progress = "old run still talking"
+        j.log.append("old line")
+        j.log += ["old extra"]
+        j.attempts.append({"provider": "old"})
+        j.fraction = 0.99
+        j.say("old run says")
+        wrote.set()
+        return "late"
+
+    job = srv.Job()
+    job.start(slow)
+    job.touched_at -= srv.Job.STUCK_AFTER + 1
+    assert job.stop_waiting()
+    hold = threading.Event()
+    assert job.start(lambda j: (j.say("new run working"), j.log.append("new line"), hold.wait(5), "fresh")[-1])
+    time.sleep(0.05)
+    gate.set()
+    assert wrote.wait(5)
+    s = job.state()
+    assert s["progress"] == "new run working" and s["log"] == ["new line"] and s["attempts"] == []
+    assert s["fraction"] is None and s["running"]
+    hold.set()
+    for _ in range(50):
+        if not job.running:
+            break
+        time.sleep(0.05)
+    assert job.result == "fresh"

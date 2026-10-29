@@ -71,6 +71,7 @@ class Job:
         self.running, self._progress, self.result, self.error, self.log = False, "", None, None, []
         self.attempts, self.events, self.gen, self.fraction = [], [], 0, None
         self.started_at = self.touched_at = 0.0
+        self.switch = threading.Lock()   # held while a run starts or is let go, and while a run writes
 
     @property
     def progress(self) -> str:
@@ -83,25 +84,27 @@ class Job:
         self.events = [*self.events[-7:], {"at": time.strftime("%H:%M:%S"), "text": str(text)[:140]}]
 
     def start(self, work) -> bool:
-        if self.running:
-            return False
-        self.gen += 1
-        gen = self.gen
-        self.running, self.result, self.error, self.log, self.attempts, self.events = True, None, None, [], [], []
-        self.fraction = None
-        self.started_at = time.time()
-        self.progress = "starting"
+        with self.switch:
+            if self.running:
+                return False
+            self.gen += 1
+            gen = self.gen
+            self.running, self.result, self.error, self.log, self.attempts, self.events = True, None, None, [], [], []
+            self.fraction = None
+            self.started_at = time.time()
+            self.progress = "starting"
 
         def run():
             result, error = None, None
             try:
-                result = work(self)
+                result = work(_Run(self, gen))
             except Exception as exc:  # shown on the page rather than lost in a thread
                 logger.exception("background job failed")
                 error = str(exc)
             finally:
-                if gen == self.gen:   # a run the page stopped waiting for never overwrites a newer one
-                    self.result, self.error, self.running = result, error, False
+                with self.switch:
+                    if gen == self.gen:   # a run the page stopped waiting for never overwrites a newer one
+                        self.result, self.error, self.running = result, error, False
 
         threading.Thread(target=run, daemon=True).start()
         return True
@@ -109,10 +112,11 @@ class Job:
     def stop_waiting(self) -> bool:
         """Give up on a run that has made no progress for ``STUCK_AFTER`` seconds. Python cannot kill the thread:
         it may still finish in the background, but its result is ignored and a new run can start."""
-        if not self.running or time.time() - self.touched_at < self.STUCK_AFTER:
-            return False
-        self.gen += 1
-        self.running = False
+        with self.switch:
+            if not self.running or time.time() - self.touched_at < self.STUCK_AFTER:
+                return False
+            self.gen += 1
+            self.running = False
         self.error = (f"stopped waiting after {(time.time() - self.started_at) / 60:.0f} min: no progress since "
                       f"'{self._progress}' for {(time.time() - self.touched_at) / 60:.0f} min (a download or a provider "
                       "never answered). Run it again; if it keeps happening, restart the app.")
@@ -129,6 +133,40 @@ class Job:
                 "elapsed": round(now - self.started_at) if self.started_at else None,
                 "idle": round(now - self.touched_at) if self.running else None,
                 "stuck": bool(self.running and now - self.touched_at >= self.STUCK_AFTER)}
+
+
+class _Run:
+    """What one run's worker sees of its Job. While the run is the Job's current one, reads and
+    writes go to the Job; once the page has stopped waiting for it (and maybe started another),
+    they go to this handle's own copies, so a late worker never overwrites the new run's
+    progress, log or attempts."""
+
+    def __init__(self, job: Job, gen: int):
+        object.__setattr__(self, "_job", job)
+        object.__setattr__(self, "_gen", gen)
+        object.__setattr__(self, "_own", {})
+
+    @property
+    def current(self) -> bool:
+        return self._job.gen == self._gen
+
+    def __getattr__(self, name):
+        if self.current:
+            return getattr(self._job, name)
+        if name not in self._own:
+            value = getattr(self._job, name)
+            self._own[name] = [] if isinstance(value, list) else None if not callable(value) else value
+        return self._own[name]
+
+    def __setattr__(self, name, value):
+        with self._job.switch:
+            if self.current:
+                setattr(self._job, name, value)
+                return
+        self._own[name] = value
+
+    def say(self, text: str):
+        self.progress = text
 
 
 def _finite(value):

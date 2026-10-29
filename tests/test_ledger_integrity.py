@@ -138,3 +138,71 @@ def test_cash_edits_are_saved_and_say_whether_they_are_flows_or_corrections(tmp_
         store.adjust_cash(5.0, MON, "guess")
     reopened = Store(tmp_path)
     assert reopened.ledger.state("trading", MON).cash.settled == pytest.approx(1000.0)
+
+
+def _ny(y, m, d, h, mi=0):
+    import pytz
+    from datetime import datetime
+    return pytz.timezone("America/New_York").localize(datetime(y, m, d, h, mi))
+
+
+def test_half_day_sessions_move_the_order_cutoff_and_the_final_bar():
+    from tradingagents.dataflows.local_store import last_final_session
+    from tradingagents.ledger.recommendations import earliest_execution, session_for
+    from tradingagents.ledger.sessions import early_closes, session_close
+
+    assert {d.isoformat() for d in early_closes(2026)} == {"2026-11-27", "2026-12-24"}   # July 3, 2026 is a holiday
+    assert {d.isoformat() for d in early_closes(2028)} >= {"2028-07-03", "2028-11-24"}
+    assert session_close("2026-11-27").hour == 13 and session_close("2026-11-25").hour == 16
+    # The audit's case: published at 2 pm on the half day after Thanksgiving, with data through the 25th.
+    assert session_for(_ny(2026, 11, 27, 14)) == "2026-11-30"
+    assert earliest_execution("2026-11-25", _ny(2026, 11, 27, 14)) == "2026-11-30"
+    assert session_for(_ny(2026, 11, 27, 12, 44)) == "2026-11-27"
+    assert session_for(_ny(2026, 11, 27, 12, 45)) == "2026-11-30"            # exactly at the cutoff: too late
+    assert session_for(_ny(2026, 11, 25, 15, 44)) == "2026-11-25"
+    assert session_for(_ny(2026, 11, 25, 15, 45)) == "2026-11-27"
+    assert session_for(_ny(2026, 11, 2, 15, 44)) == "2026-11-02"             # the Monday after the DST change
+    assert last_final_session(_ny(2026, 11, 27, 13, 31)).isoformat() == "2026-11-27"
+    assert last_final_session(_ny(2026, 11, 27, 13, 29)).isoformat() == "2026-11-25"
+    assert last_final_session(_ny(2026, 11, 25, 16, 29)).isoformat() == "2026-11-24"
+
+
+def test_a_filing_or_report_after_a_half_day_close_is_known_the_next_session():
+    import numpy as np
+    import pandas as pd
+
+    from tradingagents.stocks import consensus, news_archive
+
+    sessions = pd.DatetimeIndex(["2026-11-25", "2026-11-27", "2026-11-30"])
+    accepted = pd.Series(["2026-11-27T19:00:00Z",      # 2 pm New York on the half day: after its 1 pm close
+                          "2026-11-27T17:30:00Z",      # 12:30 pm: before it
+                          "2026-11-25T20:30:00Z"])     # 3:30 pm on a regular day: before its 4 pm close
+    flags = news_archive.after_close(accepted).tolist()
+    assert flags == [1, 0, 0]
+    known = news_archive.known_session(pd.Series(["2026-11-27", "2026-11-27", "2026-11-25"]), pd.Series(flags), sessions)
+    assert [d.date().isoformat() for d in known] == ["2026-11-30", "2026-11-27", "2026-11-25"]
+    assert news_archive._ny("2026-11-27T19:00:00Z") == ("2026-11-27", 1)
+    times = pd.DatetimeIndex(pd.to_datetime(accepted, utc=True))
+    assert np.array_equal(consensus._known_after_close(times, sessions), [2, 1, 0])
+
+
+def test_a_fred_failure_never_logs_or_raises_the_key(tmp_path, monkeypatch, caplog):
+    import logging
+
+    import requests
+
+    from tradingagents.stocks import macro
+
+    secret = "SYNTHETIC0123456789abcdef"
+    monkeypatch.setenv("FRED_API_KEY", secret)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+
+    def refuse(url, params=None, timeout=None):
+        raise requests.ConnectionError(f"Max retries exceeded with url: {url}?api_key={params['api_key']}")
+
+    monkeypatch.setattr(requests, "get", refuse)
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(requests.ConnectionError) as err:
+        macro._fetch("DFF", False, tmp_path)
+    assert secret not in str(err.value) and secret not in caplog.text
+    assert err.value.__cause__ is None and err.value.__context__ is None or secret not in repr(err.value.__context__)

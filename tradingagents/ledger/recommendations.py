@@ -26,17 +26,18 @@ import subprocess
 import uuid
 import zlib
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 import pytz
 
 from . import price_store
 from .db import now_utc, transaction
-from .sessions import as_date, is_session, next_session, session_on_or_after
+from .sessions import as_date, is_session, next_session, session_close, session_on_or_after
 
 NEW_YORK = pytz.timezone("America/New_York")
-ORDER_CUTOFF = time(15, 45)
+ORDER_CUTOFF = time(15, 45)                 # on a regular day; always CUTOFF_BEFORE_CLOSE before the close
+CUTOFF_BEFORE_CLOSE = timedelta(minutes=15)
 STRATEGY_VERSION = "optimizer-v1"
 
 
@@ -58,9 +59,15 @@ def session_for(published: datetime) -> str:
     """The session a recommendation published at ``published`` is for."""
     local = published.astimezone(NEW_YORK)
     day = local.date()
-    if is_session(day) and local.time() < ORDER_CUTOFF:
+    if is_session(day) and local.time() < order_cutoff(day):
         return day.isoformat()
     return next_session(day).isoformat()
+
+
+def order_cutoff(day) -> time:
+    """The last moment, New York time, to publish for this session: 3:45 pm, or 12:45 pm on a half day."""
+    close = datetime.combine(as_date(day), session_close(day))
+    return (close - CUTOFF_BEFORE_CLOSE).time()
 
 
 def earliest_execution(info_cutoff, published: datetime) -> str:

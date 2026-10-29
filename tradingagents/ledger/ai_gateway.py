@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -245,6 +246,7 @@ class UsageCallback(BaseCallbackHandler):
         self.models = list(dict.fromkeys(models or [(provider, model)]))
         self._started: dict = {}
         self._asked: dict = {}     # run_id -> the model the request named
+        self._lock = threading.Lock()
         self.requests = 0
 
     def _which(self, *names) -> tuple[str, str]:
@@ -263,14 +265,25 @@ class UsageCallback(BaseCallbackHandler):
         params = kwargs.get("invocation_params") or {}
         self._asked[run_id] = params.get("model") or params.get("model_name")
 
+    def _paid(self) -> bool:
+        """Whether any model this job may call costs money (a missing price counts as paid)."""
+        prices = [self.gateway.policy.prices.get(f"{p}/{m}") for p, m in self.models]
+        return any(p is None or p.input or p.output for p in prices)
+
     def _check(self, run_id):
-        left = self.gateway.remaining()
-        # This job's own reservation is in ``reserved``; spending within it is allowed.
-        if min(left["daily_usd"], left["monthly_usd"]) < -self._own_reserved() or \
-                min(left["daily_requests"], left["monthly_requests"]) < 0 - self._own_requests():
-            raise AIBlocked(f"{self.task} reached the AI budget mid-run; stopped before the next request")
-        self.gateway.heartbeat(self.key)
-        self._started[run_id] = time.monotonic()
+        """Claim one request before it is sent. This job's own reservation is inside ``reserved``,
+        so it is added back; requests already sent but not yet answered (parallel analysts) are
+        counted, so the request that would pass the limit is refused, including at exactly the
+        limit. Dollars cannot be known before the answer: a request is refused once nothing is left."""
+        with self._lock:
+            left = self.gateway.remaining()
+            requests_left = min(left["daily_requests"], left["monthly_requests"]) + self._own_requests() \
+                - len(self._started)
+            usd_left = min(left["daily_usd"], left["monthly_usd"]) + self._own_reserved()
+            if requests_left < 1 or (self._paid() and usd_left <= 0):
+                raise AIBlocked(f"{self.task} reached the AI budget mid-run; stopped before the next request")
+            self.gateway.heartbeat(self.key)
+            self._started[run_id] = time.monotonic()
 
     def _own_reserved(self) -> float:
         row = self.gateway.con.execute("SELECT reserved_usd FROM ai_jobs WHERE key = ?", (self.key,)).fetchone()
@@ -291,14 +304,15 @@ class UsageCallback(BaseCallbackHandler):
     def on_llm_end(self, response, *, run_id, **kwargs):
         self.requests += 1
         u = _usage(response)
-        started = self._started.pop(run_id, None)
+        started = self._started.get(run_id)
         # Priced as the model that answered (a run can use a quick and a deep model, on several providers).
         provider, model = self._which(self._asked.pop(run_id, None), u["model"])
         self.gateway.record(self.key, self.task, provider, model, input_tokens=u["input"],
                             output_tokens=u["output"], cached=u["cached"], reasoning=u["reasoning"],
                             latency_ms=int((time.monotonic() - started) * 1000) if started else None)
+        self._started.pop(run_id, None)       # only once recorded: never counted in neither
 
     def on_llm_error(self, error, *, run_id, **kwargs):
-        self._started.pop(run_id, None)
         provider, model = self._which(self._asked.pop(run_id, None))
         self.gateway.record(self.key, self.task, provider, model, status="error", note=str(error)[:300])
+        self._started.pop(run_id, None)

@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from tradingagents.ledger.sessions import session_close
+
 START = "2006-01-01"
 FORMS = ("8-K", "8-K/A")
 PAUSE = 0.15                       # seconds between SEC requests (about 7 a second)
@@ -44,7 +46,8 @@ CREATE TABLE IF NOT EXISTS filings (
     accession TEXT PRIMARY KEY, cik TEXT NOT NULL, ticker TEXT, form TEXT NOT NULL, filed TEXT NOT NULL,
     accepted_at TEXT,                      -- UTC, as SEC states it
     ny_date TEXT,                          -- the New York calendar date of acceptance
-    after_close INTEGER,                   -- 1 when accepted at or after 16:00 New York time
+    after_close INTEGER,                   -- 1 when accepted at or after the close (16:00 New York; 13:00 on a
+                                           -- half day; ``features`` recomputes it from accepted_at)
     items TEXT, primary_doc TEXT, report_date TEXT
 );
 CREATE INDEX IF NOT EXISTS filings_ticker ON filings (ticker, ny_date);
@@ -93,7 +96,17 @@ def _ny(accepted: str) -> tuple[str | None, int | None]:
         return None, None
     t = pd.Timestamp(accepted)
     t = (t.tz_localize("UTC") if t.tzinfo is None else t).tz_convert("America/New_York")
-    return t.date().isoformat(), int(t.hour >= 16)
+    return t.date().isoformat(), int(t.time() >= session_close(t.date()))
+
+
+def after_close(accepted_at: pd.Series) -> pd.Series:
+    """1 when accepted at or after that day's close (1:00 pm on a half day, else 4:00 pm New York), from
+    SEC's UTC acceptance time; missing where the time is."""
+    t = pd.to_datetime(accepted_at, utc=True, errors="coerce").dt.tz_convert("America/New_York")
+    closes = {d: session_close(d) for d in set(t.dt.date.dropna())}
+    flag = pd.Series([None if pd.isna(x) else int(x.time() >= closes[x.date()]) for x in t], index=accepted_at.index,
+                     dtype="Float64")
+    return flag
 
 
 def _rows(block: dict, cik: str, ticker: str) -> list[tuple]:
@@ -193,7 +206,7 @@ def fetch_texts(cache_dir, limit: int = 500, items: tuple[str, ...] | None = ("2
 
 
 def known_session(ny_date: pd.Series, after_close: pd.Series, sessions: pd.DatetimeIndex) -> pd.Series:
-    """The first session whose close comes after the filing: its own date if filed before 16:00 on a session day,
+    """The first session whose close comes after the filing: its own date if filed before that session's close,
     else the next session."""
     d = pd.to_datetime(ny_date)
     pos = sessions.searchsorted(d, side="left")                  # first session on or after the date
@@ -209,8 +222,11 @@ def features(cache_dir, dates: pd.DatetimeIndex, tickers: list[str], sessions: p
     """Per (date, ticker), from filings known by that date's close: 8-Ks in the last 5 and 20 sessions, sessions
     since the last results release (Item 2.02), and executive changes, deals and announcements in the last 60."""
     con = connect(cache_dir)
-    f = pd.read_sql_query("SELECT ticker, ny_date, after_close, items FROM filings WHERE ny_date IS NOT NULL", con)
+    f = pd.read_sql_query("SELECT ticker, ny_date, accepted_at, after_close, items FROM filings"
+                          " WHERE ny_date IS NOT NULL", con)
     f = f[f["ticker"].isin(tickers)]
+    if not f.empty:   # rows saved before half days were known used 16:00 on every day
+        f["after_close"] = after_close(f["accepted_at"]).fillna(f["after_close"].astype("Float64"))
     idx = pd.MultiIndex.from_product([dates, tickers], names=["date", "ticker"])
     cols = ["n8k_5", "n8k_20", "since_results", "exec_change_60", "deal_60", "announce_60"]
     if f.empty:
