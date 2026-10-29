@@ -178,7 +178,12 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .split > .card, .split > div > .card:last-child { margin-bottom: 16px; }
 .split.wide { grid-template-columns: 3fr 2fr; }
 /* Trade page: everything fits its panel. Tables fill their card and wrap; a genuinely wide one scrolls inside it. */
-.trade-top { grid-template-columns: 3fr 2fr; align-items: start; }
+/* Symmetric: two equal columns; in each row the panels share one height (a column's cards fill it together). */
+.trade-top, .trade-bottom { grid-template-columns: 1fr 1fr; align-items: stretch; }
+.trade-top > div { display: flex; flex-direction: column; min-width: 0; }
+.trade-top > div > .card { flex: 1 1 auto; margin-bottom: 16px; }
+.trade-top > div > .card:last-child { margin-bottom: 16px; }
+.trade-bottom > .card { margin-bottom: 16px; height: auto; }
 #today .card, #trend .card { min-width: 0; overflow: hidden; }
 #today .table-wrap, #trend .table-wrap { overflow-x: hidden; }
 #today .table-wrap.scroll-x, #trend .table-wrap.scroll-x { overflow-x: auto; }
@@ -194,7 +199,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .trade-context > summary::-webkit-details-marker { display: none; }
 .trade-context > summary::before { content: "▸"; color: var(--muted); }
 .trade-context[open] > summary::before { content: "▾"; }
-@media (max-width: 900px) { .trade-top { grid-template-columns: 1fr; } #trend .movers { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .trade-top, .trade-bottom { grid-template-columns: 1fr; } #trend .movers { grid-template-columns: 1fr; } }
 .split > * { min-width: 0; }
 #buyBox table, #sellBox table, #budgetBox table, #incBox table { width: 100%; }
 #buyBox th.l { white-space: nowrap; width: 1%; padding-right: 14px; }
@@ -468,7 +473,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       </div>
 
       <!-- 2. How the models are doing. -->
-      <div class="split">
+      <div class="split trade-bottom">
         <div class="card">
           <h3>The model's live record</h3>
           <div id="recordBox" class="small"></div>
