@@ -916,12 +916,9 @@ async function loadPortfolio() {
   let d;
   try { d = await api("/api/portfolio-view"); } catch (e) { $("pfTable").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
   if (!$("pfDate").value) $("pfDate").value = d.as_of;
-  // The account total first, broken down; "stock holdings" is only the stocks (SGOV and cash are separate).
   const ac = d.account || {};
-  $("pfKpis").innerHTML = kpi("Account value", ac.total == null ? "–" : usd(ac.total),
-      `stocks ${usd(ac.stocks || 0)} · ${esc(ac.reserve_fund || "SGOV")} ${usd(ac.reserve_value || 0)} · cash ${usd((ac.cash_settled || 0) + (ac.cash_unsettled || 0))}` +
-      ((ac.missing_prices || []).length ? ` · <span class="neg">no price for ${esc(ac.missing_prices.join(", "))}: total is partial</span>` : ""), "hero") +
-    kpi("Stock holdings value", usd(d.value || 0), `${d.holdings.length} stock${d.holdings.length === 1 ? "" : "s"} at the latest close`) +
+  $("pfKpis").innerHTML = kpi("Stock holdings value", usd(d.value || 0), `${d.holdings.length} stock${d.holdings.length === 1 ? "" : "s"} at the latest close` +
+      ((ac.missing_prices || []).length ? ` · <span class="neg">no price for ${esc(ac.missing_prices.join(", "))}</span>` : ""), "hero") +
     kpi("Cash", usd(ac.cash_available || 0), `available to buy · settled ${usd(ac.cash_settled || 0)} · unsettled ${usd(ac.cash_unsettled || 0)} · reserved ${usd(ac.cash_reserved || 0)}`) +
     kpi("Open cost basis", usd(d.cost || 0), "what the units you hold cost") +
     kpi("Unrealized", `<span class="${d.unrealized >= 0 ? "pos" : "neg"}">${susd(d.unrealized || 0)}</span>`, d.cost ? spct(d.unrealized / d.cost, 1) : "–") +
