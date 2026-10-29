@@ -409,7 +409,8 @@ class App:
             out["policy"] = {"available": False, "note": pv.get("note") or "no decision with the policy model yet"}
         books = self.books()
         market_store = local_store.store(self.cache_dir)
-        out.update({"income": inc, "account": books["sleeves"]["combined"], "job": self.decisions.state(),
+        out.update({"income": inc, "account": books["sleeves"]["combined"],
+                    "job": self._job_or_morning(self.decisions, "Daily decision"),
                     "freshness": {"prices_checked": market_store.bars_checked_at() if market_store else None,
                                   "last_event": books["events"][0]["recorded_at"] if books["events"] else None}})
         return out
@@ -661,6 +662,13 @@ class App:
 
     # --- every morning: the forecasts, every model's scores and the daily decision for the latest close ---
 
+    def _job_or_morning(self, job: Job, prefix: str) -> dict:
+        """A tab's own job, or the morning run while it is doing that tab's work (its progress starts with ``prefix``)."""
+        own = job.state()
+        if own["running"] or not self.morning.running or not str(self.morning.progress).startswith(prefix):
+            return own
+        return {**self.morning.state(), "via": "morning"}
+
     def schedule_state(self) -> dict:
         from tradingagents.ledger.sessions import next_session
 
@@ -733,7 +741,7 @@ class App:
             steps, errors = [], []
 
             def step(name, frac, fn):
-                job.progress, job.fraction = name, frac
+                job.progress, job.fraction = name, max(job.fraction or 0.0, frac)
                 try:
                     out = fn()
                     steps.append({"step": name, "ok": True, **({"reused": True} if isinstance(out, dict)
@@ -761,21 +769,35 @@ class App:
                 root = Path(__file__).resolve().parents[2]
                 if (root / "experiments" / "stacking_study.py").is_file():
                     def stack():
-                        r = subprocess.run([sys.executable, "-m", "experiments.stacking_study"], cwd=root,
-                                           env={**os.environ, "STACKING_SKIP_CHRONOS": "1"}, capture_output=True,
-                                           text=True, timeout=4 * 3600)
-                        if r.returncode:
-                            raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[-1][:300])
+                        proc = subprocess.Popen([sys.executable, "-m", "experiments.stacking_study"], cwd=root,
+                                                env={**os.environ, "STACKING_SKIP_CHRONOS": "1"},
+                                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                        tail = []
+                        for line in proc.stdout:          # "HH:MM:SS step ..." lines: shown as the run's progress
+                            line = line.strip()
+                            if line[:2].isdigit() and line[2:3] == ":":
+                                job.progress = f"Ensemble weights: {line[9:][:120]}"
+                                job.fraction = min((job.fraction or 0.15) + 0.01, 0.39)
+                            tail = (tail + [line])[-5:]
+                        if proc.wait():
+                            raise RuntimeError((tail[-1] if tail else "the ensemble refresh failed")[:300])
                     step(f"Refitting the ensemble's weights (every {every} sessions)", 0.15, stack)
 
+            def within(prefix, lo, hi):
+                """A step's own progress line and fraction, placed in its share of the morning run's bar."""
+                def say(text, frac=None):
+                    if frac is not None:
+                        job.fraction = max(job.fraction or 0.0, lo + (hi - lo) * min(max(float(frac), 0.0), 1.0))
+                    job.progress = f"{prefix}: {text}"
+                return say
+
             def zoo():
-                return model_zoo.run(self.store, self.cache_dir, lambda text, frac=None: setattr(
-                    job, "progress", f"Every model: {text}"))
+                return model_zoo.run(self.store, self.cache_dir, within("Every model", 0.40, 0.75))
             step("Every model's scores (refitted when due)", 0.40, zoo)
 
             def decide():
                 return daily.run(self.store, self.cache_dir, date.today(), "barrier_20", True,
-                                 lambda text, frac=None: setattr(job, "progress", f"Daily decision: {text}"))
+                                 within("Daily decision", 0.75, 1.0))
             step("The daily decision (models refitted when due)", 0.75, decide)
             job.fraction = 1.0
             last = self.store.get("global", "schedule_state") or {}
@@ -1584,7 +1606,8 @@ class App:
         shadow = self.store.con.execute("SELECT as_of, state_json FROM shadow_snapshots ORDER BY id DESC LIMIT 1").fetchone()
         rec = json.loads(shadow["state_json"]).get("record") if shadow else None
         return {"latest": daily.load(self.store.con), "history": daily.history(self.store.con),
-                "shadow": rec, "capital": self.capital_state(), "job": self.decisions.state()}
+                "shadow": rec, "capital": self.capital_state(),
+                "job": self._job_or_morning(self.decisions, "Daily decision")}
 
     def start_decisions(self, body: dict) -> bool:
         from tradingagents.stocks import daily
@@ -1622,7 +1645,7 @@ class App:
         from tradingagents.stocks import model_zoo
 
         run = model_zoo.latest(self.store.con)
-        state = self.zoo.state()
+        state = self._job_or_morning(self.zoo, "Every model")
         if not run:
             return {"available": False, "job": state}
         from tradingagents.model_outputs import OUTPUTS

@@ -512,3 +512,33 @@ def test_the_morning_run_is_due_once_per_close_after_its_time_and_runs_each_step
     app.store.set("global", "schedule", {"enabled": False, "morning_at": "07:30", "retrain_every_sessions": 20})
     monkeypatch.setattr(srv.local_store, "last_final_session", lambda now=None: d(2026, 10, 29))
     assert not app.morning_due(dt(2026, 10, 30, 9, 0))                     # switched off
+
+
+def test_training_inside_the_morning_run_moves_its_bar_and_shows_on_the_models_tab(tmp_path, monkeypatch):
+    from datetime import date as d
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    monkeypatch.setattr(srv.local_store, "last_final_session", lambda now=None: d(2026, 10, 28))
+    import tradingagents.research.engine as engine
+    from tradingagents.stocks import daily, model_zoo
+    seen, gate = {}, threading.Event()
+
+    def zoo(store, cache, say):
+        say("Fitting Mamba", 0.5)
+        seen["fraction"] = app.morning.fraction
+        seen["models_tab"] = app._job_or_morning(app.zoo, "Every model")
+        gate.wait(5)
+        return {}
+    monkeypatch.setattr(engine, "run_forecast", lambda *a, **k: {})
+    monkeypatch.setattr(model_zoo, "run", zoo)
+    monkeypatch.setattr(daily, "run", lambda *a, **k: {"id": "x"})
+    assert app.start_morning()
+    for _ in range(100):
+        if "models_tab" in seen:
+            break
+        time.sleep(0.05)
+    gate.set()
+    assert seen["fraction"] == pytest.approx(0.40 + 0.35 * 0.5)
+    tab = seen["models_tab"]
+    assert tab["running"] and tab["via"] == "morning" and tab["progress"] == "Every model: Fitting Mamba"
+    assert not app._job_or_morning(app.decisions, "Daily decision")["running"]     # not that tab's work

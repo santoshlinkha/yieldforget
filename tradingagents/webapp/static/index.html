@@ -962,7 +962,7 @@ async function loadZoo() {
   try { d = await api("/api/model-zoo"); } catch (e) { $("zooTable").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
   const j = d.job || {};
   $("zooRun").disabled = !!j.running;
-  $("zooStatus").innerHTML = j.running ? jobLine(j, "zoo") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` : "";
+  $("zooStatus").innerHTML = j.running ? (j.via === "morning" ? '<p class="small muted">The morning run is fitting and scoring the models:</p>' : "") + jobLine(j, j.via || "zoo") : j.error ? `<span class="neg">Failed: ${esc(j.error)}</span>` : "";
   if (j.running) setTimeout(loadZoo, 3000);
   if (!d.available) { $("zooMeta").textContent = "No run yet: press Run all models (about 10 minutes)."; $("zooTable").innerHTML = ""; return; }
   zoo = d;
