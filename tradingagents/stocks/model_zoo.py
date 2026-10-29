@@ -419,8 +419,13 @@ def run(store, cache_dir: Path, progress=None, force: bool = False, refit: bool 
                                              "net_sd": round(float(ens["net_sd"][j]), 5),
                                              "net_q10": round(float(ens["net_q10"][j]), 5) if np.isfinite(ens["net_q10"][j]) else None}
     if ens is None:
-        notes["ensemble"] = ("not available: no learned-weight bundle (experiments/stacking_study.py) or it scored "
-                             "nothing; the daily decision falls back to the XGBoost ranker")
+        bundle = ensemble_bundle(cache_dir)
+        missing = [m for m in (bundle or {}).get("members", []) if m not in scores]
+        notes["ensemble"] = (
+            "not available: not trained yet (experiments/stacking_study.py)" if not bundle else
+            f"not scored: it needs all {len(bundle['members'])} of its models and {', '.join(missing)} "
+            f"{'has' if len(missing) == 1 else 'have'} no scores in this run" if missing else
+            "not scored this run") + "; the daily decision falls back to its own XGBoost fit"
     payload = {"version": VERSION, "input_key": input_key, "info_cutoff": str(cutoff.date()), "device": device,
                "train_rows": int(len(train)) if train is not None else None, "fitted_on": fitted_on,
                "refit_every_sessions": every,
