@@ -1166,7 +1166,7 @@ async function loadTrackRecord() {
   let d;
   try { d = await api("/api/track-record"); } catch (e) { $("recPicks").innerHTML = `<tr><td class="neg">${esc(e.message)}</td></tr>`; return; }
   // Net of the estimated round-trip cost first (the cost the verdict uses); raw beside it; then the sample.
-  const s = d.summary, show = x => x.judged ? `${spct(x.avg_net_return ?? x.avg_raw_return)}` : "No trades finished yet";
+  const s = d.summary, show = x => x.judged ? `${spct(x.avg_net_return ?? x.avg_raw_return)}` : "No trades yet";
   const sub = (x, net = true) => x.judged
     ? `${net ? `net of costs · vs SPY ${spct(x.avg_net_vs_spy)} · ` : "direction call, no costs · "}${x.correct} of ${x.judged} beat ${net ? "cost" : "direction"} · ${x.dates} data date${x.dates === 1 ? "" : "s"}${x.net_se_by_date != null ? ` · ±${(x.net_se_by_date * 100).toFixed(1)}% s.e.` : ""}${net ? ` · raw ${spct(x.avg_raw_return)}` : ""}`
     : (x.open ? `${x.open} still open: each finishes 20 sessions after it is bought` : "Nothing bought yet");
@@ -1174,7 +1174,7 @@ async function loadTrackRecord() {
     kpi("Best buy: average net return", show(s.best_buy), sub(s.best_buy), "hero") +
     kpi("All picks: average net return", show(s.all_picks), sub(s.all_picks)) +
     kpi("Policy model: average net return", show(s.policy), sub(s.policy)) +
-    kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "No trades finished yet", sub(s.agents, false));
+    kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "No trades yet", sub(s.agents, false));
   // $1 on each recommendation, followed exactly: finished ones at their 20th close, open ones at the latest close.
   const one = d.one_dollar || {};
   const dollarLine = (label, x) => {
