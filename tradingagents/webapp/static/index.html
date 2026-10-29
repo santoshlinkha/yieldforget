@@ -1073,7 +1073,7 @@ async function loadTrade() {
         allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l"><b>${tk(x.ticker)}</b></td>` +
           `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
-          `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
+          `<td class="l rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
     $("runnersAll").hidden = false;
     const asked = (t.ai_pick || {}).today;       // once a day: the button rests until tomorrow
@@ -1171,10 +1171,8 @@ function agentCell(r, held = false) {
     const [word, tone] = aiWord(r.agent_rating, held);
     h = `<span class="ai-box ${tone}" title="${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}">` +
       `${word} · ${esc(String(r.date || "").slice(5))}</span>`;
-  } else h = '<span class="muted">not run yet</span>';
-  if (lr && lr.status !== "ok" && (!r.available || (lr.as_of || "") >= (r.date || "")))
-    h += `<div class="neg small rn-clip" title="last try ${esc((lr.finished_at || "").slice(0, 10))} failed${lr.why ? ": " + esc(lr.why) : ""}">last try failed${lr.why ? ": " + esc(lr.why) : ""}</div>`;
-  return h;
+  }
+  return h;   // not run (or only failed): blank, so the cell shows just its AI button
 }
 async function runnerAgents(list) {
   for (const x of list) {
