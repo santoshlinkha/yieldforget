@@ -658,8 +658,7 @@ function planSummary(run) {
   const tiles = [
     ["Entry price", entry ? `<b>${entry}</b>${p.entry_type ? `<div class="muted small">${esc(p.entry_type)} order</div>` : ""}` : null],
     ["Exit (sell target)", money2(lv.price_target) ? `<b class="pos">${money2(lv.price_target)}</b>` : null],
-    ["Stop loss", money2(lv.stop_loss) ? `<b class="neg">${money2(lv.stop_loss)}</b>` : null],
-    ["Size", s ? `<b>${money(s.dollars)}</b><div class="muted small">${esc(s.shares)} shares</div>` : null],
+    ["Stop loss", money2(lv.stop_loss) ? `<b class="neg">${money2(lv.stop_loss)}</b>` : `<span class="muted small">not given by the agents</span>`],
     [p.status === "wait" ? "Wait until" : "Entry condition", p.trigger ? bullets(p.trigger) : null, "wide"],
     ["When", p.earliest_execution ? `from ${esc(p.earliest_execution)}` : null],
     ["Valid until", p.expires_at ? esc(p.expires_at) : null]].filter(x => x[1]);
