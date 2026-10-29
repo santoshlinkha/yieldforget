@@ -1162,11 +1162,9 @@ async function renderAlerts(t) {
     text: `${s.action === "EXIT" ? "sell" : "reduce"}${s.execute ? " at the close of " + s.execute : ""}: ${(s.reasons || [])[0] || ""}`}));
   const items = [...entries, ...exits];
   for (const x of items) notifyOnce(`alert:${x.kind}:${x.ticker}:${today}`, `${x.kind === "entry" ? "Entry" : "Exit"}: ${x.ticker}`, x.text);
-  const perm = "Notification" in window ? Notification.permission : "unsupported";
-  $("alertStrip").hidden = !items.length && perm !== "default";
-  $("alertStrip").innerHTML = items.map(x => `<div class="alert-item ${x.kind}"><b>${x.kind === "entry" ? "ENTRY" : "EXIT"}</b> ${tk(x.ticker)} <span>${esc(x.text)}</span></div>`).join("") +
-    (perm === "default" ? `<button class="ghost small-btn" id="alertsOn">🔔 Turn on notifications for entries and exits</button>` : "");
-  if ($("alertsOn")) $("alertsOn").onclick = async () => { await Notification.requestPermission(); renderAlerts(t); };
+  // Only real entries and exits: no prompt here (notifications are turned on from a stock's entry plan bell).
+  $("alertStrip").hidden = !items.length;
+  $("alertStrip").innerHTML = items.map(x => `<div class="alert-item ${x.kind}"><b>${x.kind === "entry" ? "ENTRY" : "EXIT"}</b> ${tk(x.ticker)} <span>${esc(x.text)}</span></div>`).join("");
 }
 async function checkEntryAlerts() {
   let a;
