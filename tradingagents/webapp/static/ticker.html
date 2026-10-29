@@ -1208,8 +1208,7 @@ async function loadSignals() {
       (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
         : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
       `<p class="small" style="margin:10px 0 4px"><b>Context</b> <span class="muted">(shown, does not change the verdict)</span></p><ul class="vchecks">` +
-      (vd.context || []).map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>` +
-      `<p class="small muted">The verdict comes only from the app's own ${vd.model ? vd.model.horizon : 20}-session model, which ranks every S&amp;P 500 stock on how a trade should do after costs. Not held: BUY needs the top fifth, an expected gain after costs, P(profit) ${pct(vd.rules.min_p_win, 0)}+ and P(large loss) ${pct(vd.rules.max_p_risk, 0)} or less; AVOID is the bottom fifth or an expected loss; WATCH is in between. Held: SELL on the daily decision's EXIT/REDUCE or a bottom-fifth rank with an expected loss; otherwise HOLD. The agents' rating is shown but not used. The model is experimental: its ranking showed a small edge in testing, but trading on it did not beat holding SPY.</p></details>`;
+      (vd.context || []).map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>`;
     $("vbadge").innerHTML = `<span class="verdict ${vd.action}" title="${esc(vd.label + ": " + vd.summary)}">${vd.action}${vd.label !== vd.action ? " · model " + esc(vd.verdict) : ""}</span>`;
   }
   if (dec) {
@@ -1222,7 +1221,7 @@ async function loadSignals() {
         `${dec.tied_with ? ` <span class="muted">(${dec.tied_with} other stocks share this estimate: the score-to-P&amp;L map groups stocks in tenths)</span>` : ""}</p>`;
     if (why) h += `<p class="small muted">Why not more: ${esc(why)}</p>`;
   } else {
-    h += `<p class="small muted">${head ? `Not among the candidates or holdings of the decision for ${esc(head.executes)} (data to ${esc(head.data_to)}): only the top-ranked stocks and Trading holdings get an action.`
+    h += `<p class="small muted">${head ? "No action today: only the top-ranked stocks and your Trading holdings get one."
       : "No daily decision made yet: Decisions → Make today's decision."}</p>`;
   }
   const ep = row.entry;
@@ -1230,20 +1229,16 @@ async function loadSignals() {
     const money2 = x => "$" + x.toFixed(2);
     const SHORT = {"Buy at the next close": "Next close", "At the 20-day low": "20-day low"};
     const leg = (label, x, base, cls) => `<div class="${cls}"><span class="nw">${label} ${money2(x)}</span> <span class="nw small">(${spct(x / base - 1, 1)})</span></div>`;
-    h += `<h3 class="sec">Entry plan <span class="muted small" style="font-weight:400">next ${ep.horizon} sessions · last close ${money2(ep.close)}</span></h3>` +
-      `<table class="eplan"><tr><th class="l">Entry</th><th>Buy limit</th><th title="Close-confirmed: sold at the next close; a gap can lose more than the stop">Sell at</th></tr>` +
-      ep.rows.map((r, i) => `<tr><td class="l"><div><b>${esc(SHORT[r.name] || r.name)}</b></div>` +
-        `<div class="small muted" title="Chance the price trades at or below this level (intraday) within the window. A touch is not a fill: a limit there may not execute">${r.chance == null ? "" : i ? `trades there: about ${pct(r.chance, 0)}` : "at the next close"}</div></td>` +
-        `<td><div class="nw"><b>${money2(r.price)}</b></div><div class="small muted">${i ? `<span class="nw">${spct(r.vs_close, 1)}</span> vs close` : "at the close"}</div></td>` +
-        `<td>${leg("stop", r.stop, r.price, "neg")}${leg("target", r.profit, r.price, "pos")}</td></tr>`).join("") + `</table>` +
-      `<p class="small muted">${vd && vd.action === "BUY" ? "The model says BUY: buy at the next close, or place a limit at a dip and accept that it may not fill."
-        : vd && vd.verdict === "BUY" ? "The model's view is BUY but it is not validated (experimental): the action is WAIT; these levels show where a buy would be placed, for reference."
-        : vd && vd.verdict === "AVOID" ? "The model says AVOID: these levels are for reference only."
-        : "The model does not say BUY yet: if you buy anyway, a limit at a dip lowers the price you pay."} ` +
-      `Limit prices come from the stock models: the 20-day low (its chance is the breakdown probability), and the model's median and worst-5% expected dip from today's close. ` +
-      `Each entry's stop-loss and take-profit sit one ${ep.horizon}-session volatility (${pct(ep.sigma_h, 1)}) below and above it, closed at the close, with a ${ep.horizon}-session deadline: the exit rule the decision study tested. Experimental; not validated.</p>`;
+    h += `<h3 class="sec">Entry levels <span class="muted small" style="font-weight:400">last close ${money2(ep.close)}</span></h3>` +
+      `<table class="eplan"><tr><th class="l">Entry</th><th>Buy at</th><th>Stop</th><th>Target</th></tr>` +
+      ep.rows.map((r, i) => `<tr><td class="l"><b>${esc(SHORT[r.name] || r.name)}</b>${i && r.chance != null ? ` <span class="muted small">≈${pct(r.chance, 0)}</span>` : ""}</td>` +
+        `<td><b>${money2(r.price)}</b></td><td class="neg">${money2(r.stop)}</td><td class="pos">${money2(r.profit)}</td></tr>`).join("") + `</table>` +
+      `<p class="small muted">≈ chance the price gets there within ${ep.horizon} sessions. Stop and target are ±${pct(ep.sigma_h, 1)} (one ${ep.horizon}-session volatility). Experimental.</p>`;
   }
-  if (row.policy) h += policyHtml(row.policy);
+  if (row.policy) {   // not validated: one line, what it would choose
+    const pol = row.policy;
+    h += `<p class="small muted"><b>Trade outcome model:</b> ${pol.available === false ? esc(pol.note || "not available") : `not validated; it would choose: ${esc(POL_NAME[pol.model_choice] || pol.model_choice || "–")}`}.</p>`;
+  }
   if (sg && sg.status === "ok") {
     const f = sg.forecast;
     const tp = [["up", f.trend_up], ["down", f.trend_down], ["sideways", f.trend_sideways], ["unclear", f.trend_unclear]];
