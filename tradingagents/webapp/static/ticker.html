@@ -200,6 +200,10 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .plan-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
 .plan-tile .v { font-size: 14px; overflow-wrap: anywhere; }
 .plan-tile.wide .v { font-size: 13px; }
+.plan-list { margin: 2px 0 0; padding-left: 18px; }
+.plan-list li { margin: 2px 0; font-size: 13px; }
+.plan-why { margin-top: 10px; }
+.plan-why .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .stage-final { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
 .stage-final-link { font-weight: 700; font-size: 14px; padding: 6px 12px; border-radius: 8px; text-decoration: none;
   background: var(--accent-soft, #eff4ff); border: 1px solid var(--accent, #2563eb); }
@@ -542,6 +546,20 @@ function aiWord(rating, held = false) {
   const low = String(rating || "").toLowerCase();
   return /^(buy|overweight)$/.test(low) ? "BUY" : /^(sell|underweight)$/.test(low) ? (held ? "SELL" : "AVOID") : held ? "HOLD" : "WATCH";
 }
+// Free text as short points: split at sentence ends, semicolons and numbered parts ("(1)", "2)").
+function points(text) {
+  return String(text || "").replace(/\s+/g, " ").split(/(?<=[.;!?])\s+(?=[A-Z(\d])|\s*;\s*|\s*\(\d+\)\s*|\s+(?=\d\)\s)/)
+    .map(x => x.replace(/^\d\)\s*/, "").replace(/[;.]\s*$/, "").trim()).filter(x => x.length > 2);
+}
+function bullets(text) {
+  const items = points(text);
+  return items.length > 1 ? `<ul class="plan-list">${items.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : esc(text);
+}
+function whyHtml(text) {
+  const items = points(text), head = items.slice(0, 3), rest = items.slice(3);
+  return `<div class="plan-why"><div class="k">Why</div><ul class="plan-list">${head.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` +
+    (rest.length ? `<details class="small"><summary class="muted">${rest.length} more point${rest.length === 1 ? "" : "s"}</summary><ul class="plan-list">${rest.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : "") + `</div>`;
+}
 function planSummary(run) {
   const f = run.final, t = run.trader, row = f || t, p = (row && row.plan) || {}, v = (row && row.validation) || {};
   const s = v.sizing, lv = v.levels || {};
@@ -555,17 +573,14 @@ function planSummary(run) {
     ["Exit (sell target)", money2(lv.price_target) ? `<b class="pos">${money2(lv.price_target)}</b>` : null],
     ["Stop loss", money2(lv.stop_loss) ? `<b class="neg">${money2(lv.stop_loss)}</b>` : null],
     ["Size", s ? `<b>${money(s.dollars)}</b><div class="muted small">${esc(s.shares)} shares</div>` : null],
-    [p.status === "wait" ? "Wait until" : "Entry condition", p.trigger ? esc(p.trigger) : null, "wide"],
+    [p.status === "wait" ? "Wait until" : "Entry condition", p.trigger ? bullets(p.trigger) : null, "wide"],
     ["When", p.earliest_execution ? `from ${esc(p.earliest_execution)}` : null],
     ["Valid until", p.expires_at ? esc(p.expires_at) : null]].filter(x => x[1]);
-  const why = p.rationale ? esc(p.rationale.length > 260 ? p.rationale.slice(0, 260).replace(/\s+\S*$/, "") + "…" : p.rationale) : "";
   return `<div class="plan-sum"><div class="plan-head"><b>${(f && f.action) || (t && t.action) ? aiWord((f && f.action) || t.action) : "–"}</b>` +
-    (v.state ? ` <span class="eplan-state ${esc(v.state)}">${esc(STATE_TEXT[v.state] || v.state)}</span>` : "") +
     ` <span class="muted small">as of ${esc(row.analysis_date)}${tag}</span></div>` +
     (tiles.length ? `<div class="plan-tiles">${tiles.map(([k, x, wide]) => `<div class="plan-tile${wide ? " wide" : ""}"><div class="k">${k}</div><div class="v">${x}</div></div>`).join("")}</div>`
       : `<p class="muted small">No entry plan was given.</p>`) +
-    ((v.blocks || []).length ? `<p class="small neg" style="margin:6px 0 0">${esc(v.blocks[0])}${v.blocks.length > 1 ? ` (+${v.blocks.length - 1} more)` : ""}</p>` : "") +
-    (why ? `<p class="small" style="margin:8px 0 0"><b>Why:</b> ${why}</p>` : "") + `</div>`;
+    (p.rationale ? whyHtml(p.rationale) : "") + `</div>`;
 }
 function planRun(run) {
   return planSummary(run) + `<details class="small" style="margin-top:6px"><summary class="muted">Details</summary>${planDetail(run)}</details>`;
