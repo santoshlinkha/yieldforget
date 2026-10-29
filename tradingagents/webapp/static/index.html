@@ -206,6 +206,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .trade-bottom > .card { margin-bottom: 16px; height: auto; }
 #sellBox .sell-fit { width: 100%; table-layout: fixed; }
 #sellBox .sell-fit th, #sellBox .sell-fit td { padding-left: 6px; padding-right: 6px; }
+#sellBox .sell-fit th { white-space: nowrap; overflow: hidden; text-overflow: clip; }
 #sellBox .sell-fit td.l.small { white-space: normal; }
 .trend-row { grid-template-columns: 1fr 1fr; align-items: stretch; }
 .trend-row > .card { margin-bottom: 16px; min-width: 0; }
@@ -467,7 +468,6 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       <div class="brand">
         <img class="mark" src="/favicon.svg" alt="" width="30" height="30">
         <div><h1 class="wordmark"><span>Alpha</span>Desk</h1></div>
-        <span class="acct">Roth IRA</span>
       </div>
       <nav role="tablist">
         <button role="tab" data-tab="today" aria-selected="true">Trade</button>
@@ -957,17 +957,18 @@ async function loadTrade() {
        <tr><th class="l">Entry</th><td><b>at the close of ${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever that close is <span class="muted">(the policy the model was tested on; no limit price)</span></td></tr>
        <tr><th class="l">Allowed size</th><td><b>${usd(x.dollars || 0)}</b>${x.dollars ? ` <span class="muted">≈ ${(+x.shares).toFixed(4)} shares at the reference close</span>` : ""}<div class="muted small">${esc(sz.basis || "")}${sz.budget_usd != null ? ` · trading budget ${usd(sz.budget_usd)}` : ""}${sz.cap_usd != null ? ` · cap per name ${usd(sz.cap_usd)}` : ""}</div></td></tr>
        <tr><th class="l">Reference close</th><td>${usd(x.last_close)} <span class="muted">on ${esc(x.reference_date || t.data_to)} (not an order price)</span></td></tr>
-       <tr><th class="l">Sell at target</th><td class="pos">${spct(x.target_pct, 1)} from the fill <span class="muted">(${usd(x.target)} if filled at the reference close)</span></td></tr>
-       <tr><th class="l">Sell at stop</th><td class="neg">${spct(x.stop_pct, 1)} from the fill <span class="muted">(${usd(x.stop)} if filled at the reference close)</span></td></tr>
+       <tr><th class="l">Sell target</th><td class="pos">${spct(x.target_pct, 1)} from the fill <span class="muted">(${usd(x.target)} if filled at the reference close)</span></td></tr>
+       <tr><th class="l">Stop loss</th><td class="neg">${spct(x.stop_pct, 1)} from the fill <span class="muted">(${usd(x.stop)} if filled at the reference close)</span></td></tr>
        <tr><th class="l">Or sell by</th><td>${x.horizon} sessions after buying, whichever comes first (each checked on a close)</td></tr></table>` +
       (x.patient ? `<details class="small" style="margin-top:6px"><summary>Untested alternative: a patient limit</summary><p class="muted">Limit ${usd(x.patient.price)}, the signal model's median expected dip: about an even chance the price trades there within ${x.horizon} sessions, which is not the chance of a fill. Returns after such fills were never evaluated. Stop ${usd(x.patient.stop)}, target ${usd(x.patient.target)}.</p></details>` : "")
       : "") + (t.notes || []).map(n => `<div class="note">${esc(n)}</div>`).join("");
-    // Net $: the profit or loss so far in dollars (shares × (last close − your fill)), before the sale's cost.
+    // Net: the profit or loss so far in dollars (shares × (last close − your fill)), before the sale's cost.
     const netCell = s => {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
       return v == null ? "<td>–</td>" : `<td class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
     };
-    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net $</th><th>Sell at target</th><th>Sell at stop</th><th>Deadline</th></tr>` +
+    $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:13%"><col style="width:17%"><col style="width:14%"><col style="width:12%"><col style="width:16%"><col style="width:14%"><col style="width:14%"></colgroup>` +
+      `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th>Sell target</th><th>Stop loss</th><th>Deadline</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td class="${ACT[s.action] || ""}"><b>${s.action === "EXIT" ? "SELL" : esc(s.action)}</b>${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
         <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td>${esc(s.deadline || "–")}</td></tr>
         <tr><td></td><td colspan="6" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
@@ -975,9 +976,9 @@ async function loadTrade() {
     // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
     $("runnersTable").className = "compact runners";
     $("runnersTable").innerHTML = t.runners_up.length
-      ? `<colgroup><col style="width:21%"><col style="width:14%"><col style="width:15%"><col style="width:12%"><col style="width:12%"><col style="width:26%"></colgroup>` +
+      ? `<colgroup><col style="width:19%"><col style="width:12%"><col style="width:15%"><col style="width:15%"><col style="width:14%"><col style="width:25%"></colgroup>` +
         `<tr><th class="l">Ticker</th><th class="num" title="What the decision's sizing rule allows on today's budget">Size</th><th class="num" title="The reference close (not an order price): the buy is at the next close">Last close</th>` +
-        `<th class="num" title="Sell when a close reaches this far above the fill">Target</th><th class="num" title="Sell when a close falls this far below the fill">Stop</th><th class="l">AI agents</th></tr>` +
+        `<th class="num" title="Sell when a close reaches this far above the fill">Sell target</th><th class="num" title="Sell when a close falls this far below the fill">Stop loss</th><th class="l">AI agents</th></tr>` +
         t.runners_up.map(x => `<tr><td class="l"><span class="rn-tk"><b>${tk(x.ticker)}</b><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></span></td>` +
           `<td class="num" title="${esc(x.size?.basis || "")}">${usd(x.dollars || 0)}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
