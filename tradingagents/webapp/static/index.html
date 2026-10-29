@@ -226,10 +226,17 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .live-steps li { margin: 2px 0; }
 /* One verdict badge on every page: filled, no border; BUY green, WATCH amber, HOLD blue, SELL / AVOID red. */
 .vb, .ai-box, .ai-call { border: 0 !important; }
-.vb.BUY, .ai-box.BUY, .ai-call.BUY { color: #fff; background: #059669; }
-.vb.WATCH, .ai-box.WATCH, .ai-call.WATCH, .vb.REVIEW { color: #422006; background: #fbbf24; }
-.vb.HOLD, .ai-box.HOLD, .ai-call.HOLD { color: #fff; background: #2563eb; }
-.vb.SELL, .vb.AVOID, .ai-box.SELL, .ai-box.AVOID, .ai-call.SELL, .ai-call.AVOID { color: #fff; background: #dc2626; }
+.vb.BUY, .ai-box.BUY, .ai-call.BUY { color: #047857; background: #ecfdf5; }
+.vb.WATCH, .ai-box.WATCH, .ai-call.WATCH, .vb.REVIEW { color: #92400e; background: #fffbeb; }
+.vb.HOLD, .ai-box.HOLD, .ai-call.HOLD { color: #334155; background: #f1f5f9; }
+.vb.SELL, .vb.AVOID, .ai-box.SELL, .ai-box.AVOID, .ai-call.SELL, .ai-call.AVOID { color: #b91c1c; background: #fef2f2; }
+.vb, .ai-box, .ai-call { font-weight: 600 !important; letter-spacing: .02em !important; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .vb.BUY, :root:not([data-theme="light"]) .ai-box.BUY, :root:not([data-theme="light"]) .ai-call.BUY { color: #6ee7b7; background: #052e22; }
+  :root:not([data-theme="light"]) .vb.WATCH, :root:not([data-theme="light"]) .ai-box.WATCH, :root:not([data-theme="light"]) .ai-call.WATCH { color: #fcd34d; background: #2e2205; }
+  :root:not([data-theme="light"]) .vb.HOLD, :root:not([data-theme="light"]) .ai-box.HOLD, :root:not([data-theme="light"]) .ai-call.HOLD { color: #cbd5e1; background: #1e293b; }
+  :root:not([data-theme="light"]) .vb.SELL, :root:not([data-theme="light"]) .vb.AVOID, :root:not([data-theme="light"]) .ai-box.SELL,
+  :root:not([data-theme="light"]) .ai-box.AVOID, :root:not([data-theme="light"]) .ai-call.SELL, :root:not([data-theme="light"]) .ai-call.AVOID { color: #fca5a5; background: #2e0909; } }
 .vb.ABSTAIN { color: var(--text); background: var(--border); }
 
 .note-fold > summary { font-size: 13px; }

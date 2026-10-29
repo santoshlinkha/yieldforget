@@ -175,10 +175,16 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } button { transition: none; } }
 .verdict { display: inline-flex; align-items: center; font-size: 13px; font-weight: 700; letter-spacing: .06em; padding: 4px 12px;
   border-radius: 999px; border: 0; }
-.verdict.BUY { color: #fff; background: #059669; }
-.verdict.SELL, .verdict.AVOID { color: #fff; background: #dc2626; }
-.verdict.HOLD { color: #fff; background: #2563eb; }
-.verdict.WATCH, .verdict.WAIT { color: #422006; background: #fbbf24; }
+.verdict.BUY { color: #047857; background: #ecfdf5; }
+.verdict.SELL, .verdict.AVOID { color: #b91c1c; background: #fef2f2; }
+.verdict.HOLD { color: #334155; background: #f1f5f9; }
+.verdict.WATCH, .verdict.WAIT { color: #92400e; background: #fffbeb; }
+.verdict { font-weight: 600 !important; letter-spacing: .02em !important; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .verdict.BUY { color: #6ee7b7; background: #052e22; }
+  :root:not([data-theme="light"]) .verdict.SELL, :root:not([data-theme="light"]) .verdict.AVOID { color: #fca5a5; background: #2e0909; }
+  :root:not([data-theme="light"]) .verdict.HOLD { color: #cbd5e1; background: #1e293b; }
+  :root:not([data-theme="light"]) .verdict.WATCH, :root:not([data-theme="light"]) .verdict.WAIT { color: #fcd34d; background: #2e2205; } }
 .eplan-state { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .05em; padding: 1px 8px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent); text-transform: uppercase; }
 .eplan-state.blocked, .eplan-state.expired { color: var(--sell); background: color-mix(in srgb, var(--sell) 12%, transparent); }
@@ -231,7 +237,7 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .plan-kv td.muted { width: 42%; }
 #eplan ul { margin: 4px 0 4px 18px; padding: 0; }
 .verdict.ABSTAIN { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
-.verdict.big { font-size: 20px; padding: 6px 18px; }
+.verdict.big { font-size: 15px; padding: 3px 12px; }
 .vbox { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--surface-2); margin-bottom: 12px; }
 .vbox .why { font-size: 13.5px; flex: 1; min-width: 200px; }
