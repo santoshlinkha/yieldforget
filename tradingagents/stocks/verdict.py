@@ -173,13 +173,11 @@ def rating_on_record(entry: dict) -> dict:
 
 
 def ai_decision(rating: dict, held: bool) -> dict:
-    """The agents' rating as an action: Buy / Overweight -> BUY, Hold -> HOLD, Underweight / Sell -> SELL
-    when held (AVOID when not), with the rating's age; ABSTAIN when the analysis said the evidence was
+    """The agents' rating as an action: Buy / Overweight -> BUY, Hold -> HOLD when held (WATCH when not),
+    Underweight / Sell -> SELL, with the rating's age; ABSTAIN when the analysis said the evidence was
     insufficient. Shown as the agents' view; it decides nothing."""
     r = rating.get("rating")
     action = "ABSTAIN" if rating.get("abstained") else AI_DECISIONS.get(r, "REVIEW")
-    if action == "SELL" and not held:
-        action = "AVOID"
     if action == "HOLD" and not held:
         action = "WATCH"
     try:

@@ -501,6 +501,11 @@ function planCheck(v) {
   return h;
 }
 // The plan in a few lines: what to do, at what price, when, the exits and the size. The rest is under Details.
+// The agents' rating as a plain call: BUY, HOLD (held) or WATCH, SELL.
+function aiWord(rating, held = false) {
+  const low = String(rating || "").toLowerCase();
+  return /^(buy|overweight)$/.test(low) ? "BUY" : /^(sell|underweight)$/.test(low) ? "SELL" : held ? "HOLD" : "WATCH";
+}
 function planSummary(run) {
   const f = run.final, t = run.trader, row = f || t, p = (row && row.plan) || {}, v = (row && row.validation) || {};
   const s = v.sizing, lv = v.levels || {};
@@ -516,7 +521,7 @@ function planSummary(run) {
     ["Size", s ? `${money(s.dollars)} <span class="muted">(${esc(s.shares)} shares)</span>` : null],
     ["Expires", p.expires_at ? esc(p.expires_at) : null]].filter(([, x]) => x);
   const why = p.rationale ? esc(p.rationale.length > 220 ? p.rationale.slice(0, 220).replace(/\s+\S*$/, "") + "…" : p.rationale) : "";
-  return `<div class="plan-sum"><div class="plan-head"><b>${esc((f && f.action) || (t && t.action) || "–")}</b>` +
+  return `<div class="plan-sum"><div class="plan-head"><b>${(f && f.action) || (t && t.action) ? aiWord((f && f.action) || t.action) : "–"}</b>` +
     (v.state ? ` <span class="eplan-state ${esc(v.state)}">${esc(STATE_TEXT[v.state] || v.state)}</span>` : "") +
     ` <span class="muted small">as of ${esc(row.analysis_date)}${tag}</span></div>` +
     (lines.length ? `<table class="plan-kv">${lines.map(([k, x]) => `<tr><td class="l muted">${k}</td><td class="l">${x}</td></tr>`).join("")}</table>` : "") +
@@ -1252,7 +1257,7 @@ async function pollAnalysis(first) {
   }
   else if (j.result && j.result.ticker === symbol) {
     $("agState").innerHTML = (j.result.final ? `Final decision: <span class="verdict ${j.result.final.action}">${j.result.final.action}</span> · ` : "") +
-      `agents' rating <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +
+      `the agents' call <b>${aiWord(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +
       ` (${j.result.how === "reused" ? "already analyzed with the same inputs: not re-run" : j.result.how === "cache" ? "reused, no charge" : "paid"}${j.result.fell_back ? "; earlier providers failed, so this one ran it" : ""}). The reports are below.<br>${tries(j.result.attempts)}`;
     if (!first) { load(); loadSignals(); }
   }
@@ -1280,7 +1285,7 @@ $("mpSave").onclick = async () => {
   $("mpState").textContent = "Reading the answer…";
   try {
     const r = await getJSON("/api/manual-answer", {ticker: symbol, date: $("agDate").value, text: $("mpAnswer").value, source: $("mpSource").value});
-    $("mpState").innerHTML = `Final decision: <span class="verdict ${r.final.action}">${r.final.action}</span> · rating ${esc(r.rating)}` +
+    $("mpState").innerHTML = `Final decision: <span class="verdict ${r.final.action}">${r.final.action}</span> · the agents' call ${aiWord(r.rating)}` +
       (r.trader && r.trader.entry_price != null ? ` · trader: ${esc(r.trader.action || "")} at ${esc(r.trader.entry_price)}${r.trader.stop_loss != null ? `, stop ${esc(r.trader.stop_loss)}` : ""}` : "") +
       (r.note ? ` <span class="muted">(${esc(r.note)})</span>` : "") + ". Saved under the reports below.";
     $("mpAnswer").value = "";

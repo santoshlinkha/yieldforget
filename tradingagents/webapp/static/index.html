@@ -1137,14 +1137,21 @@ async function loadAgentReport() {
 }
 // The agents' latest call on a stock: their own rating and what it means as an action, the day it was for and the
 // model that ran it; a later run that failed is said under it (the reason in a few words).
-function agentCell(r) {
+// The agents' rating as a plain call (as stocks.verdict.ai_decision): Buy and Overweight are BUY, Hold is HOLD when you
+// hold the stock and WATCH when you do not, Underweight and Sell are SELL.
+function aiWord(rating, held) {
+  const low = String(rating || "").toLowerCase();
+  if (/^(buy|overweight)$/.test(low)) return ["BUY", "good"];
+  if (/^(sell|underweight)$/.test(low)) return ["SELL", "bad"];
+  return [held ? "HOLD" : "WATCH", "mid"];
+}
+function agentCell(r, held = false) {
   const lr = r.last_run, short = m => String(m || "").split("/").pop().replace(":free", "");
   let h = "";
   if (r.available) {
-    const rating = String(r.agent_rating || ""), low = rating.toLowerCase();
-    const tone = /^(buy|overweight)$/.test(low) ? "good" : /^(sell|underweight)$/.test(low) ? "bad" : "mid";
-    h = `<span class="ai-box ${tone}" title="${esc(rating)}${r.agent_action ? " → " + esc(r.agent_action) : ""} · ${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}">` +
-      `${esc(rating || "saved")} · ${esc(String(r.date || "").slice(5))}</span>`;
+    const [word, tone] = aiWord(r.agent_rating, held);
+    h = `<span class="ai-box ${tone}" title="${esc(r.date)}${r.agent_models ? " · " + esc(short(r.agent_models)) : ""}">` +
+      `${word} · ${esc(String(r.date || "").slice(5))}</span>`;
   } else h = '<span class="muted">not run yet</span>';
   if (lr && lr.status !== "ok" && (!r.available || (lr.as_of || "") >= (r.date || "")))
     h += `<div class="neg small rn-clip" title="last try ${esc((lr.finished_at || "").slice(0, 10))} failed${lr.why ? ": " + esc(lr.why) : ""}">last try failed${lr.why ? ": " + esc(lr.why) : ""}</div>`;
@@ -1156,12 +1163,12 @@ async function runnerAgents(list) {
     try {
       const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
       cells.forEach(c => { c.innerHTML = agentCell(r); });
-      const low = String(r.agent_rating || "").toLowerCase(), today = r.available && r.date === agentDay;
-      const call = !today ? null : /^(buy|overweight)$/.test(low) ? ["BUY", "good"] : /^(sell|underweight)$/.test(low) ? ["SELL", "bad"] : ["HOLD", "mid"];
+      const today = r.available && r.date === agentDay;
+      const call = today && r.agent_rating ? aiWord(r.agent_rating, true) : null;      // the Sell table: stocks you hold
       document.querySelectorAll(`[data-aicall="${x.ticker}"]`).forEach(b => {
         b.textContent = call ? call[0] : "AI";
         b.className = "ai-call" + (call ? " " + call[1] : "");
-        b.title = call ? `The agents: ${r.agent_rating} on ${r.date} (click to read or run again)` : `Run the AI agents on ${x.ticker}`;
+        b.title = call ? `The agents' call on ${r.date} (click to run again)` : `Run the AI agents on ${x.ticker}`;
       });
     } catch (e) { cells.forEach(c => { c.textContent = "–"; }); }
   }
@@ -1539,8 +1546,8 @@ async function loadTrackRecord() {
       `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No suggestion from the second model saved yet.</td></tr>";
   $("recAgents").innerHTML = d.agents.length ? "<tr><th class='l'>As of</th><th class='l'>Stock</th><th class='l'>Rating</th><th>Return</th><th class='l'>Result</th></tr>" +
-    d.agents.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b></td><td class="l">${esc(r.rating)}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td>` +
-      `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td></tr>`).join("")
+    d.agents.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b></td><td class="l"><span class="ai-box ${aiWord(r.rating, false)[1]}">${aiWord(r.rating, false)[0]}</span></td><td>${r.return == null ? "–" : spct(r.return, 1)}</td>` +
+      `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">WATCH: not judged</span>' : verdict(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No AI agent rating saved yet.</td></tr>";
   // Rows can no longer be hidden; any hidden earlier can be shown again.
   $("recHidden").innerHTML = d.hidden ? `${d.hidden} row(s) were hidden earlier. <a href="#" id="recRestore">Show them</a>` : "";
@@ -2033,7 +2040,7 @@ function aiRender() {
         <td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.name || "")}</span></td>
         <td class="l muted small">${esc(r.why)}${r.held ? " · held" : ""}</td>
         <td>${ai ? `<span class="vb ${ai.action}">${ai.action}</span>` : "<span class='muted small'>not run</span>"}</td>
-        <td class="l small">${ai ? `<a href="/ticker/${encodeURIComponent(r.ticker)}#report=${esc(ai.date)}" target="_blank" rel="noopener" title="Agents' rating: ${esc(ai.rating)}">Final decision, ${esc(ai.date)}</a>${ai.stale ? " <span class='muted'>(stale)</span>" : ""}` : "–"}</td>
+        <td class="l small">${ai ? `<a href="/ticker/${encodeURIComponent(r.ticker)}#report=${esc(ai.date)}" target="_blank" rel="noopener" title="The agents' call">Final decision, ${esc(ai.date)}</a>${ai.stale ? " <span class='muted'>(stale)</span>" : ""}` : "–"}</td>
         <td title="${esc(r.verdict_summary || "")}">${r.verdict ? `<span class="vb ${r.verdict}">${r.verdict}</span>` : "–"}</td>
         <td class="${agree === "✓" ? "pos" : agree === "✗" ? "neg" : "muted"}">${agree}</td></tr>`;
     }).join("") : "<tr><td colspan='7' class='muted l'>Nothing to list: no holdings, no BUY verdicts and no daily decision yet.</td></tr>");

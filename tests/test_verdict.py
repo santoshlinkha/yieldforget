@@ -46,7 +46,7 @@ def test_the_agents_rating_becomes_an_action_for_display():
     today = date.today().isoformat()
     assert ai_decision({"rating": "Overweight", "date": today}, held=False)["action"] == "BUY"
     assert ai_decision({"rating": "Underweight", "date": today}, held=True)["action"] == "SELL"
-    assert ai_decision({"rating": "Underweight", "date": today}, held=False)["action"] == "AVOID"
+    assert ai_decision({"rating": "Underweight", "date": today}, held=False)["action"] == "SELL"
     assert ai_decision({"rating": "Hold", "date": today}, held=False)["action"] == "WATCH"
     assert ai_decision({"rating": "Hold", "date": "2020-01-02"}, held=True)["stale"]
 
