@@ -556,7 +556,6 @@ select option { background: var(--surface); color: var(--text); }
         <div class="table-wrap"><table id="recAgents" class="compact"></table></div><div id="recAgentsMore"></div>
       </div>
       <p class="muted small" id="recHidden"></p>
-      <div class="undo-bar" id="recUndo" hidden></div>
     </section>
 
     <section class="tab" id="forecasts">
@@ -1074,19 +1073,6 @@ $("schRun").onclick = async () => {
 };
 
 // --- track record: were the picks and the agents' calls right? ---
-let undoTimer = null;
-function showUndo(text, key) {
-  const bar = $("recUndo");
-  bar.innerHTML = `<span>${esc(text)}</span>` + (key ? ` <button class="ghost small-btn" id="recUndoBtn">Undo</button>` : "");
-  bar.hidden = false;
-  clearTimeout(undoTimer);
-  undoTimer = setTimeout(() => { bar.hidden = true; }, 10000);
-  if (key) $("recUndoBtn").onclick = async () => {
-    bar.hidden = true;
-    await api("/api/track-record/unhide", {key});
-    loadTrackRecord();
-  };
-}
 // The cumulative value of $1 on each recommendation, every group on one axis, normalized: worth per $1 put in, so
 // groups with different numbers of picks compare directly (1.00 = break-even). Colours follow the group.
 const CURVE_KINDS = [["best_buy", "Best buy", "--cv-1"], ["all_picks", "Every pick", "--cv-2"],
@@ -1151,17 +1137,16 @@ function drawCurve(one) {
     dates.slice().reverse().map(d => `<tr><td class="l">${esc(d)}</td>${series.map(s => { const p = at[s.k][d];
       return p ? `<td><b>${usd(p.per)}</b> <span class="muted small">${usd(p.value)} / ${usd(p.invested)}</span></td>` : "<td class='muted'>–</td>"; }).join("")}</tr>`).join("");
 }
-// Each table shows its latest 5 data dates; "Load more" adds 5 more.
-const recDays = {picks: 5, policy: 5, agents: 5};
-function recentDays(rows, n) {
-  const days = [...new Set(rows.map(r => r.data_to))].sort().reverse();
-  const keep = new Set(days.slice(0, n));
-  return {rows: rows.filter(r => keep.has(r.data_to)), more: Math.max(0, days.length - n)};
+// Each table shows its first 20 rows (newest first); "Show more" adds 20.
+const REC_STEP = 20;
+const recRows = {picks: REC_STEP, policy: REC_STEP, agents: REC_STEP};
+function firstRows(rows, n) {
+  return {rows: rows.slice(0, n), more: Math.max(0, rows.length - n)};
 }
 function moreButton(id, key, more) {
-  $(id).innerHTML = more ? `<button class="ghost small-btn" data-recmore="${key}">Load more (${more} earlier day${more === 1 ? "" : "s"})</button>` : "";
+  $(id).innerHTML = more ? `<button class="ghost small-btn" data-recmore="${key}">Show more (${Math.min(more, REC_STEP)} of ${more} more row${more === 1 ? "" : "s"})</button>` : "";
   const b = $(id).querySelector("button");
-  if (b) b.onclick = () => { recDays[key] += 5; loadTrackRecord(); };
+  if (b) b.onclick = () => { recRows[key] += REC_STEP; loadTrackRecord(); };
 }
 async function loadTrackRecord() {
   let d;
@@ -1191,37 +1176,30 @@ async function loadTrackRecord() {
     dollarLine("Policy model's picks", one.policy) + dollarLine("AI agents' Buy calls", one.agents_buys);
   drawCurve(one);
   $("recRule").textContent = `${d.outcome ? d.outcome[0].toUpperCase() + d.outcome.slice(1) + ". " : ""}Beat cost: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade). Overlapping holds are not independent: the sample is the number of data dates, not of rows.`;
-  const del = r => `<td><button class="ghost small-btn rec-del" data-key="${esc(r.key)}" title="Hide this row (the saved decision is kept; Show hidden rows brings it back)" aria-label="Hide row">Hide</button></td>`;
   const verdict = r => r.verdict === "correct" ? `<span class="pos"><b>✓ ${r.rating ? "right direction" : "beat cost"}</b></span>` : r.verdict === "wrong" ? `<span class="neg"><b>✗ ${r.rating ? "wrong direction" : "below cost"}</b></span>`
     : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
   const allPicks = d.picks, allPolicy = d.policy || [], allAgents = d.agents;
-  const pk = recentDays(allPicks, recDays.picks), po = recentDays(allPolicy, recDays.policy), ag = recentDays(allAgents, recDays.agents);
+  const pk = firstRows(allPicks, recRows.picks), po = firstRows(allPolicy, recRows.policy), ag = firstRows(allAgents, recRows.agents);
   d = {...d, picks: pk.rows, policy: po.rows, agents: ag.rows};
   moreButton("recPicksMore", "picks", pk.more); moreButton("recPolicyMore", "policy", po.more); moreButton("recAgentsMore", "agents", ag.more);
-  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th><th></th></tr>" +
+  $("recPicks").innerHTML = d.picks.length ? "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th></tr>" +
     d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
       `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
-      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td>${del(r)}</tr>`).join("")
+      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No decision saved yet.</td></tr>";
   const choice = r => r.choice === "limit_dip" ? `limit${r.limit ? " " + usd(r.limit) : ""}` : "next close";
-  $("recPolicy").innerHTML = (d.policy || []).length ? "<tr><th class='l'>Data to</th><th class='l'>Stock</th><th class='l'>Its choice</th><th>Expected vs cash</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th><th></th></tr>" +
+  $("recPolicy").innerHTML = (d.policy || []).length ? "<tr><th class='l'>Data to</th><th class='l'>Stock</th><th class='l'>Its choice</th><th>Expected vs cash</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th></tr>" +
     d.policy.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">#${r.place}</span></td>` +
       `<td class="l">${esc(choice(r))}<div class="muted small">${r.validated ? "validated" : "shown as: insufficient evidence"}</div></td><td>${spct(r.expected_excess)}</td>` +
       `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
-      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td>${del(r)}</tr>`).join("")
+      `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No suggestion from the second model saved yet.</td></tr>";
-  $("recAgents").innerHTML = d.agents.length ? "<tr><th class='l'>As of</th><th class='l'>Stock</th><th class='l'>Rating</th><th>Return</th><th class='l'>Result</th><th></th></tr>" +
+  $("recAgents").innerHTML = d.agents.length ? "<tr><th class='l'>As of</th><th class='l'>Stock</th><th class='l'>Rating</th><th>Return</th><th class='l'>Result</th></tr>" +
     d.agents.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b></td><td class="l">${esc(r.rating)}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td>` +
-      `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td>${del(r)}</tr>`).join("")
+      `<td class="l">${r.rating === "Hold" && r.status === "done" ? '<span class="muted">Hold: not judged</span>' : verdict(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No AI agent rating saved yet.</td></tr>";
-  $("recHidden").innerHTML = d.hidden ? `${d.hidden} row(s) hidden from this view. <a href="#" id="recRestore">Show hidden rows</a>` : "";
-  // Hide at once (no prompt): the row is hidden, stays hidden after a refresh, and Undo brings it back.
-  document.querySelectorAll("#record .rec-del").forEach(b => b.onclick = async () => {
-    const row = b.closest("tr"), key = b.dataset.key, name = row.querySelector("b") ? row.querySelector("b").textContent : "row";
-    row.hidden = true;
-    try { await api("/api/track-record/hide", {key}); } catch (e) { row.hidden = false; showUndo(`Could not hide: ${e.message}`); return; }
-    showUndo(`Hid ${name} (the saved record is kept).`, key);
-  });
+  // Rows can no longer be hidden; any hidden earlier can be shown again.
+  $("recHidden").innerHTML = d.hidden ? `${d.hidden} row(s) were hidden earlier. <a href="#" id="recRestore">Show them</a>` : "";
   if ($("recRestore")) $("recRestore").onclick = async ev => { ev.preventDefault(); await api("/api/track-record/restore", {}); loadTrackRecord(); };
 }
 $("recRefresh").onclick = loadTrackRecord;
