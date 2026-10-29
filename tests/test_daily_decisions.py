@@ -265,3 +265,16 @@ def test_missing_downside_estimate_blocks_entry_unless_the_rule_says_otherwise(q
     lines = daily.entries(today, *args, {**r, "require_downside_estimate": False}, 1000.0, 1000.0, ira,
                           pd.Series({"AAA": 10.0}), **kw)
     assert lines[0]["action"] == "ENTER" and any("require_downside_estimate" in n for n in lines[0]["notes"])
+
+
+def test_the_same_inputs_give_the_saved_decision_instead_of_a_new_one(env):
+    store, data, cache, cutoff, sessions = env
+    first = daily.run(store, cache, cutoff.date(), train=True)
+    count = lambda: store.con.execute("SELECT COUNT(*) FROM stock_decisions").fetchone()[0]  # noqa: E731
+    again = daily.run(store, cache, cutoff.date(), train=True)
+    assert again["reused"] and again["id"] == first["id"] and count() == 1
+    _buy(store, data, "S02", sessions[-2], 50.0)                    # the books changed: a new decision
+    third = daily.run(store, cache, cutoff.date(), train=False)
+    assert not third.get("reused") and third["id"] != first["id"] and count() == 2
+    forced = daily.run(store, cache, cutoff.date(), train=False, force=True)
+    assert not forced.get("reused") and count() == 3

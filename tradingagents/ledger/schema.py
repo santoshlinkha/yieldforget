@@ -503,4 +503,14 @@ ALTER TABLE model_outcomes ADD COLUMN policy_exit_on TEXT;
 ALTER TABLE model_outcomes ADD COLUMN policy_reason TEXT;
 CREATE INDEX model_predictions_procedure ON model_predictions (procedure_id, info_cutoff, ticker)
 """,
+    # Model outputs the user removed from view (a failed agent run, ...). The append-only records are kept;
+    # a row here hides one, and deleting the row brings it back.
+    12: """
+CREATE TABLE hidden_outputs (
+    kind TEXT NOT NULL,                    -- agent_run
+    key TEXT NOT NULL,                     -- agent_runs.run_id
+    hidden_at TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+)
+""",
 }

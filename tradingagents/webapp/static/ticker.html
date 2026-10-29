@@ -692,6 +692,7 @@ async function load() {
     h += rp.runs.length ? rp.runs.map(run => `<details ${run.run ? `data-run="${esc(run.run)}"` : `data-day="${esc(run.date)}"`}><summary>${run.agents ? `<span class="verdict ${run.agents}" style="font-size:11px;padding:1px 8px;margin-right:6px" title="The agents' decision for this run">${run.agents}</span>` : ""}${esc(run.date)}${run.run ? `<span class="muted">${esc(earlier(run))}</span>` : ""}${run.rating ? ` · agents' decision: ${esc(run.rating)}` : ""}${run.run && run.decision ? ` · final decision then: ${esc(run.decision)}` : ""} · ${run.files.length} report${run.files.length === 1 ? "" : "s"}${run.requests ? ` · ${run.requests} API calls` : ""}</summary>` +
       (run.requests ? `<p><a href="#" data-calls="${esc(run.date)}"${run.run ? ` data-callrun="${esc(run.run)}"` : ""}><b>What was sent to the AI and what came back</b> (${run.requests} calls)</a></p>` : "") +
       run.files.map(fl => `<p><a href="#" data-path="${esc(fl.path)}"${/FINAL DECISION/i.test(fl.name) ? " data-final" : ""}>${/FINAL DECISION/i.test(fl.name) ? "<b>Final decision</b>" : esc(fl.name)}</a></p>`).join("") +
+      `<p><button class="ghost small-btn" data-delrun="${esc(run.date)}"${run.run ? ` data-delrunid="${esc(run.run)}"` : ""} title="Remove this analysis from the page (moved to a _deleted folder, not erased)">Delete this analysis</button></p>` +
       `<div class="runView"></div></details>`).join("")
       : "<p class='muted'>No saved TradingAgents analysis for this ticker yet: run one above.</p>";
     if (allRuns > rp.runs.length) h += `<p class="muted small">Showing the latest ${rp.runs.length} of ${allRuns} runs.</p>`;
@@ -707,6 +708,11 @@ async function load() {
     $("reports").querySelectorAll("details[data-day], details[data-run]").forEach(box => box.addEventListener("toggle", () => {
       if (!box.open) { box.querySelector(".runView").innerHTML = ""; box.querySelectorAll("a.on").forEach(x => x.classList.remove("on")); }
     }));
+    $("reports").querySelectorAll("button[data-delrun]").forEach(b => b.onclick = async () => {
+      if (!confirm(`Delete the ${b.dataset.delrun} analysis of ${symbol}${b.dataset.delrunid ? " (earlier run)" : ""}? Its folder is moved to _deleted and can be moved back.`)) return;
+      try { await getJSON("/api/agent-report/delete", {ticker: symbol, date: b.dataset.delrun, run: b.dataset.delrunid || null}); load(); }
+      catch (e) { b.insertAdjacentHTML("afterend", ` <span class="neg small">${esc(e.message)}</span>`); }
+    });
     $("reports").querySelectorAll("a[data-calls]").forEach(a => a.onclick = async ev => {
       ev.preventDefault();
       const r = await getJSON(`/api/requests?ticker=${encodeURIComponent(symbol)}&date=${a.dataset.calls}${a.dataset.callrun ? "&run=" + encodeURIComponent(a.dataset.callrun) : ""}`).catch(e => ({error: e.message}));
@@ -718,7 +724,9 @@ async function load() {
       openModal(`${symbol} · ${day.day || day.run || ""} · ${a.textContent}`, '<p class="muted">Loading…</p>');
       try {
         const res = await fetch("/api/report?path=" + encodeURIComponent(a.dataset.path));
-        $("reportModalBody").innerHTML = renderMarkdown(await res.text());
+        const text = await res.text();
+        openModal.raw = text;
+        $("reportModalBody").innerHTML = renderMarkdown(text);
       } catch (e) { $("reportModalBody").innerHTML = `<p class="neg">${esc(e.message)}</p>`; }
     });
     $("reports").querySelectorAll("a[data-open]").forEach(a => a.onclick = ev => { ev.preventDefault(); openRun(a.dataset.open); });
@@ -758,6 +766,20 @@ function openModal(title, html) {
   if (!openModal.bound) {                       // bound on first use: the window's markup closes the page
     openModal.bound = true;
     $("reportModalClose").onclick = closeModal;
+    // Copies the report as written (Markdown) when there is one, else the text shown.
+    $("reportModalCopy").onclick = async () => {
+      const text = openModal.raw ?? $("reportModalBody").innerText;
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; }
+      catch (e) {
+        const ta = Object.assign(document.createElement("textarea"), {value: text});
+        $("reportModal").appendChild(ta); ta.select();
+        try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+        ta.remove();
+      }
+      $("reportModalCopied").textContent = ok ? "Copied" : "Could not copy: select the text instead";
+      setTimeout(() => { $("reportModalCopied").textContent = ""; }, 2500);
+    };
     $("reportModal").addEventListener("click", ev => { if (ev.target === $("reportModal")) closeModal(); });
     document.addEventListener("keydown", ev => {
       if ($("reportModal").hidden) return;
@@ -774,6 +796,7 @@ function openModal(title, html) {
   }
   // Focus returns to whatever opened the dialog, and the page behind it cannot be reached while it is open.
   if ($("reportModal").hidden) openModal.opener = document.activeElement;
+  openModal.raw = null;                          // set by the caller once the report's text has arrived
   $("reportModalTitle").textContent = title;
   $("reportModalBody").innerHTML = html;
   $("reportModalBody").scrollTop = 0;
@@ -1146,11 +1169,18 @@ async function pollAnalysis(first) {
   $("agRun").disabled = j.running;
   if (j.running) { $("agState").innerHTML = jobLine(j, "analysis"); setTimeout(() => pollAnalysis(false), 2000); return; }
   costHint();
-  if (j.error) $("agState").innerHTML = failBox(j.error, j.attempts);
+  if (j.error) {
+    $("agState").innerHTML = failBox(j.error, j.attempts) +
+      `<button class="ghost small-btn" id="agDismiss" title="Remove this failed-run message (the run's record is kept)">Dismiss</button>`;
+    $("agDismiss").onclick = async () => {
+      try { await getJSON("/api/agent-runs/dismiss", {ticker: symbol}); $("agState").innerHTML = ""; }
+      catch (e) { $("agState").insertAdjacentHTML("beforeend", ` <span class="neg">${esc(e.message)}</span>`); }
+    };
+  }
   else if (j.result && j.result.ticker === symbol) {
     $("agState").innerHTML = (j.result.final ? `Final decision: <span class="verdict ${j.result.final.action}">${j.result.final.action}</span> · ` : "") +
       `agents' rating <b>${esc(j.result.rating)}</b> as of ${esc(j.result.date)} on ${esc(j.result.provider || "")} ${esc(j.result.model || "")}` +
-      ` (${j.result.how === "cache" ? "reused, no charge" : "paid"}${j.result.fell_back ? "; earlier providers failed, so this one ran it" : ""}). The reports are below.<br>${tries(j.result.attempts)}`;
+      ` (${j.result.how === "reused" ? "already analyzed with the same inputs: not re-run" : j.result.how === "cache" ? "reused, no charge" : "paid"}${j.result.fell_back ? "; earlier providers failed, so this one ran it" : ""}). The reports are below.<br>${tries(j.result.attempts)}`;
     if (!first) { load(); loadSignals(); }
   }
 }
@@ -1208,7 +1238,7 @@ loadSignals();
 pollAnalysis(true);
 </script>
 <div class="modal" id="reportModal" hidden role="dialog" aria-modal="true" aria-labelledby="reportModalTitle">
-  <div class="panel"><div class="bar"><b id="reportModalTitle"></b><button class="ghost" id="reportModalClose" aria-label="Close">✕ Close</button></div>
+  <div class="panel"><div class="bar"><button class="ghost" id="reportModalCopy" title="Copy the report's text">Copy</button><b id="reportModalTitle"></b><span class="muted small" id="reportModalCopied" role="status" aria-live="polite"></span><button class="ghost" id="reportModalClose" aria-label="Close">✕ Close</button></div>
     <div class="body" id="reportModalBody"></div></div>
 </div>
 </body>

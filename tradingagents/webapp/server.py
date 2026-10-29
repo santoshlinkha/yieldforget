@@ -885,8 +885,9 @@ class App:
             raise ValueError("pick at least one analyst")
         return analysts
 
-    def _run_agents(self, job, ticker: str, day: str, analysts: list[str], g: dict) -> dict:
-        """The agents on one ticker as of ``day``, trying each configured provider in turn (paid: only from a click)."""
+    def _run_agents(self, job, ticker: str, day: str, analysts: list[str], g: dict, force: bool = False) -> dict:
+        """The agents on one ticker as of ``day``, trying each configured provider in turn (paid: only from a click).
+        A run with the same inputs that already succeeded is not repeated unless ``force``."""
         from tradingagents.dataflows.symbols import safe_ticker_component
         from tradingagents.ledger.ai_gateway import AIBlocked, AIInProgress
         from tradingagents.ledger.db import now_utc
@@ -904,6 +905,14 @@ class App:
         job.attempts = []                  # what the page shows: each provider tried, and how it went
         record = {"ticker": ticker, "as_of": day, "analysts": analysts, "evidence": evidence or {},
                   "attempts": attempts, "started_at": now_utc()}
+        if not force:
+            done = self._same_agent_run(record)
+            if done and (folder / "complete_report.md").is_file():
+                job.progress = (f"{ticker} as of {day}: already analyzed with the same data, analysts, evidence and "
+                                f"models ({done['finished_at'][:16].replace('T', ' ')} UTC); nothing was re-run")
+                return {"ticker": ticker, "rating": done["rating"], "how": "reused", "reused": True,
+                        "provider": done["actual_provider"], "model": done["actual_model"],
+                        "final": {"action": done["final_action"]}, "fell_back": bool(done["fell_back"])}
         try:
             out = self._try_agents(job, ticker, day, analysts, folder, est, evidence, attempts, errors)
         except AIInProgress:
@@ -917,6 +926,75 @@ class App:
         self._record_agent_run(record, job, out, "ok", None)
         return out
 
+    @staticmethod
+    def _agent_chain(attempts: list[dict]) -> list:
+        return [(c["llm_provider"], c["deep_think_llm"], sorted((c.get("agent_models") or {}).items())) for c in attempts]
+
+    def _same_agent_run(self, record: dict):
+        """The newest successful run with exactly these inputs: ticker, data date, analysts, model evidence and the
+        provider/model chain. Same inputs give the same analysis, so it is not paid for or saved twice."""
+        from tradingagents.ledger.ai_gateway import stable_hash
+
+        try:
+            return self.store.con.execute(
+                "SELECT * FROM agent_runs WHERE ticker = ? AND as_of = ? AND status = 'ok' AND analysts_json = ?"
+                " AND evidence_hash = ? AND route_version = ? ORDER BY finished_at DESC LIMIT 1",
+                (record["ticker"], record["as_of"], json.dumps(list(record["analysts"])),
+                 stable_hash(record["evidence"]), stable_hash(self._agent_chain(record["attempts"])))).fetchone()
+        except Exception:   # an older database without the table
+            return None
+
+    def dismiss_agent_failures(self, ticker: str) -> dict:
+        """Remove a ticker's failed-run messages from view: the analysis job's last error (when it was this ticker's
+        and nothing is running) and its failed runs in ``agent_runs`` since its last good one. The records stay."""
+        from tradingagents.ledger.db import now_utc, transaction
+
+        ticker = ticker.strip().upper()
+        if not ticker:
+            raise ValueError("no ticker")
+        job = self.analysis
+        cleared = False
+        with job.switch:
+            # A run's progress line starts with its ticker ("AAA as of 2026-10-23: ...").
+            if not job.running and job.error and str(job.progress).upper().startswith(ticker + " "):
+                job.error, job.attempts = None, []
+                cleared = True
+        rows = self.store.con.execute(
+            "SELECT run_id FROM agent_runs WHERE ticker = ? AND status != 'ok' AND finished_at >"
+            " COALESCE((SELECT MAX(finished_at) FROM agent_runs WHERE ticker = ? AND status = 'ok'), '')",
+            (ticker, ticker)).fetchall()
+        with transaction(self.store.con):
+            for r in rows:
+                self.store.con.execute("INSERT OR IGNORE INTO hidden_outputs VALUES ('agent_run', ?, ?)",
+                                       (r["run_id"], now_utc()))
+        return {"ticker": ticker, "job_error_cleared": cleared, "runs_hidden": len(rows)}
+
+    def delete_agent_report(self, ticker: str, day: str, run: str | None) -> dict:
+        """Remove one saved analysis from the pages by moving its folder to ``<results>/_deleted`` (recoverable by
+        moving it back). ``run`` None is the day's latest run; ``archive/<stamp>`` an earlier one."""
+        import shutil
+
+        from tradingagents.dataflows.symbols import safe_ticker_component
+
+        ticker = safe_ticker_component(ticker.strip().upper())
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day or ""):
+            raise ValueError("date must be YYYY-MM-DD")
+        if run and not re.fullmatch(r"archive/\d{8}T\d{6}(_\d+)?", run):
+            raise ValueError("unknown run")
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        moved = []
+        for root in self.report_roots():
+            src = (root / ticker / day / (run or "reports")).resolve()
+            if not src.is_dir() or root not in src.parents:
+                continue
+            dest = root / "_deleted" / ticker / f"{day}__{(run or 'latest').replace('/', '_')}__{stamp}"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            moved.append(str(dest))
+        if not moved:
+            raise ValueError(f"no saved analysis of {ticker} for {day}" + (f" ({run})" if run else ""))
+        return {"ticker": ticker, "date": day, "run": run, "moved_to": moved}
+
     def _record_agent_run(self, record: dict, job, out: dict | None, status: str, error: str | None) -> None:
         """One row in ``agent_runs`` per routed run (append-only): requested and actual provider, every attempt and
         why it moved on, the stages' models, the evidence hash and the result or the error."""
@@ -925,8 +1003,7 @@ class App:
         from tradingagents.ledger.recommendations import code_version
         from tradingagents.llm_clients import roles
 
-        chain = [(c["llm_provider"], c["deep_think_llm"], sorted((c.get("agent_models") or {}).items()))
-                 for c in record["attempts"]]
+        chain = self._agent_chain(record["attempts"])
         first = record["attempts"][0] if record["attempts"] else {"llm_provider": "", "deep_think_llm": ""}
         ran = next((c for c in record["attempts"] if out and c["llm_provider"] == out.get("provider")
                     and c["deep_think_llm"] == out.get("model")), None)
@@ -1144,7 +1221,8 @@ class App:
             raise ValueError("no ticker")
         day = self._check_day(str(body.get("date") or _today()))
         analysts = self._analysts(body, g)
-        return self.analysis.start(lambda job: self._run_agents(job, ticker, day, analysts, g))
+        force = bool(body.get("force"))
+        return self.analysis.start(lambda job: self._run_agents(job, ticker, day, analysts, g, force))
 
     # --- AI decisions: the agents' BUY / HOLD / SELL on a shortlist, next to the rules and the economy ---
 
@@ -1314,21 +1392,24 @@ class App:
                 if frac is not None:
                     job.fraction = max(job.fraction or 0.0, min(float(frac), 1.0))   # the bar never goes back
                 job.progress = stage
-            rec = daily.run(self.store, self.cache_dir, date.today(), body.get("policy") or "barrier_20", train, say)
+            rec = daily.run(self.store, self.cache_dir, date.today(), body.get("policy") or "barrier_20", train, say,
+                            force=bool(body.get("force")))
             job.fraction = 1.0
-            return {"id": rec["id"], "mode": rec["mode"], "summary": rec["summary"]}
+            return {"id": rec["id"], "mode": rec["mode"], "summary": rec.get("summary"), "reused": bool(rec.get("reused"))}
 
         return self.decisions.start(work)
 
-    def start_zoo(self) -> bool:
+    def start_zoo(self, body: dict | None = None) -> bool:
         from tradingagents.stocks import model_zoo
+
+        force = bool((body or {}).get("force"))
 
         def work(job):
             def say(stage, frac=None):
                 if frac is not None:
                     job.fraction = max(job.fraction or 0.0, min(float(frac), 1.0))
                 job.progress = stage
-            return model_zoo.run(self.store, self.cache_dir, say)
+            return model_zoo.run(self.store, self.cache_dir, say, force=force)
 
         return self.zoo.start(work)
 
@@ -1678,8 +1759,9 @@ class App:
         """The newest routed run of the agents on a ticker (``agent_runs``): status, when, which model, why it failed."""
         try:
             row = self.store.con.execute("SELECT as_of, finished_at, status, actual_provider, actual_model, attempts_json,"
-                                         " error FROM agent_runs WHERE ticker = ? ORDER BY finished_at DESC LIMIT 1",
-                                         (ticker,)).fetchone()
+                                         " error FROM agent_runs WHERE ticker = ? AND run_id NOT IN"
+                                         " (SELECT key FROM hidden_outputs WHERE kind = 'agent_run')"
+                                         " ORDER BY finished_at DESC LIMIT 1", (ticker,)).fetchone()
         except Exception:   # an older database without the table
             return None
         if not row:
@@ -1996,6 +2078,13 @@ def make_handler(app: App):
                     self._started(app.start_screen(), "The quality screen")
                 elif self.path == "/api/analyze":
                     self._started(app.start_analysis(body), "An agent analysis")
+                elif self.path == "/api/agent-runs/dismiss":
+                    with app.lock:
+                        self._json(app.dismiss_agent_failures(str(body.get("ticker") or "")))
+                elif self.path == "/api/agent-report/delete":
+                    with app.lock:
+                        self._json(app.delete_agent_report(str(body.get("ticker") or ""), str(body.get("date") or ""),
+                                                           body.get("run") or None))
                 elif self.path == "/api/manual-answer":
                     self._json(app.manual_answer(body))
                 elif self.path == "/api/ai-decisions":
@@ -2020,7 +2109,7 @@ def make_handler(app: App):
                                          f"last {Job.STUCK_AFTER // 60} minutes")
                     self._json(job.state())
                 elif self.path == "/api/model-zoo/run":
-                    self._started(app.start_zoo(), "A run of every model")
+                    self._started(app.start_zoo(body), "A run of every model")
                 elif self.path == "/api/track-record/hide":
                     from tradingagents.stocks import track_record
                     track_record.hide(app.store.con, str(body.get("key") or ""))

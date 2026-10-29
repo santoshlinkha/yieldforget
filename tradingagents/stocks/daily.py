@@ -67,6 +67,25 @@ def risk_informative(p_risk: np.ndarray) -> bool:
     return len(p) > 1 and float(p.max() - p.min()) >= RISK_MIN_SPREAD
 
 
+def decision_inputs(store, cache_dir, cutoff, as_of, policy, r: dict, watch, close: pd.DataFrame,
+                    use_ensemble: bool) -> str:
+    """Everything a decision depends on: the data (cutoff, that close's prices), the day it is for, the code, the
+    rules and capital settings, the books, the watchlist, the ensemble bundle and the matured live outcomes."""
+    from tradingagents.ledger import capital
+
+    from . import input_keys as K
+    from .model_zoo import ENSEMBLE
+
+    matured = store.con.execute("SELECT COUNT(*) FROM model_outcomes").fetchone()[0]
+    return K.key({"cutoff": str(pd.Timestamp(cutoff).date()), "as_of": str(as_of), "prices": K.prices_hash(close, cutoff),
+                  "policy": policy.version(), "rules": r, "capital": capital.snapshot(store),
+                  "books": store.ledger.fingerprint(), "watch": sorted(watch), "code": model_code_hash(),
+                  "decision_code": K.code_hash("stocks/daily.py", "stocks/feedback.py", "stocks/sizing.py",
+                                               "stocks/decision_layer.py", "stocks/positions.py"),
+                  "ensemble": K.file_hash(Path(cache_dir) / "decision_models" / ENSEMBLE) if use_ensemble else None,
+                  "matured_outcomes": matured, "version": BUNDLE_VERSION})
+
+
 def decision_procedure(policy, bundle: dict, ranker: dict, r: dict) -> str:
     """The decision procedure's id (``model_outputs.procedure_id``): what the live record and the evidence are about.
     A weekly refit of the same recipe keeps it; a different ranker, ensemble recipe, gate, sizing rule, cost model or
@@ -496,8 +515,11 @@ def apply_ensemble(today: pd.DataFrame, zoo: dict | None, bundle: dict, rows: pd
 
 
 def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "barrier_20", train: bool = False,
-        progress=None, use_ensemble: bool = True) -> dict:
-    """Make, save and return today's decision. ``train`` allows fitting this week's models when missing."""
+        progress=None, use_ensemble: bool = True, force: bool = False) -> dict:
+    """Make, save and return today's decision. ``train`` allows fitting this week's models when missing.
+
+    When the newest saved decision was made from the same inputs (``decision_inputs``), it is returned with
+    ``reused`` and nothing is fitted or saved; ``force`` makes and saves a new one anyway."""
     from tradingagents.ledger import capital
     from tradingagents.ledger.db import now_utc, transaction
     from tradingagents.ledger.recommendations import code_version
@@ -548,6 +570,12 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     stocks = list(data.stocks)
     # Prices as traded, from the full history (undoing the adjustment needs every dividend), then everything
     # is cut at the cutoff: a past ``as_of`` sees only what was known at that close.
+    input_key = decision_inputs(store, cache_dir, cutoff, as_of, policy, r, watch, data.close, use_ensemble)
+    latest = load(store.con)
+    if latest and not force and latest.get("input_key") == input_key:
+        say(f"Same inputs as the decision of {latest['created_at'][:16].replace('T', ' ')} UTC: reused, nothing re-run",
+            1.0)
+        return {**latest, "reused": True}
     px, div = executable_prices(data.close[stocks], data.actions)
     px, div = px.loc[:cutoff], div.loc[:cutoff]
     data = as_of_data(data, cutoff)
@@ -673,7 +701,8 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
                                 dict(zip(today.index, today["cost_rt"], strict=False)), freshness)
     except Exception as exc:   # the rules' decision stands without it; the page says why
         policy_view = {"available": False, "note": f"the policy model could not score today: {exc}"}
-    payload = {"lots": reviews, "entries": entry_lines, "freshness_days": freshness, "scores": scores,
+    payload = {"input_key": input_key, "lots": reviews, "entries": entry_lines, "freshness_days": freshness,
+               "scores": scores,
                "universe": {"sp500": int(today["in_index"].sum()),
                             "extra": sorted(t for t in watch if t in today.index and not today.loc[t, "in_index"]),
                             "extra_missing": sorted(t for t in watch if t not in today.index)},

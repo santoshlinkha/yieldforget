@@ -818,20 +818,32 @@ async function loadAgentReport() {
   if (j.running) h += jobLine(j, "analysis") + (mine ? "" : `<p class="muted small">Another analysis is running; wait for it to finish.</p>`);
   else h += `<div class="row" style="margin:4px 0 8px"><button id="runAgentsBtn">${r.available ? "Run again" : "Run the AI agents"} on ${esc(agentTicker)}</button>` +
     `<span class="muted small">all four analysts, as of ${esc(agentDay || "the last close")}; free models first (Gemini, then OpenRouter), a few minutes</span></div>` +
-    (j.error && (j.attempts || []).length ? `<p class="neg small">Last run failed: ${esc(j.error)}</p>${tries(j.attempts)}` : "");
+    (j.error && (j.attempts || []).length ? `<p class="neg small">Last run failed: ${esc(j.error)} <button class="ghost small-btn" id="agentDismiss" title="Remove this failed-run message (the run's record is kept)">Dismiss</button></p>${tries(j.attempts)}` : "");
   if (r.available) {
     h += `<div class="agent-final">${miniMarkdown((r.final || "").split(/\r?\n/).slice(0, 14).join("\n"))}</div>` +
       `<p class="muted small">Saved ${esc(r.saved_at.replace("T", " "))} for ${esc(r.date)}. The model's numbers above decide; the agents' view is context.` +
       `${r.html ? ` <a href="/report?path=${encodeURIComponent(r.html)}" target="_blank" rel="noopener">Open the full report</a>` : ""}</p>` +
-      `<details id="agentFull"><summary><b>Full report</b></summary><div id="agentFullBody"><p class="muted">Loading…</p></div></details>`;
+      `<details id="agentFull"><summary><b>Full report</b></summary><button class="ghost small-btn" id="agentCopy" hidden title="Copy the report's text">Copy</button> <span class="muted small" id="agentCopied" role="status" aria-live="polite"></span><div id="agentFullBody"><p class="muted">Loading…</p></div></details>`;
   } else if (!j.running) h += `<p class="muted small">No AI analysis of ${esc(agentTicker)} saved yet.</p>`;
   box.innerHTML = h;
   const btn = $("runAgentsBtn");
   if (btn) btn.onclick = runAgents;
+  if ($("agentDismiss")) $("agentDismiss").onclick = async () => {
+    try { await api("/api/agent-runs/dismiss", {ticker: agentTicker}); loadAgentReport(); } catch (e) { showError(e.message); }
+  };
   const full = $("agentFull");
   if (full) full.ontoggle = async () => {
     if (!full.open || full.dataset.loaded) return;
-    try { const res = await fetch("/api/report?path=" + encodeURIComponent(r.markdown)); $("agentFullBody").innerHTML = miniMarkdown(await res.text()); full.dataset.loaded = 1; }
+    try {
+      const res = await fetch("/api/report?path=" + encodeURIComponent(r.markdown)), text = await res.text();
+      $("agentFullBody").innerHTML = miniMarkdown(text); full.dataset.loaded = 1;
+      $("agentCopy").hidden = false;
+      $("agentCopy").onclick = async () => {
+        try { await navigator.clipboard.writeText(text); $("agentCopied").textContent = "Copied"; }
+        catch (e) { $("agentCopied").textContent = "Could not copy"; }
+        setTimeout(() => { $("agentCopied").textContent = ""; }, 2500);
+      };
+    }
     catch (e) { $("agentFullBody").textContent = e.message; }
   };
   if (j.running && !agentPolling) { agentPolling = true; setTimeout(() => { agentPolling = false; loadAgentReport(); }, 2000); }

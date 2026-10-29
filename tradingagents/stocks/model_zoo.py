@@ -189,8 +189,9 @@ def tested_record() -> dict:
 
 # --- the live run ---
 
-def run(store, cache_dir: Path, progress=None) -> dict:
-    """Fit every model on history to the last close, score today's members and watchlist, save and return the run."""
+def run(store, cache_dir: Path, progress=None, force: bool = False) -> dict:
+    """Fit every model on history to the last close, score today's members and watchlist, save and return the run.
+    A run from the same inputs (``zoo_inputs``) is returned as it is, with ``reused``, unless ``force``."""
     from tradingagents.ledger.db import now_utc, transaction
     from tradingagents.research.compute import cuda_usable
     from tradingagents.research.features import decision_dates
@@ -208,6 +209,12 @@ def run(store, cache_dir: Path, progress=None) -> dict:
     data = D.load(watch, Path(cache_dir))
     spy = data.close["SPY"].dropna()
     cutoff = spy.index[-1]
+    input_key = zoo_inputs(cache_dir, cutoff, watch, data.close)
+    last = latest(store.con)
+    if last and not force and last.get("input_key") == input_key:
+        say("Same data, code and models as the run of " + last["created_at"][:16].replace("T", " ") + " UTC: reused", 1.0)
+        return {"id": last["id"], "reused": True, **{k: last.get(k) for k in ("info_cutoff", "members", "train_rows",
+                                                                              "seconds", "notes")}}
     stocks = list(data.stocks)
     px, _ = executable_prices(data.close[stocks], data.actions)
     data = as_of_data(data, cutoff)
@@ -273,7 +280,8 @@ def run(store, cache_dir: Path, progress=None) -> dict:
     if ens is None:
         notes["ensemble"] = ("not available: no learned-weight bundle (experiments/stacking_study.py) or it scored "
                              "nothing; the daily decision falls back to the XGBoost ranker")
-    payload = {"version": VERSION, "info_cutoff": str(cutoff.date()), "device": device, "train_rows": int(len(train)),
+    payload = {"version": VERSION, "input_key": input_key, "info_cutoff": str(cutoff.date()), "device": device,
+               "train_rows": int(len(train)),
                "ensemble": ens and {"weights": ens["weights"], "evaluation": ens["evaluation"], "version": ens["version"]},
                "members": int(member.sum()), "watchlist": [t for t in watch if t in stocks_out],
                "models": {k: {"label": v[0], "kind": v[1]} for k, v in MODELS.items()}, "notes": notes,
@@ -288,6 +296,21 @@ def run(store, cache_dir: Path, progress=None) -> dict:
 
 
 ENSEMBLE = "ensemble.json"
+
+
+def zoo_inputs(cache_dir, cutoff, watch, close: pd.DataFrame) -> str:
+    """What every model's run depends on: the data (cutoff and that close's prices), the watchlist, the models' code,
+    the ensemble bundle and the pretrained-weight pin."""
+    import os
+
+    from . import input_keys as K
+
+    return K.key({"cutoff": str(pd.Timestamp(cutoff).date()), "prices": K.prices_hash(close, cutoff),
+                  "watch": sorted(watch), "version": VERSION,
+                  "code": K.code_hash("stocks/model_zoo.py", "stocks/seq_model.py", "stocks/panel.py",
+                                      "stocks/adapters.py", "research/foundation.py", "stocks/data.py"),
+                  "ensemble": K.file_hash(Path(cache_dir) / "decision_models" / ENSEMBLE),
+                  "chronos_revision": os.environ.get("TRADINGAGENTS_CHRONOS_REVISION")})
 
 
 def _artifacts(scores: dict, device: str) -> dict:

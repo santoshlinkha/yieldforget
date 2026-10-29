@@ -4,6 +4,7 @@ Prices and holdings are labelled synthetic fixtures; no network and no model is 
 """
 
 import json
+from pathlib import Path
 import threading
 import time
 import urllib.error
@@ -392,3 +393,69 @@ def test_the_portfolio_view_separates_stocks_sgov_cash_and_reservations(server):
     assert a["stocks"] == pytest.approx(d["value"]) and a["cash_settled"] >= 50
     assert a["total"] == pytest.approx(a["stocks"] + a["reserve_value"] + a["cash_settled"] + a["cash_unsettled"])
     assert a["missing_prices"] == []
+
+
+def _agent_app(tmp_path, monkeypatch):
+    from tradingagents.webapp import server as srv
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    monkeypatch.setenv("TRADINGAGENTS_NO_PAID_AI", "1")
+    return srv, srv.App(tmp_path / "my_portfolio.json", tmp_path / "my_buys.json", tmp_path / "u.json",
+                        {**srv.DEFAULT_CONFIG, "data_cache_dir": str(tmp_path / "c"), "results_dir": str(tmp_path / "r")})
+
+
+def _agent_row(app, ticker, day, status, finished, **kw):
+    import uuid as _uuid
+    row = {"run_id": _uuid.uuid4().hex, "ticker": ticker, "as_of": day, "started_at": finished, "finished_at": finished,
+           "status": status, "route_version": "r", "requested_provider": "google", "requested_model": "m",
+           "actual_provider": "google" if status == "ok" else None, "actual_model": "m" if status == "ok" else None,
+           "fell_back": 0, "attempts_json": "[]", "roles_json": None, "analysts_json": '["market"]',
+           "evidence_hash": "e", "how": "paid", "rating": "Buy" if status == "ok" else None,
+           "final_action": "BUY" if status == "ok" else None, "error": None if status == "ok" else "402 out of credit",
+           "code_version": "test", **kw}
+    app.store.con.execute(f"INSERT INTO agent_runs ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                          tuple(row.values()))
+    return row["run_id"]
+
+
+def test_the_same_agent_inputs_are_not_run_twice(tmp_path, monkeypatch):
+    from tradingagents.ledger.ai_gateway import stable_hash
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    g = app.store.settings("global")
+    attempts = app.agent_attempts(g)
+    day = "2026-10-23"
+    _agent_row(app, "AAA", day, "ok", "2026-10-24T01:00:00.000000Z",
+               route_version=stable_hash(app._agent_chain(attempts)), evidence_hash=stable_hash({}))
+    folder = tmp_path / "r" / "AAA" / day / "reports"
+    folder.mkdir(parents=True)
+    (folder / "complete_report.md").write_text("# synthetic report", encoding="utf-8")
+    out = app._run_agents(srv.Job(), "AAA", day, ["market"], g)
+    assert out["reused"] and out["how"] == "reused" and out["rating"] == "Buy"
+    with pytest.raises(Exception):                                   # forced: it really tries (and is refused here)
+        app._run_agents(srv.Job(), "AAA", day, ["market"], g, force=True)
+    with pytest.raises(Exception):                                   # other analysts are other inputs
+        app._run_agents(srv.Job(), "AAA", day, ["market", "news"], g)
+
+
+def test_a_failed_run_message_can_be_dismissed_and_a_saved_analysis_deleted(tmp_path, monkeypatch):
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    _agent_row(app, "AAA", "2026-10-22", "ok", "2026-10-22T23:00:00.000000Z")
+    _agent_row(app, "AAA", "2026-10-23", "failed", "2026-10-24T01:00:00.000000Z")
+    app.analysis.error, app.analysis.attempts = "No AI provider could run the agents", [{"provider": "google"}]
+    app.analysis._progress = "AAA as of 2026-10-23: try 2 of 2 on openrouter"
+    assert app._last_agent_run("AAA")["status"] == "failed"
+    out = app.dismiss_agent_failures("aaa")
+    assert out == {"ticker": "AAA", "job_error_cleared": True, "runs_hidden": 1}
+    assert app.analysis.error is None and app._last_agent_run("AAA")["status"] == "ok"
+    assert app.store.con.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0] == 2     # records kept
+
+    day = tmp_path / "r" / "AAA" / "2026-10-23"
+    (day / "reports").mkdir(parents=True)
+    (day / "reports" / "complete_report.md").write_text("# synthetic", encoding="utf-8")
+    moved = app.delete_agent_report("AAA", "2026-10-23", None)["moved_to"]
+    assert not (day / "reports").exists() and (Path(moved[0]) / "complete_report.md").is_file()
+    assert "_deleted" in moved[0]
+    for bad in (("../etc", "2026-10-23", None), ("AAA", "2026-10-23/../..", None), ("AAA", "2026-10-23", "../x")):
+        with pytest.raises(ValueError):
+            app.delete_agent_report(*bad)

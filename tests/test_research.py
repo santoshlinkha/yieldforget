@@ -297,3 +297,24 @@ def test_the_combined_forecast_weights_models_by_their_tested_skill():
 
     unbacked = combine_runs([run("a", "xgb", {"X": 0.02}), run("b", "elastic_net", {"X": 0.04})])
     assert unbacked["basis"] == "equal" and unbacked["rows"][0]["combined"]["mean"] == pytest.approx(0.03)
+
+
+def test_a_forecast_from_the_same_inputs_is_not_trained_or_saved_again(tmp_path, monkeypatch):
+    from tradingagents.ledger.db import connect
+    from tradingagents.research import engine
+
+    close, high, low, volume, market = _market(n_assets=8, years=7)
+    close = close.rename(columns={"CASH": "BIL"})
+    high, low, volume = (x.rename(columns={"CASH": "BIL"}) for x in (high, low, volume))
+    monkeypatch.setattr(engine, "bars", _fake_bars(close, high, low, volume, market))
+    con = connect(tmp_path / "p.sqlite3")
+    tickers = [c for c in close.columns if c != "BIL"]
+    kw = {"horizon": 20, "model": "elastic_net", "device_setting": "cpu", "bags": 0, "artifact_dir": tmp_path / "m"}
+    first = engine.run_forecast(con, tmp_path, tickers, **kw)
+    again = engine.run_forecast(con, tmp_path, tickers, **kw)
+    assert again["reused"] and again["run_id"] == first["run_id"] and len(again["forecasts"]) == len(first["forecasts"])
+    assert con.execute("SELECT COUNT(*) FROM forecast_runs").fetchone()[0] == 1
+    other = engine.run_forecast(con, tmp_path, tickers[:-1], **kw)            # other tickers: other inputs
+    forced = engine.run_forecast(con, tmp_path, tickers, force=True, **kw)
+    assert not other.get("reused") and not forced.get("reused")
+    assert con.execute("SELECT COUNT(*) FROM forecast_runs").fetchone()[0] == 3

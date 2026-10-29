@@ -81,10 +81,25 @@ def latest_trial(con, model: str, horizon: int, universe: str) -> dict | None:
     return None
 
 
+def _same_run(con, model: str, horizon: int, universe: str, cutoff, input_key: str) -> dict | None:
+    """The saved run made from exactly these inputs, in the shape ``run_forecast`` returns, or None."""
+    row = con.execute("SELECT * FROM forecast_runs WHERE model = ? AND horizon = ? AND universe = ? AND info_cutoff = ?"
+                      " ORDER BY created_at DESC LIMIT 1", (model, horizon, universe, str(cutoff.date()))).fetchone()
+    if not row or json.loads(row["config_json"]).get("input_key") != input_key:
+        return None
+    rows = con.execute("SELECT * FROM forecasts WHERE run_id = ?", (row["id"],)).fetchall()
+    return {"run_id": row["id"], "info_cutoff": row["info_cutoff"], "model": model, "horizon": horizon,
+            "backend": row["backend"], "seconds": row["seconds"], "peak_memory_mb": row["peak_memory_mb"],
+            "calibration": json.loads(row["calibration_json"]), "reused": True,
+            "forecasts": [{k: r[k] for k in r.keys() if k != "run_id"} for r in rows]}
+
+
 def run_forecast(con, cache_dir: Path, tickers: list[str], horizon: int = 20, model: str = "elastic_net",
                  universe: str = "etf", device_setting: str = "auto", bags: int = 5,
-                 artifact_dir: Path | None = None, cash: str = "BIL") -> dict:
-    """Train, forecast the latest final close, and save the run; returns the run and its forecasts."""
+                 artifact_dir: Path | None = None, cash: str = "BIL", force: bool = False) -> dict:
+    """Train, forecast the latest final close, and save the run; returns the run and its forecasts. A run made
+    from the same inputs (data to the same close with the same prices, tickers, model, horizon and code) is
+    returned as saved, with ``reused``, unless ``force``."""
     from tradingagents.ledger.db import now_utc, transaction
     from tradingagents.ledger.recommendations import code_version
 
@@ -99,6 +114,19 @@ def run_forecast(con, cache_dir: Path, tickers: list[str], horizon: int = 20, mo
     high, low, volume = (b[f][[*tickers, cash]].reindex(close.index) for f in ("High", "Low", "Volume"))
     market = {m: b["Close"][m].dropna() for m in MARKET if b["Close"][m].notna().any()}
     cutoff = close.index[-1]
+    from tradingagents.stocks import input_keys as K
+
+    input_key = K.key({"tickers": sorted(tickers), "cash": cash, "model": model, "horizon": horizon, "bags": bags,
+                       "universe": universe, "cutoff": str(cutoff.date()), "prices": K.prices_hash(close, cutoff),
+                       "version": MODEL_VERSION, "schema": FEATURE_SCHEMA,
+                       "code": K.code_hash("research/engine.py", "research/features.py", "research/forecast.py",
+                                           "research/models.py", "research/foundation.py")})
+    if not force:
+        same = _same_run(con, model, horizon, universe, cutoff, input_key)
+        if same is not None:
+            if tracing:
+                tracemalloc.stop()
+            return same
     dates = F.decision_dates(close.index, start="2006-01-01", every=min(horizon, 20))
     dates = dates.union(pd.DatetimeIndex([cutoff]))
     panel = F.build_panel(close, high, low, volume, market, cash, dates, horizon=horizon)
@@ -165,7 +193,8 @@ def run_forecast(con, cache_dir: Path, tickers: list[str], horizon: int = 20, mo
         # Early stopping can leave a tree model with market-wide splits only: one number for everyone.
         for f in result:
             f.flags.append(FLAT)
-    config = {"model": model, "horizon": horizon, "features": features, "bags": bags, "seed": SEED,
+    config = {"input_key": input_key, "model": model, "horizon": horizon, "features": features, "bags": bags,
+              "seed": SEED,
               "train_mean_label": float(train["label"].clip(*train["label"].quantile([0.01, 0.99])).mean()),
               "device_setting": device_setting, "device_reason": why, "gpu_note": note, "tickers": tickers,
               "train_rows": len(train), "fit": prob.describe()}

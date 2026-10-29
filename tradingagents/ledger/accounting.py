@@ -279,6 +279,15 @@ class Ledger:
 
     # --- reading ---
 
+    def fingerprint(self) -> list:
+        """What the books are now, cheaply: changes whenever an event, a void or a reservation is recorded."""
+        return list(self.con.execute(
+            "SELECT (SELECT COALESCE(MAX(id), 0) FROM events WHERE account_id = ?),"
+            " (SELECT COUNT(*) FROM event_voids),"
+            " (SELECT COUNT(*) FROM reservations WHERE account_id = ? AND released_at IS NULL),"
+            " (SELECT COALESCE(SUM(amount), 0) FROM reservations WHERE account_id = ? AND released_at IS NULL)",
+            (self.account_id, self.account_id, self.account_id)).fetchone())
+
     def events(self, sleeve: str | None = None, as_of=None, include_void=False) -> list[dict]:
         sql = ("SELECT e.*, v.event_id IS NOT NULL AS void FROM events e LEFT JOIN event_voids v ON v.event_id = e.id"
                " WHERE e.account_id = ?")
