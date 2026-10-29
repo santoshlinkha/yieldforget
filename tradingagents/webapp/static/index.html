@@ -179,22 +179,22 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .split.wide { grid-template-columns: 3fr 2fr; }
 /* Trade page: everything fits its panel. Tables fill their card and wrap; a genuinely wide one scrolls inside it. */
 .trade-top { grid-template-columns: 3fr 2fr; align-items: start; }
-#today .card { min-width: 0; overflow: hidden; }
-#today .table-wrap { overflow-x: hidden; }
-#today .table-wrap.scroll-x { overflow-x: auto; }
-#today .table-wrap table { width: 100%; }
-#today td, #today th { white-space: normal; overflow-wrap: anywhere; }
-#today .table-wrap.scroll-x td, #today .table-wrap.scroll-x th { white-space: nowrap; overflow-wrap: normal; }
-#today .tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-#today .movers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-#today .movers ol { padding-left: 18px; margin: 4px 0; }
+#today .card, #trend .card { min-width: 0; overflow: hidden; }
+#today .table-wrap, #trend .table-wrap { overflow-x: hidden; }
+#today .table-wrap.scroll-x, #trend .table-wrap.scroll-x { overflow-x: auto; }
+#today .table-wrap table, #trend .table-wrap table { width: 100%; }
+#today td, #today th, #trend td, #trend th { white-space: normal; overflow-wrap: anywhere; }
+#today .table-wrap.scroll-x td, #today .table-wrap.scroll-x th, #trend .table-wrap.scroll-x td, #trend .table-wrap.scroll-x th { white-space: nowrap; overflow-wrap: normal; }
+#trend .tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+#trend .movers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#trend .movers ol { padding-left: 18px; margin: 4px 0; }
 .trade-context { margin-top: 8px; }
 .trade-context > summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
   padding: 10px 2px; border-top: 1px solid var(--border); list-style: none; }
 .trade-context > summary::-webkit-details-marker { display: none; }
 .trade-context > summary::before { content: "▸"; color: var(--muted); }
 .trade-context[open] > summary::before { content: "▾"; }
-@media (max-width: 900px) { .trade-top { grid-template-columns: 1fr; } #today .movers { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .trade-top { grid-template-columns: 1fr; } #trend .movers { grid-template-columns: 1fr; } }
 .split > * { min-width: 0; }
 #buyBox table, #sellBox table, #budgetBox table, #incBox table { width: 100%; }
 #buyBox th.l { white-space: nowrap; width: 1%; padding-right: 14px; }
@@ -422,6 +422,7 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       </div>
       <nav role="tablist">
         <button role="tab" data-tab="today" aria-selected="true">Trade</button>
+        <button role="tab" data-tab="trend">Trend</button>
         <button role="tab" data-tab="portfolio">Portfolio</button>
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
@@ -479,10 +480,11 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         </div>
       </div>
 
-      <!-- 3. Market context: research, folded until wanted. -->
-      <details class="trade-context" id="tradeContext">
-        <summary><span class="section-title" style="display:inline-flex;margin:0"><h2 style="margin:0">Market context</h2></span>
-          <span class="muted small" id="mkAsOf">Loading market data…</span></summary>
+    </section>
+
+    <section class="tab" id="trend">
+      <div class="page-head"><div><h2>Trend</h2><p>The market and its sectors: where prices are moving, which sectors are rotating in or out and why, and the market's breadth. Context for the trade, not part of the model's decision.</p></div>
+        <span class="muted small" id="mkAsOf">Loading market data…</span></div>
         <div class="tiles" id="mkTiles"></div>
         <div class="split">
           <div>
@@ -521,7 +523,6 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
             <div class="card"><h3>Disruptive themes, last month</h3><p class="muted">Median move of each theme's stocks and funds.</p><div class="bars" id="mkThemes"></div></div>
           </div>
         </div>
-      </details>
     </section>
 
     <section class="tab" id="scanTab">
@@ -810,7 +811,8 @@ async function api(path, body) {
 // Each tab's data is read the first time the tab is shown, not all at start-up (Trade is always read: it is the
 // overview, and it fills the Portfolio tab's record form).
 const TAB_LOADERS = {
-  today: () => { loadRotation(); loadSectorForecast(); loadMarket(); },
+  today: () => {},
+  trend: () => { loadMarket(); loadRotation(); loadSectorForecast(); },
   portfolio: () => loadPortfolio(),
   scanTab: () => { loadScreen(); loadSignalsBoard(); },
   forecasts: () => { loadForecasts(); loadLive(); loadHardware(); },
