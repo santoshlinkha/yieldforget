@@ -1112,6 +1112,12 @@ class App:
                 r["entry"] = self._entry_plan(t, r["signal"])
             if ticker:
                 r["policy"] = self._policy_row(decision, t)
+                # The 5-session trend forecast beside the 20-session one (the signals batch fits both).
+                s5 = signals.latest(self.store.con, 5, ticker=t).get(t)
+                r["trend5"] = ({"horizon": 5, "trend": s5.get("trend"), "trend_p": s5.get("trend_p"),
+                                "data_to": s5.get("data_to"),
+                                **{k: (s5.get("forecast") or {}).get(f"trend_{k}") for k in ("up", "down", "sideways", "unclear")}}
+                               if s5 and s5.get("status") == "ok" else None)
         return out
 
     @staticmethod

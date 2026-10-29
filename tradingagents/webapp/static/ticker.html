@@ -201,6 +201,16 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .sig-why-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
 .sig-why .vchecks { margin: 2px 0 8px; }
 .sig-more { margin-top: 8px; }
+.trend-box { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; }
+.trend-box .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+.trend-row { display: grid; grid-template-columns: 82px 110px repeat(4, 1fr); align-items: center; gap: 8px; font-size: 12.5px; }
+.tr-h { color: var(--muted); }
+.tr-part { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.tr-bar { width: 34px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; flex: 0 0 auto; }
+.tr-bar i { display: block; height: 100%; }
+.tr-part.up .tr-bar i { background: #059669; } .tr-part.down .tr-bar i { background: #dc2626; }
+.tr-part.side .tr-bar i { background: #2563eb; } .tr-part.unc .tr-bar i { background: #94a3b8; }
+@media (max-width: 700px) { .trend-row { grid-template-columns: 1fr 1fr; } }
 .sig-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .sig-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--surface-2); min-width: 0; }
 .sig-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -1214,7 +1224,13 @@ function signalTable(sg) {
     line("Deep drop", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>`;
 }
 // The essentials: the verdict and why, today's action, the model's numbers, the trend and the four event chances.
-function sigSummary(vd, dec, head, sg) {
+// The trend forecast for a horizon: its label and the four chances (up, down, sideways, unclear).
+function trendRow(t) {
+  const part = (n, v, cls) => `<span class="tr-part ${cls}"><span class="tr-bar"><i style="width:${Math.round((v || 0) * 100)}%"></i></span>${n} ${pct(v || 0, 0)}</span>`;
+  return `<div class="trend-row"><span class="tr-h">${t.horizon} sessions</span><b class="tr-label">${esc(t.trend || "–")}</b>` +
+    part("Up", t.up, "up") + part("Down", t.down, "down") + part("Sideways", t.sideways, "side") + part("Unclear", t.unclear, "unc") + `</div>`;
+}
+function sigSummary(vd, dec, head, sg, t5) {
   let h = `<div class="sig-sum">`;
   if (vd) {
     const vm = vd.model, view = vd.label !== vd.action ? ` <span class="muted small">(model view ${esc(vd.verdict)}, not validated)</span>` : "";
@@ -1223,8 +1239,14 @@ function sigSummary(vd, dec, head, sg) {
       vm ? ["Model rank", `#${vm.rank} <span class="muted small">of ${vm.of}</span>`] : null,
       vm ? ["Expected", `${spct(vm.expected_net, 2)} <span class="muted small">${vm.horizon} sessions, after costs</span>`] : null,
       vm && vm.p_win != null ? ["P(profit)", pct(vm.p_win, 0)] : null,
-      sg && sg.status === "ok" ? ["Trend", esc(sg.trend)] : null].filter(Boolean);
+    ].filter(Boolean);
     if (tiles.length) h += `<div class="sig-tiles">${tiles.map(([k, v]) => `<div class="sig-tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}</div>`;
+  }
+  if ((sg && sg.status === "ok") || t5) {
+    const f = sg && sg.forecast;
+    h += `<div class="trend-box"><div class="k">Trend forecast</div>` + (t5 ? trendRow(t5) : "") +
+      (f ? trendRow({horizon: sg.horizon, trend: sg.trend, up: f.trend_up, down: f.trend_down, sideways: f.trend_sideways, unclear: f.trend_unclear}) : "") +
+      `<div class="muted small">A forecast of the next sessions from the stock models: up or down needs a move of half a volatility or more, steadily; untested.</div></div>`;
   }
   if (dec) h += `<div class="sig-line small"><b>Today:</b> ${esc(dec.paper_action || dec.action)} <span class="muted">· for the close of ${esc(head.executes)}</span></div>`;
   if (sg && sg.status === "ok") {
@@ -1244,7 +1266,7 @@ async function loadSignals() {
   try { s = await getJSON("/api/signals?ticker=" + encodeURIComponent(symbol)); }
   catch (e) { $("sig").innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
   const row = s.rows[0] || {}, dec = row.decision, sg = row.signal, head = s.decision, vd = row.verdict;
-  const summary = sigSummary(vd, dec, head, sg);
+  const summary = sigSummary(vd, dec, head, sg, row.trend5);
   let h = "";
   if (vd) {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
