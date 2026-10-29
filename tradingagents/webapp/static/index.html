@@ -1137,23 +1137,18 @@ async function runnerAgents(list) {
 const AI_RANK = {buy: 5, overweight: 4, hold: 3, underweight: 2, sell: 1};
 // The AI's pick: of the model's picks the agents have read, the one they rate highest (ties: the model's order).
 function renderAiPick(seen) {
+  // Only a stock the agents rate Buy or Overweight is the AI's pick; nothing else is shown.
   const rated = seen.filter(s => s.r.available && s.r.agent_rating)
-    .map((s, i) => ({...s, i, score: AI_RANK[String(s.r.agent_rating).toLowerCase()] || 0}));
-  if (!rated.length) {
-    $("aiPickBox").innerHTML = `<p class="muted small">The agents have not read the model's picks yet. <b>Ask the AI to pick</b> runs them on each (a few minutes a stock; each at most once a day).</p>`;
-    return;
-  }
+    .map((s, i) => ({...s, i, score: AI_RANK[String(s.r.agent_rating).toLowerCase()] || 0}))
+    .filter(s => s.score >= 4);
+  if (!rated.length) { $("aiPickBox").innerHTML = `<p class="muted small" style="margin:0">No AI pick yet.</p>`; return; }
   const best = rated.slice().sort((a, b) => b.score - a.score || a.i - b.i)[0], r = best.r;
-  const act = r.agent_action || "", cls = /BUY/.test(act) ? "pos" : /SELL|AVOID/.test(act) ? "neg" : "";
-  const short = m => String(m || "").split("/").pop().replace(":free", "");
-  const buys = best.score >= 4;
+  const act = r.agent_action || "", short = m => String(m || "").split("/").pop().replace(":free", "");
   $("aiPickBox").innerHTML =
-    `<div class="ai-pick"><div class="order-head"><span class="side ${buys ? "buy" : "paper"}">${buys ? "AI's pick" : "No AI buy"}</span>` +
-    `<strong style="font-size:20px">${tk(best.ticker)}</strong><span class="rn-badge ${cls}">${esc(r.agent_rating)}${act ? ` → ${esc(act)}` : ""}</span></div>` +
-    `<p class="muted small" style="margin:6px 0">${buys ? "The strongest call" : "None of the picks is rated Buy or Overweight; the strongest call"} of the ${rated.length} the agents read, as of ${esc(r.date)}${r.agent_models ? ` · ${esc(short(r.agent_models))}` : ""}.` +
-    ` <a class="small" href="/ticker/${encodeURIComponent(best.ticker)}" target="_blank" rel="noopener">Read it</a></p>` +
-    `<div class="ai-others small">${rated.filter(x => x !== best).map(x => `<span>${esc(x.ticker)} <span class="muted">${esc(x.r.agent_rating)}</span></span>`).join("")}</div></div>` +
-    `<p class="muted small" style="margin:6px 0 0">The agents' view is context; the model's numbers decide.</p>`;
+    `<div class="ai-pick"><div class="order-head"><span class="side buy">AI's pick</span>` +
+    `<strong style="font-size:20px">${tk(best.ticker)}</strong><span class="rn-badge pos">${esc(r.agent_rating)}${act ? ` → ${esc(act)}` : ""}</span></div>` +
+    `<p class="muted small" style="margin:6px 0 0">As of ${esc(r.date)}${r.agent_models ? ` · ${esc(short(r.agent_models))}` : ""} · ` +
+    `<a href="/ticker/${encodeURIComponent(best.ticker)}" target="_blank" rel="noopener">Read it</a></p></div>`;
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
