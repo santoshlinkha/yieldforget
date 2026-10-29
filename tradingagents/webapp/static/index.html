@@ -149,6 +149,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .sort-mark { display: inline-block; width: 1em; text-align: center; }
 .fit-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fit-table .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-legend-box { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; background: var(--surface-2); }
 .col-legend { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 8px 0 0; }
 .col-legend dt { font-weight: 600; } .col-legend dd { margin: 0; color: var(--muted); }
 .sg-table th { white-space: normal; }
@@ -461,8 +462,11 @@ select option { background: var(--surface); color: var(--text); }
           <div class="muted small" id="qsStatus" style="flex-basis:100%"></div>
         </div>
         <p class="muted small" id="sgStatus" style="margin:0 0 8px"></p>
+        <div class="small col-legend-box" id="qsLegendBox">
+          <div class="row" style="margin:0;align-items:center;gap:8px"><b>What the columns mean</b><button type="button" class="ghost small-btn" id="qsLegendToggle" aria-expanded="true" aria-controls="qsLegend">Hide</button></div>
+          <div id="qsLegend"></div>
+        </div>
         <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
-        <details class="small" id="qsLegend" style="margin-top:8px"></details>
         <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
         <details class="small"><summary><b>How the scores and ranks are measured</b></summary>
           <ul class="muted">
@@ -1519,6 +1523,13 @@ const QS_WIDTHS = {
   signals: {rank: 52, ticker: 170, verdict: 112, model_rank: 76, action: 108, trend: 118, lift_up: 80, lift_down: 88,
             p_large_loss: 66, warnings: 220, quality_score: 64, analyst_mean: 56},
   models: {rank: 56, ticker: 210, ens: 86, ens_net: 96, ens_spy: 76, agree: 100, best_model: 170, quality_score: 70}};
+// The column explanations sit above the table; Hide / Show is remembered on this browser.
+function showLegend(on) {
+  $("qsLegend").hidden = !on;
+  $("qsLegendToggle").textContent = on ? "Hide" : "Show";
+  $("qsLegendToggle").setAttribute("aria-expanded", on);
+}
+$("qsLegendToggle").onclick = () => { const on = $("qsLegend").hidden; store.set("qsLegendShown", on); showLegend(on); };
 function fitScreen(view, cols) {
   const t = $("qsTable"), w = QS_WIDTHS[view] || {};
   t.classList.add("fit-table");
@@ -1530,9 +1541,9 @@ function fitScreen(view, cols) {
     if (c && c[2]) th.title = c[2];
   });
   t.querySelectorAll("td").forEach(td => { if (!td.title && td.textContent.length > 14) td.title = td.textContent.trim(); });
-  $("qsLegend").open = true;
-  $("qsLegend").innerHTML = `<summary>What the columns mean</summary><dl class="col-legend">` +
+  $("qsLegend").innerHTML = `<dl class="col-legend">` +
     cols.map(([, label, help]) => `<dt>${esc(label)}</dt><dd>${esc(help || "")}</dd>`).join("") + "</dl>";
+  showLegend(store.get("qsLegendShown", true));
 }
 function renderScreen() {
   $("qsTable").classList.remove("fit-table"); $("qsLegend").innerHTML = "";
