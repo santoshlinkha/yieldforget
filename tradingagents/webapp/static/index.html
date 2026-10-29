@@ -1041,7 +1041,7 @@ async function loadTrade() {
     lastTrade = t;
     const allPicks = [...(x ? [x] : []), ...t.runners_up];
     $("runnersTable").innerHTML = allPicks.length
-      ? `<colgroup><col style="width:17%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:11%"><col style="width:11%"><col style="width:22%"></colgroup>` +
+      ? `<colgroup><col style="width:11%"><col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:12%"><col style="width:12%"><col style="width:25%"></colgroup>` +
         `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
         `<th class="num" title="Sell target: sell when a close reaches this far above the fill">Sell</th><th class="num" title="Stop loss: sell when a close falls this far below the fill">Stop</th><th class="l">AI agents</th></tr>` +
         allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l"><b>${tk(x.ticker)}</b></td>` +
@@ -1181,8 +1181,8 @@ async function renderAiPick(seen) {
       `<td class="num">${Math.round(w * 100)}%</td><td class="num">${a.budget ? usd(w * a.budget) : "–"}</td>` +
       `<td class="num"><b>${price}</b></td><td class="num pos">${num(lv.price_target)}</td><td class="num neg">${num(lv.stop_loss)}</td></tr>`;
   });
-  $("aiPickBox").innerHTML = `<div class="table-wrap"><table class="compact ai-picks"><colgroup><col style="width:15%"><col style="width:19%">` +
-    `<col style="width:11%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:13%"></colgroup>` +
+  $("aiPickBox").innerHTML = `<div class="table-wrap"><table class="compact ai-picks"><colgroup><col style="width:11%"><col style="width:20%">` +
+    `<col style="width:12%"><col style="width:14%"><col style="width:17%"><col style="width:13%"><col style="width:13%"></colgroup>` +
     `<tr><th class="l">Ticker</th><th class="l">Rating</th><th class="num">Weight</th><th class="num">Amount</th>` +
     `<th class="num" title="The agents' entry price (or range)">Buy at</th><th class="num" title="The agents' sell target">Sell</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
     rows.join("") + `</table></div>` +
