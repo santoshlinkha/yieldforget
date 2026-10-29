@@ -142,6 +142,19 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .zoo-chip { display: flex; flex-direction: column; gap: 1px; border: 1px solid var(--border); border-radius: 8px;
   padding: 6px 8px; background: var(--surface); }
 .zoo-chip b { font-size: 16px; }
+.sg-table th { white-space: nowrap; }
+.sg-table td { white-space: nowrap; vertical-align: middle; padding-top: 6px; padding-bottom: 6px; }
+.sg-table th.num, .sg-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.sg-table th.l, .sg-table td.l { text-align: left; }
+.sg-table .sg-name { max-width: 170px; }
+.sg-table .sg-clip { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-table .sg-warns { max-width: 230px; }
+.sg-table .sg-warn summary { cursor: pointer; display: flex; gap: 4px; align-items: baseline; list-style: none; }
+.sg-table .sg-warn summary::-webkit-details-marker { display: none; }
+.sg-table .sg-warn summary .sg-clip { flex: 1; min-width: 0; }
+.sg-table .sg-warn[open] div { white-space: normal; margin-top: 3px; }
+.sg-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: 5px;
+  border: 1px solid currentColor; line-height: 1.5; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
 .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1448,7 +1461,7 @@ const QS_COLS = [["rank", "Screen rank"], ["ticker", "Ticker"], ["combined_score
   ["strength_flags", "Strength flags"], ["valuation_flags", "Valuation flags (checks)"], ["implied_growth", "Implied growth"],
   ["forward_pe", "Fwd P/E"], ["analyst_mean", "Consensus"], ["analysts", "Analysts"], ["target_upside", "Target upside"]];
 const SG_COLS = [["rank", "Rank", "Combined rank"], ["ticker", "Ticker"], ["verdict", "Verdict", "BUY / WATCH / HOLD / SELL / AVOID: the ticker page explains each"],
-  ["model_rank", "Model rank", "The daily decision's rank among today's S&P 500 stocks (1 = best): the learned ensemble when it is trained, else the decision's own weekly XGBoost fit. It decides the verdict. It is the Decision column on the Models tab, not the Models tab's mean or its XGB (54) column."],
+  ["model_rank", "Model #", "The daily decision's rank among today's S&P 500 stocks (1 = best): the learned ensemble when it is trained, else the decision's own weekly XGBoost fit. It decides the verdict. It is the Decision column on the Models tab, not the Models tab's mean or its XGB (54) column."],
   ["action", "Action", "The latest daily decision"],
   ["trend", "Trend", "Over 20 sessions"], ["lift_up", "Breakout", "Breakout lift: P(close above the range) ÷ usual"],
   ["lift_down", "Breakdown", "Breakdown lift: P(trading below the 20-day low within 20 sessions, intraday) ÷ usual"], ["p_large_loss", "P(loss)", "P(a large loss at the 20-session end)"],
@@ -1500,6 +1513,7 @@ function renderScreen() {
   $("qsToggle").onclick = () => { qsAll = !qsAll; renderScreen(); };
   const arrow = c => qsSort.key === c ? (qsSort.dir < 0 ? " ▾" : " ▴") : "";
   document.querySelectorAll("[data-qv]").forEach(b => b.setAttribute("aria-pressed", b.dataset.qv === qsView));
+  if (qsView !== "signals") $("qsTable").classList.remove("sg-table");
   if (qsView === "signals") { renderSignals(shown, arrow); return; }
   if (qsView === "models") { renderModelsView(shown, arrow); return; }
   $("qsTable").innerHTML = "<tr>" + QS_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${c === "ticker" ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
@@ -1528,6 +1542,7 @@ const ZV_COLS = [["rank", "Rank", "Combined screen rank"], ["ticker", "Ticker"],
   ["agree", "Models in top fifth", "How many of the fitted models put it in their top fifth"],
   ["best_model", "Most bullish model", "The model that ranks it highest"], ["quality_score", "Quality"]];
 function renderModelsView(shown, arrow) {
+  $("qsTable").classList.remove("sg-table");
   if (!zoo) { $("qsTable").innerHTML = "<tr><td class='muted l'>Loading the models' run…</td></tr>"; api("/api/model-zoo").then(d => { if (d.available) { zoo = d; renderScreen(); } else $("qsTable").innerHTML = "<tr><td class='muted l'>No run of the models yet: Models tab → Run all models.</td></tr>"; }); return; }
   $("qsTable").innerHTML = "<tr>" + ZV_COLS.map(([c, l, tip]) => `<th data-k="${c}" title="${esc(tip || l)}" style="cursor:pointer" class="${["ticker", "best_model"].includes(c) ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
     shown.map(r => {
@@ -1543,21 +1558,34 @@ function renderModelsView(shown, arrow) {
     const c = th.dataset.k; qsSort = {key: c, dir: qsSort.key === c ? -qsSort.dir : (["ens", "ens_net", "ens_spy", "agree"].includes(c) ? -1 : 1)}; renderScreen();
   });
 }
+// Signals and action, fitted: one line per cell where it can be, numbers right-aligned, the company name cut short
+// (full name on hover), the verdict and action as small badges, and warnings folded after the first.
 function renderSignals(shown, arrow) {
-  $("qsTable").innerHTML = "<tr>" + SG_COLS.map(([c, l, tip]) => `<th data-k="${c}" title="${esc(tip || l)}" style="cursor:pointer" class="${["ticker", "warnings"].includes(c) ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
+  $("qsTable").classList.add("sg-table");
+  const num = ["rank", "model_rank", "lift_up", "lift_down", "p_large_loss", "quality_score", "analyst_mean"];
+  $("qsTable").innerHTML = "<tr>" + SG_COLS.map(([c, l, tip]) => `<th data-k="${c}" title="${esc(tip || l)}" style="cursor:pointer" class="${num.includes(c) ? "num" : "l"}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
     shown.map(r => {
-      const g = qsSignal(r) || {}, d = g.decision, sg = g.signal && g.signal.status === "ok" ? g.signal : null;
-      const act = d ? `<b class="${{ENTER: "pos", EXIT: "neg", REDUCE: "neg"}[d.action] || "muted"}">${esc(d.action)}</b>${d.paper_action ? ` <span class="muted small">${esc(d.paper_action)}</span>` : ""}` : "<span class='muted small'>–</span>";
-      return `<tr><td>${r.rank}</td><td class="l" style="max-width:150px"><b>${tk(r.ticker)}</b><div class="muted small" style="white-space:normal">${esc(r.name || "")}</div></td>
-        <td title="${esc(g.verdict ? g.verdict.label + ": " + g.verdict.summary : "")}"><b class="${g.verdict ? VERDICT_CLS[g.verdict.action] : "muted"}">${g.verdict ? g.verdict.action : "–"}</b>${g.verdict && g.verdict.action !== g.verdict.verdict ? `<div class="muted small">model ${esc(g.verdict.verdict)}, not validated</div>` : ""}</td>
-        <td title="${g.verdict && g.verdict.model ? `expected ${(100 * g.verdict.model.expected_net).toFixed(2)}% after costs, P(profit) ${pct(g.verdict.model.p_win, 0)}` : ""}">${g.verdict && g.verdict.model ? `#${g.verdict.model.rank} <span class="muted small">of ${g.verdict.model.of}</span>` : "–"}</td>
-        <td title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}" style="white-space:normal">${act}</td>
-        <td class="${sg && sg.trend_p == null ? "muted small" : ""}">${sg ? `${esc(sg.trend)}${sg.trend_p != null ? ` <span class="muted small">${pct(sg.trend_p, 0)}</span>` : ""}` : "–"}</td>
-        <td>${sg ? liftCell(sg.lifts.up_break, false) : "–"}</td><td>${sg ? liftCell(sg.lifts.down_break, true) : "–"}</td>
-        <td>${sg ? pct(sg.forecast.p_large_loss, 0) : "–"}</td>
-        <td class="l small" style="white-space:normal;min-width:140px;max-width:220px">${sg ? (sg.warnings.length ? sg.warnings.map(w => `<div class="${w.level === "info" ? "pos" : "neg"}">${esc(w.text)}</div>`).join("") : "<span class='muted'>none</span>") : "<span class='muted'>no forecast saved</span>"}</td>
-        <td>${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td>
-        <td>${r.analyst_mean == null ? "–" : r.analyst_mean.toFixed(2)}</td></tr>`;
+      const g = qsSignal(r) || {}, d = g.decision, sg = g.signal && g.signal.status === "ok" ? g.signal : null, v = g.verdict;
+      const badge = (text, cls) => `<span class="sg-badge ${cls}">${esc(text)}</span>`;
+      const act = d ? badge(d.action, {ENTER: "pos", EXIT: "neg", REDUCE: "neg"}[d.action] || "") +
+        (d.paper_action ? `<div class="muted small">${esc(d.paper_action.toLowerCase())}</div>` : "") : "<span class='muted'>–</span>";
+      const warns = sg ? sg.warnings : null;
+      const warnLine = w => `<span class="${w.level === "info" ? "pos" : "neg"}">${esc(w.text)}</span>`;
+      const warnCell = !sg ? "<span class='muted'>no forecast</span>" : !warns.length ? "<span class='muted'>none</span>"
+        : warns.length === 1 ? `<div class="sg-clip" title="${esc(warns[0].text)}">${warnLine(warns[0])}</div>`
+        : `<details class="sg-warn"><summary><span class="sg-clip" title="${esc(warns[0].text)}">${warnLine(warns[0])}</span> <span class="muted">+${warns.length - 1}</span></summary>${warns.slice(1).map(w => `<div>${warnLine(w)}</div>`).join("")}</details>`;
+      return `<tr><td class="num">${r.rank}</td>` +
+        `<td class="l sg-name"><b>${tk(r.ticker)}</b><div class="muted small sg-clip" title="${esc(r.name || "")}">${esc(r.name || "")}</div></td>` +
+        `<td class="l" title="${esc(v ? v.label + ": " + v.summary : "")}">${v ? badge(v.action, VERDICT_CLS[v.action] || "") : "<span class='muted'>–</span>"}` +
+          `${v && v.action !== v.verdict ? `<div class="muted small">model ${esc(v.verdict)} · not validated</div>` : ""}</td>` +
+        `<td class="num" title="${v && v.model ? `expected ${(100 * v.model.expected_net).toFixed(2)}% after costs, P(profit) ${pct(v.model.p_win, 0)}` : ""}">${v && v.model ? `#${v.model.rank}<span class="muted small">/${v.model.of}</span>` : "–"}</td>` +
+        `<td class="l" title="${esc(d ? (d.blocked || d.reasons || []).join("; ") : "not a candidate or holding in the latest decision")}">${act}</td>` +
+        `<td class="l">${sg ? `${esc(sg.trend)}${sg.trend_p != null ? ` <span class="muted small">${pct(sg.trend_p, 0)}</span>` : ""}` : "–"}</td>` +
+        `<td class="num">${sg ? liftCell(sg.lifts.up_break, false) : "–"}</td><td class="num">${sg ? liftCell(sg.lifts.down_break, true) : "–"}</td>` +
+        `<td class="num">${sg ? pct(sg.forecast.p_large_loss, 0) : "–"}</td>` +
+        `<td class="l small sg-warns">${warnCell}</td>` +
+        `<td class="num">${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td>` +
+        `<td class="num">${r.analyst_mean == null ? "–" : r.analyst_mean.toFixed(2)}</td></tr>`;
     }).join("");
   $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
     const c = th.dataset.k;
