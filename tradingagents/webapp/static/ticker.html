@@ -273,6 +273,18 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .vchecks li { display: flex; gap: 8px; padding: 3px 0; }
 .vchecks .mk { width: 16px; flex: none; text-align: center; font-weight: 700; }
 .vchecks .mk.ok { color: var(--buy); } .vchecks .mk.no { color: var(--sell); } .vchecks .mk.na { color: var(--faint); }
+.vgroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 6px 0 10px; }
+.vgroup { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--surface-2); min-width: 0; }
+.vgroup-h { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; color: var(--muted); margin-bottom: 2px; }
+.vgroup-h .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.vgroups .vchecks { margin: 0; }
+.vgroups .vchecks li { align-items: flex-start; padding: 5px 0; border-top: 1px solid var(--border); }
+.vgroups .vchecks li:first-child { border-top: 0; }
+.vgroups .vchecks .mk { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; margin-top: 1px; }
+.vgroups .vchecks .mk.ok { background: color-mix(in srgb, var(--buy) 14%, transparent); }
+.vgroups .vchecks .mk.no { background: color-mix(in srgb, var(--sell) 14%, transparent); }
+.vgroups .vchecks .mk.na { background: var(--border); color: var(--muted); }
+.vrule { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
 #reports a.on { font-weight: 700; text-decoration: underline; }
 #reports .runView:not(:empty) { margin: 8px 0 4px; }
 .modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
@@ -1319,11 +1331,18 @@ async function loadSignals() {
   if (vd) {
     const mark = ok => ok === true ? `<span class="mk ok">✓</span>` : ok === false ? `<span class="mk no">✗</span>` : `<span class="mk na">–</span>`;
     const vm = vd.model;
-    h += `<p class="small" style="margin:4px 0"><b>The tests behind it</b></p><ul class="vchecks">` +
-      (vd.checks.length ? vd.checks.map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("")
-        : `<li><span class="mk na">–</span><span class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</span></li>`) + `</ul>` +
-      `<p class="small" style="margin:10px 0 4px"><b>Context</b> <span class="muted">(shown, does not change the verdict)</span></p><ul class="vchecks">` +
-      (vd.context || []).map(c => `<li>${mark(c.ok)}<span><b>${esc(c.name)}</b>: <span class="muted">${esc(c.detail)}</span></span></li>`).join("") + `</ul>`;
+    // Two cards: the tests the verdict rests on, and the context shown beside it. Each item: a mark, its name, its
+    // value, and the rule (from the parentheses) in small grey text underneath.
+    const item = c => {
+      const d = String(c.detail || ""), cut = d.indexOf(" ("), value = cut > 0 ? d.slice(0, cut) : d,
+        rule = cut > 0 ? d.slice(cut + 2).replace(/\)\s*$/, "") : "";
+      return `<li>${mark(c.ok)}<div><div><b>${esc(c.name)}</b> <span>${esc(value)}</span></div>${rule ? `<div class="vrule">${esc(rule)}</div>` : ""}</div></li>`;
+    };
+    h += `<div class="vgroups"><div class="vgroup"><div class="vgroup-h">Tests behind the verdict</div><ul class="vchecks">` +
+      (vd.checks.length ? vd.checks.map(item).join("")
+        : `<li><span class="mk na">–</span><div class="muted">The model has no score for this stock yet: make today's decision on the Decisions page.</div></li>`) + `</ul></div>` +
+      `<div class="vgroup"><div class="vgroup-h">Context <span class="muted">does not change the verdict</span></div><ul class="vchecks">` +
+      (vd.context || []).map(item).join("") + `</ul></div></div>`;
   }
   if (dec) {
     const why = (dec.blocked || dec.reasons || []).join("; ");
