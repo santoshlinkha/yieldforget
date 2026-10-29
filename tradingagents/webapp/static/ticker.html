@@ -1187,6 +1187,9 @@ const EV_SHORT = {untested: "no", passed: "passed", failed: "failed"};
 const EV_TIP = {untested: "No walk-forward study has tested this signal's model version, so its accuracy is unknown",
                 passed: "A walk-forward study found skill on data the model had not seen",
                 failed: "A walk-forward study found no skill on data the model had not seen"};
+// What the chance table's words mean (shown under "How to read this").
+const SIGNAL_DEFS = sg => `<p class="small muted">Above / below: the price trades past the level at any time in the next ${sg.horizon} trading days, intraday. ` +
+    `Big loss: down at least 1.5 volatilities at day ${sg.horizon}. Deep drop: falls that far at any point. A chance in colour is at least 1.2× usual. Tested: whether a walk-forward study checked this signal on data it was not trained on; "no" means it has not been checked, so treat the chance as unverified.</p>`;
 function signalTable(sg) {
   const f = sg.forecast, b = sg.base_rates, ev = sg.evidence || {};
   const line = (name, key, p, base, kind) => {
@@ -1202,9 +1205,7 @@ function signalTable(sg) {
     line("Above 20-day high", "up_break", f.p_up_break, b.up_break, "good") +
     line("Below 20-day low", "down_break", f.p_down_break, b.down_break, "bad") +
     line("Big loss at day 20", "large_loss", f.p_large_loss, b.large_loss, "bad") +
-    line("Deep drop", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>` +
-    `<p class="small muted">Above / below: the price trades past the level at any time in the next ${sg.horizon} trading days, intraday. ` +
-    `Big loss: down at least 1.5 volatilities at day ${sg.horizon}. Deep drop: falls that far at any point. A chance in colour is at least 1.2× usual. Tested: whether a walk-forward study checked this signal on data it was not trained on; "no" means it has not been checked, so treat the chance as unverified.</p>`;
+    line("Deep drop", "deep_drawdown", f.p_deep_drawdown, b.deep_drawdown, "bad") + `</table>`;
 }
 // The essentials: the verdict and why, today's action, the model's numbers, the trend and the four event chances.
 function sigSummary(vd, dec, head, sg) {
@@ -1281,7 +1282,8 @@ async function loadSignals() {
     const flatNames = {large_loss: "large-loss (crash)", deep_drawdown: "deep-drawdown", up_break: "breakout", down_break: "breakdown"};
     const flat = (sg.flat || []).filter(k => flatNames[k]);
     if (flat.length) h += `<div class="note small"><details><summary><span><b>${flat.length > 1 ? "Two crash models have" : "A crash model has"} no view on this stock today</b></span></summary><div style="margin-top:4px">The ${flat.map(k => flatNames[k]).join(" and ")} model${flat.length > 1 ? "s give" : " gives"} nearly every stock the same probability today, so ${flat.length > 1 ? "they have" : "it has"} no view on this stock in particular: no stock-specific warning can come from ${flat.length > 1 ? "them" : "it"}. A crash can still happen; this only says the model cannot tell which stocks are more exposed.</div></details></div>`;
-    h += `<p class="small muted">From the stock models, data to ${esc(sg.data_to)}. "Usual" is how often it happened to any stock in training; a warning needs a lift of ${s.rules.lift_break}× (breakouts) or ${s.rules.lift_crash}× (crashes) and the top fifth of today's stocks, so a market-wide shift does not flag every stock. "Tested" says whether a walk-forward study backed that signal ("no": not checked yet). Not validated for trading.</p>`;
+    h += `<p class="small"><b>Unverified:</b> these chances have not been tested on data the models did not see, and are not validated for trading. <span class="muted">Data to ${esc(sg.data_to)}.</span></p>`;
+    h += `<details class="small how-read"><summary><span class="muted">How to read this</span></summary>${SIGNAL_DEFS(sg)}${`<p class="small muted">From the stock models, data to ${esc(sg.data_to)}. "Usual" is how often it happened to any stock in training; a warning needs a lift of ${s.rules.lift_break}× (breakouts) or ${s.rules.lift_crash}× (crashes) and the top fifth of today's stocks, so a market-wide shift does not flag every stock. "Tested" says whether a walk-forward study backed that signal ("no": not checked yet). Not validated for trading.</p>`}</details>`;
   } else {
     h += `<p class="small muted">${sg ? esc((sg.reasons || []).join("; ") || sg.status) : "No trend, breakout or crash forecast saved for this stock yet."}</p>`;
   }
