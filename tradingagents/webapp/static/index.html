@@ -179,7 +179,10 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
   border: 1px solid currentColor; line-height: 1.5; }
 .runners { width: 100%; table-layout: fixed; }
 .runners th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; }
-.runners td { vertical-align: middle; padding-top: 7px; padding-bottom: 7px; }
+.runners td { vertical-align: middle; padding-top: 7px; padding-bottom: 7px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.runners th, .runners td { padding-left: 5px; padding-right: 5px; }
+.runners .rn-agents > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 .runners th.num, .runners td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .runners tr + tr td { border-top: 1px solid var(--border); }
 .runners .rn-tk { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
@@ -211,7 +214,8 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .wt { display: inline-flex; align-items: center; gap: 6px; }
 .wt-bar { width: 46px; height: 6px; border-radius: 3px; background: var(--chart-grid); overflow: hidden; display: inline-block; }
 .wt-bar i { display: block; height: 100%; background: linear-gradient(90deg, #5cffe6, #12b386); }
-.runners .wt-bar { width: 28px; }
+.runners .wt-bar { width: 22px; }
+.runners .wt { gap: 4px; }
 .runners td .wt .muted { display: none; }
 #sellBox .sell-fit th, #sellBox .sell-fit td { padding-left: 6px; padding-right: 6px; }
 #sellBox .sell-fit th { white-space: nowrap; overflow: hidden; text-overflow: clip; font-size: 11px; }
@@ -1013,7 +1017,7 @@ async function loadTrade() {
     // Fixed columns that add up to the panel; one-line headers; numbers right-aligned.
     $("runnersTable").className = "compact runners";
     $("runnersTable").innerHTML = t.runners_up.length
-      ? `<colgroup><col style="width:19%"><col style="width:12%"><col style="width:15%"><col style="width:15%"><col style="width:14%"><col style="width:25%"></colgroup>` +
+      ? `<colgroup><col style="width:17%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:13%"><col style="width:28%"></colgroup>` +
         `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="The reference close (not an order price): the buy is at the next close">Last close</th>` +
         `<th class="num" title="Sell when a close reaches this far above the fill">Sell target</th><th class="num" title="Sell when a close falls this far below the fill">Stop loss</th><th class="l">AI agents</th></tr>` +
         t.runners_up.map(x => `<tr><td class="l"><span class="rn-tk"><b>${tk(x.ticker)}</b><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></span></td>` +
