@@ -228,6 +228,8 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .ev-row.bad .ev-bar i { background: #dc2626; } .ev-row.bad .ev-p { color: #b91c1c; }
 .ev-row.good .ev-bar i { background: #059669; } .ev-row.good .ev-p { color: #047857; }
 .ev-row.low .ev-bar i { background: #cbd5e1; }
+.fc-table { width: 100%; }
+.fc-table td, .fc-table th { padding: 6px 8px; }
 .sig-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .sig-tile { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--surface-2); min-width: 0; }
 .sig-tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -846,17 +848,22 @@ async function load() {
   const fc = d.forecast;
   if (failed(fc)) $("fc").innerHTML = failed(fc);
   else {
+    // The useful part shown: the standard rule's numbers as tiles and the forecast table (the model behind each row on
+    // hover); a caveat as one line; the definitions and the method under "How to read this".
     const r = fc.rule;
-    let h = `<p><b>Standard rule</b> (what the plan uses by default): expected growth <b>${pct(r.growth)}</b> a year, ` +
-      `${spct(r.growth_above_cash)} above cash (${pct(r.cash)}). Volatility ${pct(r.volatility, 0)}, worst drop ${pct(r.worst_drop, 0)}` +
-      `${r.assumed_drop ? " (assumed: under 10 years of history)" : ""}.</p>`;
+    const tile = (k, v, sub) => `<div class="sig-tile"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="muted small">${sub}</div>` : ""}</div>`;
+    let h = `<div class="sig-tiles">${tile("Expected growth", pct(r.growth), "a year")}${tile("Above cash", spct(r.growth_above_cash), `cash ${pct(r.cash)}`)}` +
+      `${tile("Volatility", pct(r.volatility, 0), "a year")}${tile("Worst drop", pct(r.worst_drop, 0), r.assumed_drop ? "assumed" : "history")}</div>` +
+      `<p class="muted small" style="margin:4px 0 8px">The standard rule: what the plan uses by default.</p>`;
     if (fc.models.length) {
-      h += `<table><tr><th class="l">Horizon</th><th>Mean</th><th title="5th to 95th percentile">Range</th><th title="Chance the total return, including the cash yield, is above zero. Not the chance of beating cash.">P(total &gt; 0)</th></tr>` +
-        fc.models.map(x => `<tr><td class="l">${x.horizon} days<div class="muted small">${esc(x.model)}, ${x.universe === "stock" ? "stocks" : "ETFs"}${x.on_demand ? ", now" : ""}</div></td><td>${spct(x.mean, 1)}</td><td><div>${spct(x.q05, 0)}</div><div>${spct(x.q95, 0)}</div></td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + "</table>" +
-        `<p class="muted small">Mean and range: log return over cash from the latest close; the range is the 5th to 95th percentile. P(total &gt; 0): the chance the total return (cash yield included) is above zero, which is not the chance of beating cash.</p>`;
+      h += `<table class="fc-table"><tr><th class="l">Horizon</th><th>Mean</th><th title="5th to 95th percentile">Range</th><th title="Chance the total return, including the cash yield, is above zero">Chance up</th></tr>` +
+        fc.models.map(x => `<tr title="${esc(x.model)}, trained on ${x.universe === "stock" ? "stocks" : "ETFs"}${x.on_demand ? ", run now" : ""}"><td class="l"><b>${x.horizon} days</b></td>` +
+          `<td class="${x.mean >= 0 ? "pos" : "neg"}"><b>${spct(x.mean, 1)}</b></td><td class="muted">${spct(x.q05, 0)} to ${spct(x.q95, 0)}</td><td>${pct(x.p_gain, 0)}</td></tr>`).join("") + `</table>`;
       const flags = [...new Set(fc.models.flatMap(x => x.flags || []))];
-      if (flags.length) h += `<p class="note small">${esc(flags.join("; "))}.</p>`;
-      h += `<p class="muted small">Log return above cash over the horizon, from data to ${esc(fc.models[0].info_cutoff)}. In backtests these models ranked funds better than chance but did not beat the standard rule in the portfolio after costs.</p>`;
+      if (flags.length) h += `<div class="note small"><details><summary><span><b>Some forecasts come from a model trained on a different kind of asset</b></span></summary><div style="margin-top:4px">${esc(flags.join("; "))}.</div></details></div>`;
+      h += `<details class="small how-read"><summary><span class="muted">How to read this</span></summary>` +
+        `<p class="muted small">Mean and range: log return over cash from the latest close; the range is the 5th to 95th percentile. Chance up: the chance the total return (cash yield included) is above zero, which is not the chance of beating cash. Hover a row for the model behind it.</p>` +
+        `<p class="muted small">From data to ${esc(fc.models[0].info_cutoff)}. In backtests these models ranked funds better than chance but did not beat the standard rule in the portfolio after costs.</p></details>`;
     } else h += "<p class='muted small'>No forecast model has been run yet (Forecasts tab).</p>";
     $("fc").innerHTML = h;
   }
