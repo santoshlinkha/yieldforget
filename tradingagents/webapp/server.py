@@ -423,6 +423,9 @@ class App:
                         patient[e["ticker"]] = {"price": round(dip["price"], 2), "chance": dip["chance"],
                                                 "stop": round(dip["stop"], 2), "target": round(dip["profit"], 2)}
         out = trade.plan(decision, inc["budget"]["available"], patient)
+        picks = ([out["best"]] if out.get("best") else []) + list(out.get("runners_up") or [])
+        if picks:
+            out["allocation"] = self._allocation(picks, inc["budget"]["available"])
         pv = (decision or {}).get("policy") or {}
         if pv.get("available"):
             st = pv.get("stocks") or {}
@@ -509,6 +512,21 @@ class App:
             return {"status": rep["status"], "as_of": rep["forecast"]["as_of"]}
 
         return self.sector.start(work)
+
+    def _allocation(self, picks: list[dict], budget: float) -> dict:
+        """The trading budget split across the 1st pick and the runners-up (``stocks.allocation``)."""
+        from tradingagents.research.prices import bars
+        from tradingagents.stocks import allocation
+
+        tickers = [p["ticker"] for p in picks]
+        try:
+            close = bars(tickers, self.cache_dir)["Close"]
+        except Exception:   # no price history: the split falls back to equal weights and says so
+            close = None
+        out = allocation.weights(tickers, [p.get("expected_net") for p in picks], close)
+        out["budget"] = round(float(budget or 0.0), 2)
+        out["dollars"] = {t: round(w * out["budget"], 2) for t, w in out["weights"].items()}
+        return out
 
     def model_record(self) -> dict:
         from tradingagents.stocks import feedback

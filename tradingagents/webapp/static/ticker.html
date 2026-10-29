@@ -185,6 +185,10 @@ input[type=date]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .eplan-state.waiting, .eplan-state.unavailable { color: #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }
 .eplan-state.actionable { color: var(--buy, #059669); background: color-mix(in srgb, var(--buy, #059669) 12%, transparent); }
 #eplan table td.l { width: 38%; }
+.plan-sum { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.plan-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; margin-bottom: 4px; }
+.plan-kv td { padding: 3px 6px; border: 0; font-size: 13px; }
+.plan-kv td.muted { width: 42%; }
 #eplan ul { margin: 4px 0 4px 18px; padding: 0; }
 .verdict.ABSTAIN { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
 .verdict.big { font-size: 20px; padding: 6px 18px; }
@@ -496,7 +500,33 @@ function planCheck(v) {
   if ((v.warnings || []).length) h += `<details><summary class="small muted">${v.warnings.length} warning${v.warnings.length === 1 ? "" : "s"}</summary><ul class="small muted">${v.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></details>`;
   return h;
 }
+// The plan in a few lines: what to do, at what price, when, the exits and the size. The rest is under Details.
+function planSummary(run) {
+  const f = run.final, t = run.trader, row = f || t, p = (row && row.plan) || {}, v = (row && row.validation) || {};
+  const s = v.sizing, lv = v.levels || {};
+  const tag = run.current ? "" : (row.expired ? " · expired" : (f && f.superseded_by ? " · superseded" : ""));
+  const cur = p.currency ? " " + esc(p.currency) : "";
+  const price = p.entry_price != null ? `${esc(p.entry_price)}${cur}`
+    : p.entry_range_low != null && p.entry_range_high != null ? `${esc(p.entry_range_low)} to ${esc(p.entry_range_high)}${cur}` : null;
+  const lines = [
+    ["Buy", price ? `<b>${price}</b>${p.entry_type ? ` <span class="muted">(${esc(p.entry_type)})</span>` : ""}` : null],
+    [p.status === "wait" ? "Wait until" : "When", p.trigger ? esc(p.trigger) : (p.earliest_execution ? `from ${esc(p.earliest_execution)}` : null)],
+    ["Stop loss / Sell target", lv.stop_loss != null || lv.price_target != null
+      ? `<span class="neg">${nz(lv.stop_loss)}</span> / <span class="pos">${nz(lv.price_target)}</span>` : null],
+    ["Size", s ? `${money(s.dollars)} <span class="muted">(${esc(s.shares)} shares)</span>` : null],
+    ["Expires", p.expires_at ? esc(p.expires_at) : null]].filter(([, x]) => x);
+  const why = p.rationale ? esc(p.rationale.length > 220 ? p.rationale.slice(0, 220).replace(/\s+\S*$/, "") + "…" : p.rationale) : "";
+  return `<div class="plan-sum"><div class="plan-head"><b>${esc((f && f.action) || (t && t.action) || "–")}</b>` +
+    (v.state ? ` <span class="eplan-state ${esc(v.state)}">${esc(STATE_TEXT[v.state] || v.state)}</span>` : "") +
+    ` <span class="muted small">as of ${esc(row.analysis_date)}${tag}</span></div>` +
+    (lines.length ? `<table class="plan-kv">${lines.map(([k, x]) => `<tr><td class="l muted">${k}</td><td class="l">${x}</td></tr>`).join("")}</table>` : "") +
+    ((v.blocks || []).length ? `<p class="small neg" style="margin:4px 0">${esc(v.blocks[0])}${v.blocks.length > 1 ? ` (+${v.blocks.length - 1} more)` : ""}</p>` : "") +
+    (why ? `<p class="small" style="margin:4px 0 0">${why}</p>` : "") + `</div>`;
+}
 function planRun(run) {
+  return planSummary(run) + `<details class="small" style="margin-top:6px"><summary class="muted">Details</summary>${planDetail(run)}</details>`;
+}
+function planDetail(run) {
   const f = run.final, t = run.trader, any = f || t, ref = any.reference || {}, ev = (f || t).evidence || {};
   const tag = run.current ? "" : (any.expired ? " · <b>expired</b>" : (f && f.superseded_by ? " · <b>superseded</b> by a later plan" : ""));
   let h = `<p class="small">Analysis as of <b>${esc(any.analysis_date)}</b> · ${esc(any.source)} · saved ${esc(String(any.created_at).slice(0, 16).replace("T", " "))}${tag}</p>`;
@@ -545,7 +575,7 @@ async function loadEntryPlans() {
   catch (e) { $("eplan").innerHTML = `<p class="neg">${esc(e.message)}</p>`; return; }
   if (!r.runs.length) { $("eplan").innerHTML = `<p class="muted small">No entry plan yet. An agent run or a pasted chat answer adds one; the app checks it against the as-traded close and this account (settled cash, caps, timing, no day trading) and executes nothing.</p>`; return; }
   const [first, ...rest] = r.runs;
-  $("eplan").innerHTML = `<p class="muted small">Written by the AI; checked by the app; executed by you. The model's verdict above decides BUY or SELL; this is how an entry could be made.</p>` +
+  $("eplan").innerHTML = `<p class="muted small">Written by the AI, checked by the app, placed by you.</p>` +
     planRun(first) + (rest.length ? `<details><summary class="small">${rest.length} earlier plan${rest.length === 1 ? "" : "s"} (superseded or expired)</summary>${rest.map(run => `<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px">${planRun(run)}</div>`).join("")}</details>` : "");
 }
 

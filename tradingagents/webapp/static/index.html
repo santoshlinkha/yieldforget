@@ -208,6 +208,11 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .trade-top > div > .card:last-child { margin-bottom: 16px; }
 .trade-bottom > .card { margin-bottom: 16px; height: auto; }
 #sellBox .sell-fit { width: 100%; table-layout: fixed; }
+.wt { display: inline-flex; align-items: center; gap: 6px; }
+.wt-bar { width: 46px; height: 6px; border-radius: 3px; background: var(--chart-grid); overflow: hidden; display: inline-block; }
+.wt-bar i { display: block; height: 100%; background: linear-gradient(90deg, #5cffe6, #12b386); }
+.runners .wt-bar { width: 28px; }
+.runners td .wt .muted { display: none; }
 #sellBox .sell-fit th, #sellBox .sell-fit td { padding-left: 6px; padding-right: 6px; }
 #sellBox .sell-fit th { white-space: nowrap; overflow: hidden; text-overflow: clip; font-size: 11px; }
 #sellBox .sell-fit td { font-size: 12px; white-space: nowrap; }
@@ -971,6 +976,15 @@ async function loadTrade() {
       (t.ranker ? ` · ranked by ${t.ranker.name === "ensemble" ? "the learned-weight ensemble (Screener → Models)" : "the internal XGBoost ranker"}` : "");
     const x = t.best;
     const experimental = t.mode !== "validated";
+    // The trading budget split across the 1st pick and the runners-up (Settings: the trading budget).
+    const alloc = t.allocation || {weights: {}, dollars: {}};
+    const weightCell = (tkr, long) => {
+      const w = alloc.weights[tkr];
+      if (w == null) return "–";
+      return `<span class="wt"><span class="wt-bar"><i style="width:${Math.round(w * 100)}%"></i></span><b>${Math.round(w * 100)}%</b>` +
+        `${alloc.budget ? ` <span class="muted">${usd(alloc.dollars[tkr])}</span>` : ""}</span>` +
+        (long ? `<div class="muted small">of the trading budget${alloc.budget ? ` (${usd(alloc.budget)})` : ""}, split across the 1st pick and runners-up by risk and expected return; untested</div>` : "");
+    };
     const sz = (x && x.size) || {};
     // The tested policy buys at the next session's close, whatever it is: that is the entry. The last close is a
     // dated reference for sizing and for the illustrative dollar levels; stop and target follow the actual fill.
@@ -978,7 +992,7 @@ async function loadTrade() {
         <button class="ghost small-btn" id="boughtBest" title="Record your actual fill (Portfolio tab)">I bought this</button></div>
       <table class="compact" style="margin-top:10px">
        <tr><th class="l">Entry</th><td><b>at the close of ${esc(x.entry?.session || t.executes || "the next session")}</b>, whatever that close is <span class="muted">(the policy the model was tested on; no limit price)</span></td></tr>
-       <tr><th class="l">Allowed size</th><td><b>${usd(x.dollars || 0)}</b>${x.dollars ? ` <span class="muted">≈ ${(+x.shares).toFixed(4)} shares at the reference close</span>` : ""}<div class="muted small">${esc(sz.basis || "")}${sz.budget_usd != null ? ` · trading budget ${usd(sz.budget_usd)}` : ""}${sz.cap_usd != null ? ` · cap per name ${usd(sz.cap_usd)}` : ""}</div></td></tr>
+       <tr><th class="l">Weight</th><td>${weightCell(x.ticker, true)}</td></tr>
        <tr><th class="l">Reference close</th><td>${usd(x.last_close)} <span class="muted">on ${esc(x.reference_date || t.data_to)} (not an order price)</span></td></tr>
        <tr><th class="l">Sell target</th><td class="pos">${spct(x.target_pct, 1)} from the fill <span class="muted">(${usd(x.target)} if filled at the reference close)</span></td></tr>
        <tr><th class="l">Stop loss</th><td class="neg">${spct(x.stop_pct, 1)} from the fill <span class="muted">(${usd(x.stop)} if filled at the reference close)</span></td></tr>
@@ -1000,10 +1014,10 @@ async function loadTrade() {
     $("runnersTable").className = "compact runners";
     $("runnersTable").innerHTML = t.runners_up.length
       ? `<colgroup><col style="width:19%"><col style="width:12%"><col style="width:15%"><col style="width:15%"><col style="width:14%"><col style="width:25%"></colgroup>` +
-        `<tr><th class="l">Ticker</th><th class="num" title="What the decision's sizing rule allows on today's budget">Size</th><th class="num" title="The reference close (not an order price): the buy is at the next close">Last close</th>` +
+        `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget">Weight</th><th class="num" title="The reference close (not an order price): the buy is at the next close">Last close</th>` +
         `<th class="num" title="Sell when a close reaches this far above the fill">Sell target</th><th class="num" title="Sell when a close falls this far below the fill">Stop loss</th><th class="l">AI agents</th></tr>` +
         t.runners_up.map(x => `<tr><td class="l"><span class="rn-tk"><b>${tk(x.ticker)}</b><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></span></td>` +
-          `<td class="num" title="${esc(x.size?.basis || "")}">${usd(x.dollars || 0)}</td><td class="num">${usd(x.last_close)}</td>` +
+          `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
           `<td class="l rn-agents" data-agentcell="${esc(x.ticker)}"><span class="muted">…</span></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
