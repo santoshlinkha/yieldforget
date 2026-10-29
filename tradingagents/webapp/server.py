@@ -212,20 +212,35 @@ def _short_error(exc: Exception) -> str:
     return text[:80]
 
 
-def _cooldown(provider: str, model: str, exc_text: str, now: datetime) -> tuple[str, datetime, str] | None:
-    """How long a failure will keep repeating, so the provider is skipped until then: ``(key, until, why)``, or None
-    for a failure worth trying again at once. Out of credit and a free daily limit hold for the whole key (every
-    model on it); a rate limit, for that model."""
-    from datetime import UTC
+RATE_LIMIT_HOLD = timedelta(minutes=30)
 
+
+def _next_midnight(now: datetime, tz: str) -> datetime:
+    from datetime import UTC
+    from zoneinfo import ZoneInfo
+
+    local = now.astimezone(ZoneInfo(tz))
+    return (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
+def _cooldown(provider: str, model: str, exc_text: str, now: datetime) -> tuple[str, datetime, str] | None:
+    """How long a failure will keep repeating, so nothing more is sent there until then: ``(key, until, why)``, or
+    None for a failure worth trying again at once. Out of credit and a free daily limit hold for the whole key
+    (every model on it); a model's daily quota until the quota resets (midnight Pacific for Google, else 00:00 UTC);
+    a per-minute rate limit for ``RATE_LIMIT_HOLD``, or longer when the provider asks for longer."""
     text = exc_text.lower()
     if "free-models-per-day" in text or "free daily limit" in text:
-        reset = (now.astimezone(UTC) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        return provider, reset, "free daily limit reached (resets 00:00 UTC)"
+        return provider, _next_midnight(now, "UTC"), "free daily limit reached (resets 00:00 UTC)"
     if "prepayment credits are depleted" in text or "402" in text or "insufficient" in text and "credit" in text:
         return provider, now + timedelta(hours=6), "out of credit (top up, or the key is skipped for 6 hours)"
-    if "429" in text or "rate limit" in text or "resource_exhausted" in text or "quota" in text:
-        return f"{provider}/{model}", now + timedelta(minutes=10), "rate limited"
+    limited = "429" in text or "rate limit" in text or "resource_exhausted" in text or "quota" in text
+    if limited and re.search(r"per ?day|perday|per_day|daily", text):
+        tz, at = ("America/Los_Angeles", "midnight Pacific") if provider == "google" else ("UTC", "00:00 UTC")
+        return f"{provider}/{model}", _next_midnight(now, tz), f"daily quota used up (resets {at})"
+    if limited:
+        asked = re.search(r"retry(?:[ _-]?(?:in|after|delay))?\W{0,4}(\d+(?:\.\d+)?)\s*s", text)
+        hold = max(RATE_LIMIT_HOLD, timedelta(seconds=float(asked[1]))) if asked else RATE_LIMIT_HOLD
+        return f"{provider}/{model}", now + hold, "rate limited"
     return None
 
 
@@ -1286,21 +1301,49 @@ class App:
         now = datetime.now(UTC)
         cooling = {k: v for k, v in cooling.items() if datetime.fromisoformat(v["until"]) > now}
 
+        from tradingagents.webapp.keys import ALT_KEYS
+
+        def models(cfg):
+            return list(dict.fromkeys(m for m in (cfg.get("deep_think_llm"), cfg.get("quick_think_llm")) if m))
+
+        def keyed(cfg):
+            """The cooldown name of the key an attempt uses: the provider, or ``provider#2`` for its second key."""
+            return cfg["llm_provider"] + ("#2" if cfg.get("alt_api_key") else "")
+
         def cool(cfg):
-            hit = cooling.get(cfg["llm_provider"]) or cooling.get(f"{cfg['llm_provider']}/{cfg['deep_think_llm']}")
-            return hit
+            # A limit on the key, or on either model the agents would call, stops the whole attempt.
+            return cooling.get(keyed(cfg)) or next(
+                (cooling[k] for k in (f"{keyed(cfg)}/{m}" for m in models(cfg)) if k in cooling), None)
+
+        def with_second_keys(attempts):
+            """Each attempt, then the same on the provider's second key (if set): tried only after a limit."""
+            for cfg in attempts:
+                yield cfg
+                env = ALT_KEYS.get(cfg["llm_provider"])
+                if env and os.environ.get(env) and not cfg.get("alt_api_key"):
+                    yield {**cfg, "alt_api_key": os.environ[env]}
+
+        attempts = list(with_second_keys(attempts))
+        limited = False   # whether the last attempt stopped on a limit (only then is a second key worth trying)
 
         for n, cfg in enumerate(attempts, 1):
             if evidence:
                 cfg = {**cfg, "quant_evidence": {ticker.upper(): evidence}}
-            who = f"{cfg['llm_provider']} ({cfg['deep_think_llm']})"
+            who = f"{cfg['llm_provider']}{' second key' if cfg.get('alt_api_key') else ''} ({cfg['deep_think_llm']})"
+            if cfg.get("alt_api_key") and not limited:
+                continue   # the first key worked or failed for another reason: the second key would not help
             hit = cool(cfg)
             if hit:   # it would fail the same way: not tried, and not counted against the budget
                 until = datetime.fromisoformat(hit["until"]).astimezone().strftime("%H:%M")
                 job.attempts.append({"provider": cfg["llm_provider"], "model": cfg["deep_think_llm"],
                                      "state": "skipped", "why": f"{hit['why']}; skipped until {until}"})
                 errors.append(f"{who}: skipped, {hit['why']}")
+                limited = True
                 continue
+            limited = False
+            # One retry at most inside the provider's client: a limit error is not sent again and again.
+            if cfg.get("llm_max_retries") in (None, ""):
+                cfg = {**cfg, "llm_max_retries": 1}
             job.attempts.append({"provider": cfg["llm_provider"], "model": cfg["deep_think_llm"], "state": "trying"})
             job.progress = (f"{ticker} as of {day}: try {n} of {len(attempts)} on {who}"
                             f"{' after ' + str(n - 1) + ' failed' if n > 1 else ''}; a few minutes")
@@ -1322,9 +1365,13 @@ class App:
                 logger.warning("analysis on %s failed: %s", who, exc)
                 errors.append(f"{who}: {_short_error(exc)}")
                 job.attempts[-1].update(state="failed", why=_short_error(exc))
-                held = _cooldown(cfg["llm_provider"], cfg["deep_think_llm"], str(exc), datetime.now(UTC))
+                held = _cooldown(keyed(cfg), cfg["deep_think_llm"], str(exc), datetime.now(UTC))
                 if held:
-                    cooling[held[0]] = {"until": held[1].isoformat(), "why": held[2]}
+                    limited = True
+                    # Which of the run's models hit the limit is not known, so a model limit holds them all.
+                    keys = [held[0]] if held[0] == keyed(cfg) else [f"{keyed(cfg)}/{m}" for m in models(cfg)]
+                    for k in keys:
+                        cooling[k] = {"until": held[1].isoformat(), "why": held[2]}
                     with self.lock:
                         self.store.set("global", "ai_cooldowns", cooling)
             else:

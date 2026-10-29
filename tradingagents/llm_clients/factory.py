@@ -115,6 +115,10 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
         if effort:
             kwargs["effort"] = effort
 
+    # A provider's second key (the web app's fallback when the first key hits a limit).
+    if config.get("alt_api_key"):
+        kwargs["api_key"] = config["alt_api_key"]
+
     # Sampling temperature is cross-provider: forward it whenever set.
     # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
     # string ("0.2") works the same as a programmatic float.

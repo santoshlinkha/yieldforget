@@ -600,3 +600,37 @@ def test_the_agents_run_at_most_once_a_day_per_stock(tmp_path, monkeypatch):
     assert out["reused"] and out["once_a_day"] and out["rating"] == "Buy"
     _agent_row(app, "BBB", "2026-10-23", "failed", now)                 # a failure today does not count
     assert app._agents_ran_today("BBB") is None
+
+
+def test_a_limit_stops_sending_to_that_model_until_it_resets_and_a_second_key_takes_over(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    srv, app = _agent_app(tmp_path, monkeypatch)
+    now = datetime(2026, 10, 29, 3, 0, tzinfo=UTC)
+    key, until, why = srv._cooldown("google", "g", "429 RESOURCE_EXHAUSTED GenerateRequestsPerDayPerProjectPerModel", now)
+    assert key == "google/g" and "daily quota" in why and until == datetime(2026, 10, 29, 7, 0, tzinfo=UTC)  # midnight PDT
+    key, until, _ = srv._cooldown("openrouter", "m", "429 Rate limit exceeded: requests per day", now)
+    assert until == datetime(2026, 10, 30, tzinfo=UTC)
+    assert srv._cooldown("google", "g", "429 rate limit, retry in 37s", now)[1] == now + srv.RATE_LIMIT_HOLD
+    assert srv._cooldown("google", "g", "429 rate limit; retryDelay: 7200s", now)[1] == now + timedelta(hours=2)
+
+    sent = []
+    import tradingagents.optimizer.ai_views as views
+
+    def analyze(ticker, day, cfg, *a, **k):
+        sent.append((cfg.get("alt_api_key"), cfg["llm_max_retries"]))
+        if not cfg.get("alt_api_key"):
+            raise RuntimeError("Error code: 429 - Rate limit exceeded")
+        return {"rating": "Buy"}, "agents"
+
+    monkeypatch.setattr(views, "analyze", analyze)
+    monkeypatch.setattr(app, "_write_decision", lambda *a, **k: {})
+    monkeypatch.setenv("OPENROUTER_API_KEY_2", "sk-or-second")
+    cfg = {"llm_provider": "openrouter", "deep_think_llm": "d", "quick_think_llm": "q"}
+    out = app._try_agents(srv.Job(), "AAA", "2026-10-28", ["market"], tmp_path / "f", 0.0, {}, [cfg], [])
+    assert sent == [(None, 1), ("sk-or-second", 1)] and out["rating"] == "Buy"
+    cooling = app.store.get("global", "ai_cooldowns")
+    assert {"openrouter/d", "openrouter/q"} <= set(cooling)                # both of the run's models are held
+    sent.clear()
+    app._try_agents(srv.Job(), "BBB", "2026-10-28", ["market"], tmp_path / "f", 0.0, {}, [cfg], [])
+    assert sent == [("sk-or-second", 1)]                                   # the limited key is not sent to again

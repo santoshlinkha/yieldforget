@@ -21,12 +21,15 @@ DATA_KEYS = {"FRED_API_KEY": "FRED (economic data)", "ALPHA_VANTAGE_API_KEY": "A
 
 CONTEXT_KEY = "GEMINI_CONTEXT_API_KEY"
 CONTEXT_KEYS = {CONTEXT_KEY: "Google Gemini for non-agent work (Trend page brief, ticker news, moat)"}
+# A second key per provider, tried on the same model when the first key hits a limit.
+ALT_KEYS = {"openrouter": "OPENROUTER_API_KEY_2"}
+ALT_LABELS = {"OPENROUTER_API_KEY_2": "OpenRouter, second key (used when the first hits a limit)"}
 
 
 def known() -> dict[str, str]:
     """{env name: label} for every key the page may set."""
     out = {env: provider for provider, env in PROVIDER_API_KEY_ENV.items() if env}
-    return {**out, **DATA_KEYS, **CONTEXT_KEYS}
+    return {**out, **DATA_KEYS, **CONTEXT_KEYS, **ALT_LABELS}
 
 
 def env_path() -> Path:
