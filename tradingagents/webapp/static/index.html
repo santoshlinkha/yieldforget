@@ -432,7 +432,6 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         <button role="tab" data-tab="scanTab">Screener</button>
         <button role="tab" data-tab="forecasts">Forecasts</button>
         <button role="tab" data-tab="decisions">Decisions</button>
-        <button role="tab" data-tab="models">Models</button>
         <button role="tab" data-tab="record">Track record</button>
         <button role="tab" data-tab="settings">Settings</button>
       </nav>
@@ -533,9 +532,10 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
     <section class="tab" id="scanTab">
       <div class="page-head"><div><h2>Screener</h2><p>S&amp;P 500 stocks ranked on the quality checklist and Wall Street, with the stock models' trend, breakout and crash signals and the daily decision's action.</p></div></div>
       <div class="card" id="qsCard">
-        <h3>Stocks: quality checklist, Wall Street and signals</h3>
+        <h3>Stocks: quality checklist, Wall Street, signals and every model's ranking</h3>
         <p class="muted">For each S&amp;P 500 stock (and your watchlist): the ticker page's quality checklist (moat, financial strength, profitability) as one score, valuation kept apart, and Wall Street's consensus and price-target upside, combined into one rank. <b>Signals and action</b> shows the stock models' trend, breakout and crash warnings and the daily decision's ENTER / WAIT / HOLD / EXIT. Click a column to sort; click a ticker for its full page.</p>
-        <div class="seg" role="group" aria-label="Columns" style="margin:0 0 10px"><button data-qv="quality">Quality and Wall Street</button><button data-qv="signals">Signals and action</button><button data-qv="models">Model ensemble</button></div>
+        <div class="seg" role="group" aria-label="Columns" style="margin:0 0 10px"><button data-qv="quality">Quality and Wall Street</button><button data-qv="signals">Signals and action</button><button data-qv="models">Models</button></div>
+        <div id="qsScreenPanel">
         <div class="row" style="margin:0 0 10px">
           <button id="qsBuild">Build or refresh the screen</button>
           <button class="ghost" id="sgBuild" title="Fits this week's stock models if needed and scores every S&amp;P 500 stock: free, on this machine, a few minutes">Compute signals for all</button>
@@ -561,6 +561,18 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
         </details>
         <div class="table-wrap"><table id="qsTable" class="compact"></table></div>
         <div class="row" id="qsMore" style="display:none"><button class="ghost" id="qsToggle"></button></div>
+        </div>
+        <div id="qsModelsPanel" hidden>
+          <div class="row" style="margin:0 0 6px;align-items:center;gap:10px"><button id="zooRun">Run all models</button>
+            <span class="muted small">Every stock model, refitted every 20 sessions, ranks today's S&amp;P 500 and your watchlist.</span></div>
+          <p class="muted small">Each stock forecasting model, fitted on all history to the last close, ranks today's S&amp;P 500 (100 = its top pick). Models that predict a return also show their 20-session forecast over cash. Under each name: its tested rank correlation with the net trade result (2012–24 · 2025 on); about 0 means no skill. None of them decides anything: the internal model does, and none is validated.</p>
+          <p class="status" id="zooStatus"></p>
+          <p class="muted small" id="zooMeta"></p>
+          <div class="small" id="zooWeights"></div>
+          <div class="row" style="margin:6px 0"><input id="zooFilter" placeholder="Find a ticker" style="max-width:220px"><span class="muted small" id="zooCount"></span></div>
+          <div class="card"><div class="table-wrap"><table id="zooTable" class="compact"></table></div></div>
+        </div>
+
       </div>
     </section>
 
@@ -625,15 +637,6 @@ label.check, .check { display: inline-flex; align-items: center; gap: 8px; curso
       <div class="card"><h3>Trades</h3><div class="table-wrap"><table id="pfTrades" class="compact"></table></div></div>
     </section>
 
-    <section class="tab" id="models">
-      <div class="page-head"><div><h2>Every model's forecast</h2><p>Each stock forecasting model, fitted on all history to the last close, ranks today's S&amp;P 500 (100 = its top pick). Models that predict a return also show their 20-session forecast over cash. Under each name: its tested rank correlation with the net trade result (2012–24 · 2025 on); about 0 means no skill. None of them decides anything: the internal model does, and none is validated.</p></div>
-        <button id="zooRun">Run all models</button></div>
-      <p class="status" id="zooStatus"></p>
-      <p class="muted small" id="zooMeta"></p>
-      <div class="small" id="zooWeights"></div>
-      <div class="row" style="margin:6px 0"><input id="zooFilter" placeholder="Find a ticker" style="max-width:220px"><span class="muted small" id="zooCount"></span></div>
-      <div class="card"><div class="table-wrap"><table id="zooTable" class="compact"></table></div></div>
-    </section>
 
     <section class="tab" id="record">
       <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made and every rating the AI agents gave, followed for 20 trading days after the day they could first be bought. Judged only once the 20 days are over; until then the return so far is shown.</p></div>
@@ -822,7 +825,6 @@ const TAB_LOADERS = {
   scanTab: () => { loadScreen(); loadSignalsBoard(); },
   forecasts: () => { loadForecasts(); loadLive(); loadHardware(); },
   decisions: () => { loadDecisions(); loadAiDecisions(); },
-  models: () => { if (!zoo) loadZoo(); },
   record: () => loadTrackRecord(),
   settings: () => { loadCapital(); loadKeys(); loadAgents(); loadSchedule(); },
 };
@@ -883,7 +885,7 @@ async function loadTrade() {
   else {
     const u = t.universe || {};
     $("buyMeta").textContent = `${(t.mode || "").toUpperCase()} · ${u.sp500 ? `${u.sp500} S&P 500 companies${(u.extra || []).length ? ` + ${u.extra.length} of yours` : ""} scored · ` : ""}data to ${t.data_to} · for the close of ${t.executes}` +
-      (t.ranker ? ` · ranked by ${t.ranker.name === "ensemble" ? "the learned-weight ensemble (Models tab)" : "the internal XGBoost ranker"}` : "");
+      (t.ranker ? ` · ranked by ${t.ranker.name === "ensemble" ? "the learned-weight ensemble (Screener → Models)" : "the internal XGBoost ranker"}` : "");
     const x = t.best;
     const experimental = t.mode !== "validated";
     const sz = (x && x.size) || {};
@@ -1572,7 +1574,7 @@ const ACT_ORDER = {ENTER: 0, EXIT: 1, REDUCE: 2, HOLD: 3, WAIT: 4};
 const VERDICT_ORDER = {BUY: 0, SELL: 1, HOLD: 2, WATCH: 3, AVOID: 4};
 const VERDICT_CLS = {BUY: "pos", SELL: "neg", AVOID: "neg", HOLD: "", WATCH: "muted", ABSTAIN: "muted"};
 function qsSignal(r) { return sgData ? sgData[r.ticker] : null; }
-// The model ensemble's view of a screened stock (from the latest run of every model, Models tab).
+// The model ensemble's view of a screened stock (from the latest run of every model, Screener → Models).
 function qsZoo(r) { return zoo && zoo.stocks ? zoo.stocks[r.ticker] : null; }
 const ZOO_TOP = m => ZOO_FITTED.filter(k => m[k] && m[k].pct >= 0.8).length;
 function qsValue(r, k) {
@@ -1604,8 +1606,7 @@ const QS_WIDTHS = {
             strength_flags: 74, valuation_flags: 80, implied_growth: 96, forward_pe: 66, analyst_mean: 112, analysts: 70,
             target_upside: 66},
   signals: {rank: 52, ticker: 164, verdict: 104, model_rank: 72, action: 100, trend: 106, lift_up: 78, lift_down: 88,
-            p_large_loss: 64, warnings: 210, quality_score: 66, analyst_mean: 56},
-  models: {rank: 54, ticker: 220, ens: 82, ens_net: 76, ens_spy: 64, agree: 78, best_model: 170, quality_score: 66}};
+            p_large_loss: 64, warnings: 210, quality_score: 66, analyst_mean: 56}};
 function fitScreen(view, cols) {
   const t = $("qsTable"), w = QS_WIDTHS[view] || {};
   t.classList.add("fit-table");
@@ -1622,7 +1623,15 @@ function fitScreen(view, cols) {
   $("qsLegendBox").hidden = false;
   showLegend(store.get("qsLegendShown", true));
 }
+function showScreenView() {
+  const models = qsView === "models";
+  $("qsScreenPanel").hidden = models;
+  $("qsModelsPanel").hidden = !models;
+  document.querySelectorAll("[data-qv]").forEach(b => b.setAttribute("aria-pressed", b.dataset.qv === qsView));
+  if (models) { if (!zoo) loadZoo(); else renderZoo(); }
+}
 function renderScreen() {
+  showScreenView();
   $("qsTable").classList.remove("fit-table"); $("qsLegend").innerHTML = ""; $("qsLegendBox").hidden = true;
   if (!qsData || !qsData.latest) { $("qsTable").innerHTML = "<tr><td class='muted l'>Not built yet: build it once (a few minutes the first time).</td></tr>"; return; }
   const q = $("qsFilter").value.trim().toLowerCase();
@@ -1642,7 +1651,7 @@ function renderScreen() {
   document.querySelectorAll("[data-qv]").forEach(b => b.setAttribute("aria-pressed", b.dataset.qv === qsView));
   if (qsView !== "signals") $("qsTable").classList.remove("sg-table");
   if (qsView === "signals") { renderSignals(shown, arrow); return; }
-  if (qsView === "models") { renderModelsView(shown, arrow); return; }
+  if (qsView === "models") return;
   $("qsTable").innerHTML = "<tr>" + QS_COLS.map(([c, l]) => `<th data-k="${c}" style="cursor:pointer" class="${c === "ticker" ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
     shown.map(r => `<tr><td>${r.rank}</td><td class="l"><b>${tk(r.ticker)}</b><div class="muted small clip" title="${esc(r.name || "")}${r.note ? ` (${esc(r.note)})` : ""}">${esc(r.name || "")}${r.note ? ` (${esc(r.note)})` : ""}</div></td>
       <td title="${qsParts(r)}">${r.combined_score == null ? "–" : r.combined_score.toFixed(1)}</td>
@@ -1663,32 +1672,6 @@ function renderScreen() {
   });
 }
 const liftCell = (v, bad) => v == null ? "–" : `<span class="${v >= 1.2 ? (bad ? "neg" : "pos") : v <= 0.8 ? "muted" : ""}">${v.toFixed(2)}×</span>`;
-const ZV_COLS = [["rank", "Rank", "The screen rank (quality and analysts), the same as the first view"],
-  ["ticker", "Ticker", "The stock; its company name below"],
-  ["ens", "Ensemble", "The learned-weight ensemble's rank among today's S&P 500 (100 = its top pick); it orders the best buy"],
-  ["ens_net", "Exp. net", "20 sessions after costs: the historical average of stocks the ensemble ranked like this (out of sample)"],
-  ["ens_spy", "vs SPY", "The same, less SPY over the same days"],
-  ["agree", "Top fifth", "How many of the fitted models put it in their top fifth"],
-  ["best_model", "Most bullish", "The fitted model that ranks it highest, with its percentile"],
-  ["quality_score", "Quality", "The quality score (0-100), as in the first view"]];
-function renderModelsView(shown, arrow) {
-  $("qsTable").classList.remove("sg-table");
-  if (!zoo) { $("qsTable").innerHTML = "<tr><td class='muted l'>Loading the models' run…</td></tr>"; api("/api/model-zoo").then(d => { if (d.available) { zoo = d; renderScreen(); } else $("qsTable").innerHTML = "<tr><td class='muted l'>No run of the models yet: Models tab → Run all models.</td></tr>"; }); return; }
-  $("qsTable").innerHTML = "<tr>" + ZV_COLS.map(([c, l, tip]) => `<th data-k="${c}" title="${esc(tip || l)}" style="cursor:pointer" class="${["ticker", "best_model"].includes(c) ? "l" : ""}">${l}${arrow(c)}</th>`).join("") + "</tr>" +
-    shown.map(r => {
-      const z = qsZoo(r) || {}, e = z.ensemble;
-      const best = ZOO_FITTED.filter(k => z[k]).sort((a, b) => z[b].pct - z[a].pct)[0];
-      return `<tr><td>${r.rank}</td><td class="l"><b>${tk(r.ticker)}</b><div class="muted small clip" title="${esc(r.name || "")}">${esc(r.name || "")}</div></td>
-        <td><b>${e ? Math.round(e.pct * 100) : "–"}</b></td><td>${e ? spct(e.forecast) : "–"}</td><td class="muted">${e ? spct(e.excess_vs_spy) : "–"}</td>
-        <td>${Object.keys(z).length ? `${ZOO_TOP(z)} of ${ZOO_FITTED.filter(k => z[k]).length}` : "–"}</td>
-        <td class="l small">${best ? `${esc(ZOO_SHORT[best])} <span class="muted">${Math.round(z[best].pct * 100)}</span>` : "–"}</td>
-        <td>${r.quality_score == null ? "–" : r.quality_score.toFixed(0)}</td></tr>`;
-    }).join("");
-  fitScreen("models", ZV_COLS);
-  $("qsTable").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
-    const c = th.dataset.k; qsSort = {key: c, dir: qsSort.key === c ? -qsSort.dir : (["ens", "ens_net", "ens_spy", "agree"].includes(c) ? -1 : 1)}; renderScreen();
-  });
-}
 // Signals and action, fitted: one line per cell where it can be, numbers right-aligned, the company name cut short
 // (full name on hover), the verdict and action as small badges, and warnings folded after the first.
 function renderSignals(shown, arrow) {
@@ -2237,7 +2220,9 @@ $("agSave").onclick = async () => {
 };
 
 (async () => {
-  const linked = location.hash.slice(1);
+  let linked = location.hash.slice(1);
+  // The Models tab is now a view of the Screener.
+  if (linked === "models" || store.get("tab", "") === "models") { store.set("qsView", "models"); store.set("tab", "scanTab"); if (linked === "models") linked = "scanTab"; }
   const isTab = id => document.getElementById(id)?.classList.contains("tab");
   showTab(isTab(linked) ? linked : isTab(store.get("tab", "today")) ? store.get("tab", "today") : "today");
   if (linked) history.replaceState(null, "", location.pathname);

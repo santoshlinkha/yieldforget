@@ -779,7 +779,7 @@ const ZOO_FITTED = ["xgb_rank", "xgb_rank_all", "lgbm_lambdarank", "lgbm_regress
 async function loadZooTicker() {
   let d;
   try { d = await getJSON("/api/model-zoo?ticker=" + encodeURIComponent(symbol)); } catch (e) { $("zooBox").innerHTML = `<p class="neg">${esc(e.message)}</p>`; return; }
-  if (!d.available) { $("zooBox").innerHTML = '<p class="muted small">No run of the models yet: Models tab → Run all models.</p>'; return; }
+  if (!d.available) { $("zooBox").innerHTML = '<p class="muted small">No run of the models yet: Screener → Models → Run all models.</p>'; return; }
   const f = d.forecasts || {};
   if (!Object.keys(f).length) { $("zooBox").innerHTML = `<p class="muted small">${esc(symbol)} was not scored in the run of ${esc(d.info_cutoff)} (not an S&amp;P 500 member or in your watchlist).</p>`; return; }
   const ic = k => { const r = (d.tested || {})[k]; return r && r.development_ic != null ? `${r.development_ic.toFixed(3)}${r.recent_ic != null ? " · " + r.recent_ic.toFixed(3) : ""}` : "untested"; };

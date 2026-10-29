@@ -529,7 +529,7 @@ def apply_ensemble(today: pd.DataFrame, zoo: dict | None, bundle: dict, rows: pd
     # P(profit) it gives an ensemble percentile is a transfer, untested until it is refitted on ensemble out-of-fold
     # scores (backlog). Said on the record and on the Trade page rather than hidden.
     return out, {"name": "ensemble", "weights": zoo["ensemble"]["weights"], "version": zoo["ensemble"].get("version"),
-                 "note": "learned-weight ensemble of the stock models (Models tab)",
+                 "note": "learned-weight ensemble of the stock models (Screener → Models)",
                  "coverage": int(have.sum()), "of": int(len(out)),
                  "quality_matched": False,
                  "quality_note": "P(profit after costs) comes from the trade-quality model fitted on the XGBoost "
@@ -615,7 +615,7 @@ def run(store, cache_dir: Path, as_of: date | None = None, policy_name: str = "b
     say("Scoring every stock on today's close", 0.78)
     at = P.build(data, policy.horizon, dates=pd.DatetimeIndex([cutoff]), macro=macro)
     today = score_today(bundle, at.xs(cutoff, level="date", drop_level=False))
-    # The ranking: the learned-weight ensemble of every stock model when its run for this close exists (Models tab,
+    # The ranking: the learned-weight ensemble of every stock model when its run for this close exists (Screener → Models,
     # ``stocks.model_zoo``); else the internal ranker alone. Run it here when it is missing or older than the cutoff.
     ranker_used = {"name": "xgb_rank", "note": "the internal XGBoost ranker"}
     if use_ensemble:
