@@ -501,10 +501,10 @@ function planCheck(v) {
   return h;
 }
 // The plan in a few lines: what to do, at what price, when, the exits and the size. The rest is under Details.
-// The agents' rating as a plain call: BUY, HOLD (held) or WATCH, SELL.
+// The agents' rating as a plain call: BUY; HOLD (held) or WATCH; SELL (held) or AVOID.
 function aiWord(rating, held = false) {
   const low = String(rating || "").toLowerCase();
-  return /^(buy|overweight)$/.test(low) ? "BUY" : /^(sell|underweight)$/.test(low) ? "SELL" : held ? "HOLD" : "WATCH";
+  return /^(buy|overweight)$/.test(low) ? "BUY" : /^(sell|underweight)$/.test(low) ? (held ? "SELL" : "AVOID") : held ? "HOLD" : "WATCH";
 }
 function planSummary(run) {
   const f = run.final, t = run.trader, row = f || t, p = (row && row.plan) || {}, v = (row && row.validation) || {};

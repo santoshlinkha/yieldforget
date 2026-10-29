@@ -236,6 +236,8 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
   :root:not([data-theme="light"]) .ai-call.good { color: #6ee7b7; background: #052e22; border-color: #047857; }
   :root:not([data-theme="light"]) .ai-call.mid { color: #fcd34d; background: #2e2205; border-color: #92400e; }
   :root:not([data-theme="light"]) .ai-call.bad { color: #fca5a5; background: #2e0909; border-color: #b91c1c; } }
+.th-run { font: inherit; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); }
 .ai-call { font: inherit; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); min-width: 42px; }
 .ai-call.good { color: #047857; background: #ecfdf5; border-color: #6ee7b7; }
@@ -1066,7 +1068,7 @@ async function loadTrade() {
     $("runnersTable").innerHTML = allPicks.length
       ? `<colgroup><col style="width:11%"><col style="width:15%"><col style="width:15%"><col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:19%"></colgroup>` +
         `<tr><th class="l">Ticker</th><th class="num" title="Share of the trading budget, out of 100">Weight</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
-        `<th class="num" title="Sell target: sell when a close reaches this far above the fill">Sell</th><th class="num" title="Stop loss: sell when a close falls this far below the fill">Stop</th><th class="l" title="The AI agents' latest call">AI</th></tr>` +
+        `<th class="num" title="Sell target: sell when a close reaches this far above the fill">Sell</th><th class="num" title="Stop loss: sell when a close falls this far below the fill">Stop</th><th class="l"><button type="button" class="th-run" id="aiAllPicks" title="Run the AI agents on every pick, one after another (a stock already analysed today is not run again)">AI ▶</button></th></tr>` +
         allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l"><b>${tk(x.ticker)}</b></td>` +
           `<td class="num">${weightCell(x.ticker, false)}</td><td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
           `<td class="num pos">${spct(x.target_pct, 1)}</td><td class="num neg">${spct(x.stop_pct, 1)}</td>` +
@@ -1084,6 +1086,17 @@ async function loadTrade() {
         $("runnersAll").disabled = true; $("runnersAll").textContent = "Asked today";
       } catch (e) { showError(e.message); }
       loadAgentReport();
+    };
+    if ($("aiAllPicks")) $("aiAllPicks").onclick = async () => {
+      // Only the picks not yet analysed on today's data: the same stock on the same data is never run twice.
+      const todo = [];
+      for (const x of allPicks) {
+        try { const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker)); if (!(r.available && r.date === t.data_to)) todo.push(x.ticker); }
+        catch (e) { todo.push(x.ticker); }
+      }
+      if (!todo.length) { showError("Every pick was already analysed on today's data."); return; }
+      try { await api("/api/ai-decisions", {tickers: todo, analysts: ["market", "social", "news", "fundamentals"], date: t.data_to}); loadAgentReport(); }
+      catch (e) { showError(e.message); }
     };
     lastPicks = [...allPicks, ...t.sells.filter(s => !allPicks.some(x => x.ticker === s.ticker))];
     runnerAgents(lastPicks);
@@ -1142,12 +1155,12 @@ async function loadAgentReport() {
 }
 // The agents' latest call on a stock: their own rating and what it means as an action, the day it was for and the
 // model that ran it; a later run that failed is said under it (the reason in a few words).
-// The agents' rating as a plain call (as stocks.verdict.ai_decision): Buy and Overweight are BUY, Hold is HOLD when you
-// hold the stock and WATCH when you do not, Underweight and Sell are SELL.
+// The agents' rating as a plain call (as stocks.verdict.ai_decision): Buy and Overweight are BUY; Hold is HOLD when you
+// hold the stock and WATCH when you do not; Underweight and Sell are SELL when you hold it and AVOID when you do not.
 function aiWord(rating, held) {
   const low = String(rating || "").toLowerCase();
   if (/^(buy|overweight)$/.test(low)) return ["BUY", "good"];
-  if (/^(sell|underweight)$/.test(low)) return ["SELL", "bad"];
+  if (/^(sell|underweight)$/.test(low)) return [held ? "SELL" : "AVOID", "bad"];
   return [held ? "HOLD" : "WATCH", "mid"];
 }
 function agentCell(r, held = false) {
@@ -1167,7 +1180,11 @@ async function runnerAgents(list) {
     const cells = document.querySelectorAll(`[data-agentcell="${x.ticker}"]`);
     try {
       const r = await api("/api/agent-report?ticker=" + encodeURIComponent(x.ticker));
-      cells.forEach(c => { c.innerHTML = agentCell(r); });
+      cells.forEach(c => {
+        c.innerHTML = agentCell(r);
+        const btn = c.parentElement && c.parentElement.querySelector(".rn-ai");
+        if (btn) btn.hidden = !!(r.available && r.date === agentDay);        // decided today: no second run
+      });
       const today = r.available && r.date === agentDay;
       const call = today && r.agent_rating ? aiWord(r.agent_rating, true) : null;      // the Sell table: stocks you hold
       document.querySelectorAll(`[data-aicall="${x.ticker}"]`).forEach(b => {
