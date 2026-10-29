@@ -601,6 +601,34 @@ details > summary::after { content: "Show"; margin-left: auto; flex: 0 0 auto; f
 details[open] > summary::after { content: "Hide"; }
 .toggle-btn { font-size: 11px; font-weight: 700; padding: 1px 9px; border: 1px solid var(--border-strong, #d1d5db); border-radius: 6px;
   color: var(--accent, #2563eb); background: var(--surface, #fff); cursor: pointer; }
+
+/* Trend page: more space between and inside the panels, and one rhythm for what is inside them. */
+#trend .trend-row { gap: 20px; }
+#trend .trend-row > .card { padding: 18px 20px; margin-bottom: 20px; }
+#trend .card > h3, #trend .card-head { margin: 0 0 12px; }
+#trend .card-head h3 { margin: 0; }
+#trend .card > p.muted { margin: 0 0 12px; line-height: 1.5; }
+#trend .rot-group { margin-top: 14px; }
+#trend .rot-gh { margin-bottom: 8px; }
+#trend .rot-card { padding: 10px 12px; margin-bottom: 10px; }
+#trend .rot-chips { margin: 8px 0 4px; gap: 6px; }
+#trend .trend-card { padding: 10px 12px; margin-bottom: 10px; }
+#trend .trend-card .small { line-height: 1.5; }
+#trend .trend-h { margin-bottom: 4px; }
+#trend .brief-sum { margin: 0 0 12px; line-height: 1.55; }
+#trend .watch-h { margin: 14px 0 6px; }
+#trend .watch-chips { gap: 6px; }
+#trend .sig-tiles { gap: 10px; margin: 4px 0; }
+#trend .sig-tile { padding: 9px 12px; }
+#trend .bars { gap: 10px 12px; }
+#trend .movers { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+#trend .movers h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+#trend .movers ol { margin: 0; padding-left: 20px; line-height: 1.7; }
+#trend table td, #trend table th { padding-top: 7px; padding-bottom: 7px; }
+#trend .econ { padding: 0; border: 0; background: transparent; margin: 0; }
+#trend .econ ul { margin-top: 8px !important; line-height: 1.6; }
+#trend details { margin-top: 10px; }
+#trend .note { margin: 10px 0; }
 </style>
 </head>
 <body>
