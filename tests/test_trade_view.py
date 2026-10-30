@@ -332,6 +332,31 @@ def test_a_sell_call_is_counted_once_and_is_right_when_the_stock_then_fell(tmp_p
     assert out["summary"]["sells"]["correct"] == 1
 
 
+def test_a_position_is_sold_at_the_next_close_when_the_agents_or_the_model_say_sell_while_it_is_held():
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    close = pd.DataFrame({"AAA": np.r_[100.0, 100.0, 104.0, 106.0, np.full(26, 90.0)], "SPY": 100.0}, index=idx)
+    held = lambda: {"ticker": "AAA", **T._follow(close, "AAA", str(idx[0].date()), 20)}  # noqa: E731   bought idx[1]
+    at = lambda i, hour: pd.Timestamp(f"{idx[i].date()} {hour}:00", tz="America/New_York").tz_convert("UTC")  # noqa: E731
+    p = held()
+    # The 1st call came the morning of the buy, before the close it was bought at: not while held. The 2nd, the
+    # morning of idx[3], sells at that day's close.
+    T._sell_on_call(close, p, {"AAA": [(at(1, 10), "AI"), (at(3, 10), "AI")]})
+    assert p["exit"] == "AI sell" and p["last_date"] == str(idx[3].date()) and p["last"] == 106.0
+    assert p["return"] == pytest.approx(0.06) and p["status"] == "done" and p["sessions"] == 2
+    assert p["sell_call"] == {"date": str(idx[3].date()), "by": "AI"}
+    model = held()   # the daily decision on idx[2]'s data: made at that close, so sold at the next one
+    T._sell_on_call(close, model, {"AAA": [(T._close_at(idx[2]), "model")]})
+    assert model["exit"] == "model sell" and model["last_date"] == str(idx[3].date())
+    late = held()   # a call after the 20th close changes nothing
+    T._sell_on_call(close, late, {"AAA": [(T._close_at(idx[25]), "model")]})
+    assert "sell_call" not in late and late["last_date"] == str(idx[21].date()) and late["return"] == pytest.approx(-0.10)
+    still = {"ticker": "AAA", **T._follow(close, "AAA", str(idx[20].date()), 20)}   # open; a call on the last close
+    T._sell_on_call(close, still, {"AAA": [(T._close_at(idx[-1]), "model")]})
+    assert still["status"] == "open" and still["sell_called"] == {"date": str(idx[-1].date()), "by": "model"}
+
+
 def test_the_track_record_is_a_paper_trade_from_one_start_date():
     from tradingagents.stocks.track_record import paper_start
 

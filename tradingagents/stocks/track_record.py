@@ -32,6 +32,11 @@ the stock was lower 20 sessions later (selling avoided a fall), wrong when it wa
 **Deleting** a row hides it from this view (``track_record_hidden``); the decision or rating it came from is
 never changed, and restoring brings it back. Summaries count only the rows shown.
 
+**Sold on a sell call.** A model's pick, a second model's buy or an AI's pick still held when the agents rate the
+stock Sell or Underweight (dated the day the run was made) or the daily decision says EXIT or REDUCE is sold at the
+close of the first session after that call, when that comes before its planned exit (``exit``: "AI sell" or
+"model sell"), and judged on that sale.
+
 Prices are the local store's adjusted closes (total return). Nothing here changes any record.
 """
 
@@ -104,8 +109,8 @@ def _policy_picks(con, per_day: int = 5) -> list[dict]:
 
 
 def _ai_picks(con) -> list[dict]:
-    """The AI's picks each day (the last ``ai_pick_state`` saved that day: what the Trade page showed) with the
-    agents' plan the page showed for each: the newest run made before the next day's pick (a plan still valid is
+    """The AI's picks each day (every ticker any ``ai_pick_state`` saved that day named, so a pick later replaced is
+    kept) with the agents' plan the page showed for each: the newest run made before the next day's pick (a plan still valid is
     reused, not run again). Rated AVOID (Underweight, Sell) is not bought (``bought`` false), and a plan without a
     Buy at price is bought at the next close."""
     if con is None:
@@ -123,9 +128,10 @@ def _ai_picks(con) -> list[dict]:
     except Exception:   # an older database without the history
         return []
     days: dict[str, dict] = {}
-    for s, at in states:
+    for s, at in states:   # every pick of the day in its history, in the order first picked (an AVOID replaced too)
         if s.get("date") and s.get("tickers"):
-            days.setdefault(s["date"], {"from": at})["tickers"] = [str(t).upper() for t in s["tickers"]]
+            d = days.setdefault(s["date"], {"from": at, "tickers": []})
+            d["tickers"] += [t for t in (str(x).upper() for x in s["tickers"]) if t not in d["tickers"]]
     order = sorted(days)
     out = []
     for n, day in enumerate(order):
@@ -194,6 +200,66 @@ def _follow_plan(close: pd.DataFrame, low: pd.DataFrame, high: pd.DataFrame, p: 
 
 
 SELLS = ("EXIT", "SELL", "REDUCE")
+
+
+def _close_at(day) -> pd.Timestamp:
+    """When a session closes: 4 pm New York, in UTC."""
+    return pd.Timestamp(f"{pd.Timestamp(day).date()} 16:00", tz="America/New_York").tz_convert("UTC")
+
+
+def _sell_signals(con) -> dict[str, list[tuple[pd.Timestamp, str]]]:
+    """Every sell call, with when it was made (UTC): the agents' final Sell or Underweight at the time the run was
+    saved (``created_at``, so a call is never used before it existed), and the daily decision's EXIT or REDUCE on a
+    stock held at the close of its data date. ``{ticker: [(when, "AI" | "model"), ...]}``, oldest first."""
+    if con is None:
+        return {}
+    import json
+
+    out: dict[str, set] = {}
+    try:
+        for t, at, action in con.execute("SELECT ticker, created_at, action FROM entry_plans"
+                                         " WHERE stage = 'portfolio_manager'").fetchall():
+            if str(action or "").title() in DOWN:
+                when = pd.Timestamp(at)
+                when = when.tz_localize("UTC") if when.tzinfo is None else when.tz_convert("UTC")
+                out.setdefault(str(t).upper(), set()).add((when, "AI"))
+        for cutoff, payload in con.execute("SELECT info_cutoff, payload_json FROM stock_decisions").fetchall():
+            for lot in json.loads(payload).get("lots", []):
+                if str(lot.get("action") or "").upper() in SELLS:
+                    out.setdefault(str(lot["ticker"]).upper(), set()).add((_close_at(cutoff), "model"))
+    except Exception:   # an older database: no sell call is known
+        pass
+    return {t: sorted(v) for t, v in out.items()}
+
+
+def _sell_on_call(close: pd.DataFrame, p: dict, signals: dict) -> None:
+    """A position held when the agents or the model said sell (a call made at or after the close it was bought at)
+    is sold at the first close after the call, when that comes before its planned exit (``exit`` "AI sell" or
+    "model sell"). A call after the latest close is noted (``sell_called``): it sells at the next close."""
+    if p.get("status") not in ("done", "open") or not p.get("entry_date") or p["ticker"] not in close:
+        return
+    bought = _close_at(p["entry_date"])
+    call = next(((at, who) for at, who in signals.get(p["ticker"], []) if at >= bought), None)
+    if call is None:
+        return
+    said = {"date": str(call[0].tz_convert("America/New_York").date()), "by": call[1]}
+    px = close[p["ticker"]].dropna()
+    later = [d for d in px.index if _close_at(d) > call[0]]
+    last = pd.Timestamp(p["last_date"])
+    if not later:
+        if p["status"] == "open":
+            p["sell_called"] = said
+        return
+    day = later[0]
+    if day > last or (day == last and p["status"] == "done"):   # the planned exit came first
+        return
+    sale = float(px[day])
+    p.update({"last": sale, "last_date": str(day.date()), "return": sale / p["entry"] - 1, "status": "done",
+              "sessions": int(((px.index > pd.Timestamp(p["entry_date"])) & (px.index <= day)).sum()),
+              "exit": f"{call[1]} sell", "sell_call": said})
+    if "SPY" in close:
+        spy = close["SPY"].dropna().loc[pd.Timestamp(p["entry_date"]):day]
+        p["spy"] = float(spy.iloc[-1] / spy.iloc[0] - 1) if len(spy) > 1 else 0.0
 
 
 def _sell_calls(con) -> list[dict]:
@@ -361,12 +427,14 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
     frames = bars(tickers, cache_dir) if len(tickers) > 1 else {"Close": pd.DataFrame(), "Low": pd.DataFrame()}
     close, low = frames["Close"], frames.get("Low", pd.DataFrame())
     high = frames.get("High", pd.DataFrame())
+    signals = _sell_signals(con)   # a position is sold early when the agents or the model say sell while it is held
     for p in ai:
         if not p["bought"]:   # AVOID: not bought; the move since is shown for reference, not judged
             seen = _follow(close, p["ticker"], p["data_to"], p["horizon"])
             p.update({"status": "not bought", "move": seen.get("return"), "sessions": seen.get("sessions")})
             continue
         p.update(_follow_plan(close, low, high, p))
+        _sell_on_call(close, p, signals)
         if p["status"] == "done":
             p["verdict"] = "correct" if p["return"] - p["cost_rt"] > 0 else "wrong"
             p["beat_spy"] = p.get("spy") is not None and p["return"] > p["spy"]
@@ -381,11 +449,13 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
     for p in policy:
         p.update(_follow(close, p["ticker"], p["data_to"], p["horizon"]) if p["choice"] == "next_close"
                  else _follow_limit(close, low, sigma, p))
+        _sell_on_call(close, p, signals)
         if p["status"] == "done":
             p["verdict"] = "correct" if p["return"] - p["cost_rt"] > 0 else "wrong"
             p["beat_spy"] = p.get("spy") is not None and p["return"] > p["spy"]
     for p in picks:
         p.update(_follow(close, p["ticker"], p["data_to"], p["horizon"]))
+        _sell_on_call(close, p, signals)
         if p["status"] == "done":
             p["verdict"] = "correct" if p["return"] - p["cost_rt"] > 0 else "wrong"
             p["beat_spy"] = p.get("spy") is not None and p["return"] > p["spy"]
@@ -500,8 +570,9 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
             "summary": {"best_buy": summary(picks, lambda r: r["place"] == 1), "all_picks": summary(picks),
                         "policy": summary(policy), "agents": summary(agents, costs=False),
                         "ai_picks": summary(ai), "sells": summary(sells, costs=False)},
-            "outcome": "fixed-horizon diagnostic: held to the 20th close after entry (the limit record from its fill), "
-                       "not the barrier policy's result and not an account; see model_outputs record.fixed_horizon_*",
+            "outcome": "held to the 20th close after entry (the limit record from its fill), or sold earlier at the "
+                       "close after a sell call made while held (the agents' Sell or Underweight, the daily "
+                       "decision's EXIT or REDUCE); not the barrier policy's result and not an account",
             "rules": {"correct_pick": "the return over 20 sessions from the next close beat the round-trip cost",
                       "correct_policy": "the same, from the next close or from the limit fill; a limit that never "
                                         "filled is not judged",

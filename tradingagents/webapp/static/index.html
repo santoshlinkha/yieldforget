@@ -898,7 +898,7 @@ details[open] > summary::after { content: "Hide"; }
 
 
     <section class="tab" id="record">
-      <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made, every AI's pick, every rating the AI agents gave and every sell call, followed for 20 trading days after the day they could first be traded. Judged only once the 20 days are over (or, for the AI's picks, once the Sell target or Stop is reached); until then the return so far is shown.</p></div>
+      <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made, every AI's pick, every rating the AI agents gave and every sell call, followed for 20 trading days after the day they could first be traded. Judged only once the 20 days are over (or, for the AI's picks, once the Sell target or Stop is reached); until then the return so far is shown. <b>A position still held is sold at the next close when the AI agents rate it Sell or Underweight, or the model says EXIT or REDUCE.</b></p></div>
         <button class="ghost" id="recRefresh">Refresh</button></div>
       <p class="small" id="recPaper" style="margin:0 0 8px"></p>
       <div class="kpis" id="recKpis"></div>
@@ -916,7 +916,7 @@ details[open] > summary::after { content: "Hide"; }
       </div>
       <div class="card">
         <h3>The AI's picks</h3>
-        <p class="muted small">Each day's AI's pick (Trade tab), followed as the agents planned it: a buy limit at <b>Buy at</b> until the plan expires (no Buy at: bought at the next close), then <b>sold</b> at the Sell target, the Stop or the 20th close after the fill, whichever came first. A stop and a target reached the same day count as the stop. Rated AVOID: not bought, shown for reference.</p>
+        <p class="muted small">Every AI's pick in the history (Trade tab), including one later replaced, followed as the agents planned it: a buy limit at <b>Buy at</b> until the plan expires (no Buy at: bought at the next close), then <b>sold</b> at the Sell target, the Stop, a sell call (the agents' Sell/Underweight or the model's EXIT/REDUCE, at the next close) or the 20th close after the fill, whichever came first. A stop and a target reached the same day count as the stop. Rated AVOID: not bought, shown for reference.</p>
         <div class="table-wrap"><table id="recAi" class="compact"></table></div><div id="recAiMore"></div>
       </div>
       <div class="card">
@@ -1846,7 +1846,7 @@ async function loadTrackRecord() {
       `<td class="${tone(f.profit)}"><b>${susd(f.profit)}</b> <span class="muted small">${f.invested ? spct(f.profit / f.invested, 1) : ""}</span></td>` +
       `<td>${o.trades}</td><td class="${tone(o.profit)}">${o.trades ? susd(o.profit) : "–"}</td></tr>`;
   };
-  $("recDollar").innerHTML = `<caption class="small muted l" style="caption-side:top;text-align:left">If you had bought <b>$1</b> of every recommendation exactly as made (at the next close, sold at the 20th close after, less the estimated round-trip cost; the agents' Buy/Overweight calls before costs)</caption>` +
+  $("recDollar").innerHTML = `<caption class="small muted l" style="caption-side:top;text-align:left">If you had bought <b>$1</b> of every recommendation exactly as made (at the next close, sold at the 20th close after or at the close after a sell call while held, less the estimated round-trip cost; the agents' Buy/Overweight calls before costs)</caption>` +
     `<tr><th class="l">Recommendations</th><th>Finished</th><th>Put in</th><th>Worth now</th><th>Profit / loss</th><th>Still open</th><th>Open P/L (latest close)</th></tr>` +
     dollarLine("1st pick each day", one.best_buy) + dollarLine("Every pick (1st + runners-up)", one.all_picks) +
     dollarLine("Weighted split ($1 a day across the picks)", one.weighted) +
@@ -1858,6 +1858,9 @@ async function loadTrackRecord() {
   $("recRule").textContent = `${d.outcome ? d.outcome[0].toUpperCase() + d.outcome.slice(1) + ". " : ""}Beat cost: ${d.rules.correct_pick}. Bought at the close of the session after the data date (the earliest it could trade). Overlapping holds are not independent: the sample is the number of data dates, not of rows.`;
   const verdict = r => r.verdict === "correct" ? `<span class="pos"><b>✓ ${r.rating ? "right direction" : "beat cost"}</b></span>` : r.verdict === "wrong" ? `<span class="neg"><b>✗ ${r.rating ? "wrong direction" : "below cost"}</b></span>`
     : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
+  // Sold early on a sell call (the agents' Sell/Underweight or the daily decision's EXIT/REDUCE) while held.
+  const callNote = r => r.sell_call ? `<div class="neg small"><b>sold: ${esc(r.sell_call.by)} said sell</b> ${esc(r.sell_call.date.slice(5))}</div>`
+    : r.sell_called ? `<div class="neg small">${esc(r.sell_called.by)} said sell ${esc(r.sell_called.date.slice(5))}: sells at the next close</div>` : "";
   const allPicks = d.picks, allPolicy = d.policy || [], allAgents = d.agents;
   const pk = firstRows(allPicks, recRows.picks), po = firstRows(allPolicy, recRows.policy), ag = firstRows(allAgents, recRows.agents);
   const ai = firstRows(d.ai_picks || [], recRows.ai), sl = firstRows(d.sells || [], recRows.sells);
@@ -1868,7 +1871,8 @@ async function loadTrackRecord() {
   const sold = r => r.exit === "target" ? `<span class="pos"><b>Sell target</b></span> ${usd(r.last)}<div class="muted small">${esc(r.last_date)}, day ${r.sessions}</div>`
     : r.exit === "stop" ? `<span class="neg"><b>Stop</b></span> ${usd(r.last)}<div class="muted small">${esc(r.last_date)}, day ${r.sessions}</div>`
     : r.exit === "day 20" ? `20th close ${usd(r.last)}<div class="muted small">${esc(r.last_date)}</div>`
-    : r.status === "open" ? `<span class="muted">held · now ${usd(r.last)}</span><div class="muted small">day ${r.sessions} of ${r.horizon}</div>` : "–";
+    : r.sell_call ? `${usd(r.last)}<div class="muted small">${esc(r.last_date)}, day ${r.sessions}</div>${callNote(r)}`
+    : r.status === "open" ? `<span class="muted">held · now ${usd(r.last)}</span><div class="muted small">day ${r.sessions} of ${r.horizon}</div>${callNote(r)}` : "–";
   const aiBought = r => !r.bought ? `<span class="muted">not bought</span>`
     : r.entry != null ? `${usd(r.entry)}<div class="muted small">${esc(r.entry_date)}${r.buy_at == null ? ", next close" : ""}</div>`
     : `<span class="muted">${esc(r.status)}</span>`;
@@ -1891,16 +1895,16 @@ async function loadTrackRecord() {
       `<td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td><td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="l">${sellResult(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No sell call yet.</td></tr>";
   $("recPicks").innerHTML = d.picks.length ? "<colgroup><col style='width:12%'><col style='width:12%'><col style='width:13%'><col style='width:14%'><col style='width:11%'><col style='width:8%'><col style='width:30%'></colgroup>" +
-    "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th></tr>" +
+    "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Sold / now</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th></tr>" +
     d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
-      `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
+      `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div>${callNote(r)}</td>` +
       `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No decision saved yet.</td></tr>";
   const choice = r => r.choice === "limit_dip" ? `limit${r.limit ? " " + usd(r.limit) : ""}` : "next close";
-  $("recPolicy").innerHTML = (d.policy || []).length ? "<tr><th class='l'>Data to</th><th class='l'>Stock</th><th class='l'>Its choice</th><th>Expected vs cash</th><th>Bought</th><th>Now / day 20</th><th>Return</th><th>SPY</th><th class='l'>Result</th></tr>" +
+  $("recPolicy").innerHTML = (d.policy || []).length ? "<tr><th class='l'>Data to</th><th class='l'>Stock</th><th class='l'>Its choice</th><th>Expected vs cash</th><th>Bought</th><th>Sold / now</th><th>Return</th><th>SPY</th><th class='l'>Result</th></tr>" +
     d.policy.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">#${r.place}</span></td>` +
       `<td class="l">${esc(choice(r))}<div class="muted small">${r.validated ? "validated" : "shown as: insufficient evidence"}</div></td><td>${spct(r.expected_excess)}</td>` +
-      `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td>` +
+      `<td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td><td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div>${callNote(r)}</td>` +
       `<td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="muted">${r.spy == null ? "–" : spct(r.spy, 1)}</td><td class="l">${verdict(r)}</td></tr>`).join("")
     : "<tr><td class='muted'>No suggestion from the second model saved yet.</td></tr>";
   $("recAgents").innerHTML = d.agents.length ? "<tr><th class='l'>As of</th><th class='l'>Stock</th><th class='l'>Rating</th><th>Return</th><th class='l'>Result</th></tr>" +
