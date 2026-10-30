@@ -280,6 +280,58 @@ def test_the_cumulative_value_curve_follows_each_dollar_from_entry_to_exit(tmp_p
     assert all(c["invested"] == 1.0 for c in curve)
 
 
+def test_an_ai_pick_is_bought_at_buy_at_and_sold_at_its_target_or_stop_whichever_comes_first():
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    close = pd.DataFrame({"AAA": 100.0, "SPY": 100.0}, index=idx)
+    low, high = close.copy(), close.copy()
+    low.loc[idx[2], "AAA"] = 95.0                      # reaches Buy at 96 on the 2nd session after the pick
+    high.loc[idx[5], "AAA"] = 110.0                    # then the Sell target 108
+    p = {"ticker": "AAA", "data_to": str(idx[0].date()), "buy_at": 96.0, "target": 108.0, "stop": 90.0,
+         "expires": str(idx[4].date()), "horizon": 20}
+    got = T._follow_plan(close, low, high, p)
+    assert got["entry_date"] == str(idx[2].date()) and got["entry"] == 96.0
+    assert got["exit"] == "target" and got["last"] == 108.0 and got["last_date"] == str(idx[5].date())
+    assert got["return"] == pytest.approx(108 / 96 - 1) and got["status"] == "done"
+    low.loc[idx[5], "AAA"] = 89.0                      # the stop too that day: counted as the stop (the worse case)
+    stopped = T._follow_plan(close, low, high, p)
+    assert stopped["exit"] == "stop" and stopped["last"] == 90.0
+    flat = T._follow_plan(close, close, close, p)      # never down to Buy at before the plan expired
+    assert flat["status"] == "no fill"
+    nobuy = T._follow_plan(close, close, close, {**p, "buy_at": None, "target": None, "stop": None})
+    assert nobuy["entry_date"] == str(idx[1].date()) and nobuy["exit"] == "day 20" and nobuy["sessions"] == 20
+
+
+def test_a_sell_call_is_counted_once_and_is_right_when_the_stock_then_fell(tmp_path, monkeypatch):
+    import json
+
+    from tradingagents.stocks import track_record as T
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    lot = lambda action: {"ticker": "AAA", "action": action, "entry_px": 120.0}  # noqa: E731
+    rows = [{"id": f"d{i}", "info_cutoff": str(idx[i].date()), "payload_json": json.dumps({"lots": [lot(a)]})}
+            for i, a in enumerate(("HOLD", "REDUCE", "REDUCE", "HOLD"))]
+
+    class Con:
+        def execute(self, sql, *a):
+            return type("Rows", (), {"fetchall": lambda self: rows})()
+
+    calls = T._sell_calls(Con())
+    assert [(c["data_to"], c["action"]) for c in calls] == [(str(idx[1].date()), "REDUCE")]   # the repeat is one call
+    close = pd.DataFrame({"AAA": np.r_[100.0, 100.0, 100.0, np.full(27, 90.0)], "SPY": 100.0}, index=idx)
+    monkeypatch.setattr(T, "_picks", lambda con: [])
+    monkeypatch.setattr(T, "_policy_picks", lambda con: [])
+    monkeypatch.setattr(T, "_ai_picks", lambda con: [])
+    monkeypatch.setattr(T, "_sell_calls", lambda con: [dict(c) for c in calls])
+    monkeypatch.setattr(T, "hidden", lambda con: set())
+    monkeypatch.setattr("tradingagents.research.prices.bars", lambda tickers, cache: {"Close": close, "Low": close})
+    out = T.build(None, tmp_path)
+    s = out["sells"][0]
+    assert s["entry_date"] == str(idx[2].date()) and s["return"] == pytest.approx(-0.10) and s["verdict"] == "correct"
+    assert out["summary"]["sells"]["correct"] == 1
+
+
 def test_the_track_record_is_a_paper_trade_from_one_start_date():
     from tradingagents.stocks.track_record import paper_start
 

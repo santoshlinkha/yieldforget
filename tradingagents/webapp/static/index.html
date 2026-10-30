@@ -13,7 +13,7 @@
   --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --text: #0f172a; --muted: #586377; --faint: #94a3b8;
   --border: #e5e7eb; --border-strong: #d1d5db;
   --brand-bg: #0b1220; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-  --accent: #2563eb; --on-accent: #ffffff; --cv-value: #2563eb; --cv-in: #586377; --cv-1: #2a78d6; --cv-2: #eb6834; --cv-3: #1baf7a; --cv-4: #eda100; --cv-5: #e87ba4; --accent-soft: #eff4ff; --buy: #047857; --sell: #dc2626;
+  --accent: #2563eb; --on-accent: #ffffff; --cv-value: #2563eb; --cv-in: #586377; --cv-1: #2a78d6; --cv-2: #eb6834; --cv-3: #1baf7a; --cv-4: #eda100; --cv-5: #e87ba4; --cv-6: #7c4dd6; --accent-soft: #eff4ff; --buy: #047857; --sell: #dc2626;
   --warn-bg: #fffbeb; --warn: #92400e; --warn-line: #fcd34d; --ok-bg: #ecfdf5; --ok: #065f46; --ok-line: #6ee7b7;
   --chart-grid: #eef0f3; --s1: #2563eb; --s2: #f97316; --s3: #a16207; --s4: #059669;
   --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
@@ -24,7 +24,7 @@
     --bg: #0a0f1a; --surface: #111827; --surface-2: #0f1522; --text: #e5e7eb; --muted: #94a3b8; --faint: #64748b;
     --border: #1f2937; --border-strong: #334155;
     --brand-bg: #060a13; --brand-text: #e2e8f0; --brand-muted: #8391a7;
-    --accent: #60a5fa; --on-accent: #0b1220; --cv-value: #3b82f6; --cv-in: #64748b; --cv-1: #3987e5; --cv-2: #d95926; --cv-3: #199e70; --cv-4: #c98500; --cv-5: #d55181; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
+    --accent: #60a5fa; --on-accent: #0b1220; --cv-value: #3b82f6; --cv-in: #64748b; --cv-1: #3987e5; --cv-2: #d95926; --cv-3: #199e70; --cv-4: #c98500; --cv-5: #d55181; --cv-6: #a07ef0; --accent-soft: #172036; --buy: #34d399; --sell: #f87171;
     --warn-bg: #2a2110; --warn: #fcd34d; --warn-line: #78590f; --ok-bg: #0f2a20; --ok: #6ee7b7; --ok-line: #1f6b4f;
     --chart-grid: #1c2433; --s1: #60a5fa; --s2: #fb923c; --s3: #facc15; --s4: #34d399;
     --shadow: none;
@@ -140,7 +140,9 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
   border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; color: var(--text); }
 .cv-key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12.5px; color: var(--text); }
 .cv-key i { display: inline-block; width: 20px; height: 0; border-top: 4px solid var(--cv-value); border-radius: 2px; }
-#recCurveKey { display: flex; flex-wrap: wrap; row-gap: 4px; margin: 6px 0 2px; }
+/* The chart's colour key, under the chart: one swatch per line, with where it ends. */
+#recCurveKey { display: flex; flex-wrap: wrap; row-gap: 4px; margin: 4px 0 12px; padding-top: 6px; border-top: 1px solid var(--border); }
+.cv-key b { font-weight: 600; margin-left: 2px; }
 .cv-key i.in { border-top: 2px dashed var(--cv-in); }
 .zoo-fit td { white-space: normal; }
 .zoo-fit th, #zooTable th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -896,7 +898,7 @@ details[open] > summary::after { content: "Hide"; }
 
 
     <section class="tab" id="record">
-      <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made and every rating the AI agents gave, followed for 20 trading days after the day they could first be bought. Judged only once the 20 days are over; until then the return so far is shown.</p></div>
+      <div class="page-head"><div><h2>Track record</h2><p>Every pick the internal model made, every AI's pick, every rating the AI agents gave and every sell call, followed for 20 trading days after the day they could first be traded. Judged only once the 20 days are over (or, for the AI's picks, once the Sell target or Stop is reached); until then the return so far is shown.</p></div>
         <button class="ghost" id="recRefresh">Refresh</button></div>
       <p class="small" id="recPaper" style="margin:0 0 8px"></p>
       <div class="kpis" id="recKpis"></div>
@@ -907,10 +909,20 @@ details[open] > summary::after { content: "Hide"; }
         <div id="recCurveBox">
           <b>Cumulative value of $1 on each recommendation, per $1 put in</b>
           <p class="muted small" style="margin:2px 0 4px">Each group's worth divided by what it put in, so groups of different sizes share one axis: $1.00 is break-even. Held positions at each day's close less the entry half of the cost; sold ones at their 20th close less the whole cost.</p>
-          <div id="recCurveKey"></div>
           <div class="cv-wrap" id="recCurve"></div>
+          <div id="recCurveKey"></div>
         </div>
         <div class="table-wrap"><table id="recPicks" class="compact"></table></div><div id="recPicksMore"></div>
+      </div>
+      <div class="card">
+        <h3>The AI's picks</h3>
+        <p class="muted small">Each day's AI's pick (Trade tab), followed as the agents planned it: a buy limit at <b>Buy at</b> until the plan expires (no Buy at: bought at the next close), then <b>sold</b> at the Sell target, the Stop or the 20th close after the fill, whichever came first. A stop and a target reached the same day count as the stop. Rated AVOID: not bought, shown for reference.</p>
+        <div class="table-wrap"><table id="recAi" class="compact"></table></div><div id="recAiMore"></div>
+      </div>
+      <div class="card">
+        <h3>The model's sell calls</h3>
+        <p class="muted small">Each EXIT or REDUCE the daily decision made on a stock held (Trade tab, Sell), on the first day it said so: sold at the next close. Right when the stock was lower 20 sessions later (the sale avoided a fall); wrong when it was higher (the sale missed a gain).</p>
+        <div class="table-wrap"><table id="recSells" class="compact"></table></div><div id="recSellsMore"></div>
       </div>
       <div class="card">
         <h3>The second model's suggestions</h3>
@@ -1741,7 +1753,8 @@ $("schRun").onclick = async () => {
 // The cumulative value of $1 on each recommendation, every group on one axis, normalized: worth per $1 put in, so
 // groups with different numbers of picks compare directly (1.00 = break-even). Colours follow the group.
 const CURVE_KINDS = [["best_buy", "1st pick", "--cv-1"], ["all_picks", "Every pick", "--cv-2"],
-  ["policy", "Policy model", "--cv-3"], ["agents_buys", "Agents' Buy calls", "--cv-4"], ["weighted", "Weighted split", "--cv-5"]];
+  ["policy", "Policy model", "--cv-3"], ["agents_buys", "Agents' Buy calls", "--cv-4"], ["weighted", "Weighted split", "--cv-5"],
+  ["ai_picks", "AI's picks", "--cv-6"]];
 function drawCurve(one) {
   const series = CURVE_KINDS.map(([k, label, color]) => ({k, label, color,
     pts: ((one[k] || {}).curve || []).filter(p => p.invested > 0).map(p => ({...p, per: p.value / p.invested}))}))
@@ -1752,7 +1765,7 @@ function drawCurve(one) {
   }
   const dates = [...new Set(series.flatMap(s => s.pts.map(p => p.date)))].sort(), n = dates.length;
   const at = Object.fromEntries(series.map(s => [s.k, Object.fromEntries(s.pts.map(p => [p.date, p]))]));
-  const W = 640, H = 230, L = 50, R = 170, T = 10, B = 24;
+  const W = 640, H = 230, L = 50, R = 12, T = 10, B = 24;
   const vals = series.flatMap(s => s.pts.map(p => p.per)).concat([1]);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const span = Math.max(hi - lo, 0.02); lo -= span * 0.12; hi += span * 0.12;
@@ -1761,21 +1774,17 @@ function drawCurve(one) {
   const ix = Object.fromEntries(dates.map((d, i) => [d, i]));
   const ticks = [0, 1, 2, 3, 4].map(i => lo + i * (hi - lo) / 4);
   const path = s => s.pts.map((p, j) => `${j ? "L" : "M"}${x(ix[p.date]).toFixed(1)},${y(p.per).toFixed(1)}`).join("");
-  // End labels at each line's end, spread so they never overlap (14px apart).
-  const ends = series.map(s => ({s, last: s.pts[s.pts.length - 1]})).map(e => ({...e, y: y(e.last.per)})).sort((a, b) => a.y - b.y);
-  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 14) ends[i].y = ends[i - 1].y + 14;
+  // The colour key goes under the chart, each line with where it ends; nothing is labelled on the chart itself.
+  const ends = series.map(s => ({s, last: s.pts[s.pts.length - 1]}));
   const xTicks = [0, Math.floor((n - 1) / 2), n - 1].filter((v, i, a) => a.indexOf(v) === i);
   const dot = (s, p) => `<circle cx="${x(ix[p.date]).toFixed(1)}" cy="${y(p.per).toFixed(1)}" r="4" fill="var(${s.color})" stroke="var(--surface)" stroke-width="2"/>`;
-  $("recCurveKey").innerHTML = series.map(s => `<span class="cv-key"><i style="border-top-color:var(${s.color})"></i>${esc(s.label)}</span>`).join("") +
+  $("recCurveKey").innerHTML = ends.map(e => `<span class="cv-key" title="Latest: ${usd(e.last.value)} for ${usd(e.last.invested)} put in"><i style="border-top-color:var(${e.s.color})"></i>${esc(e.s.label)} <b>${usd(e.last.per)}</b></span>`).join("") +
     `<span class="cv-key"><i class="in"></i>Break-even ($1.00 per $1)</span>`;
   $("recCurve").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Worth per $1 put in, by group: ${esc(ends.map(e => `${e.s.label} ${usd(e.last.per)}`).join(", "))}">` +
     ticks.map(t => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/><text class="axis" x="${L - 6}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">$${t.toFixed(3)}</text>`).join("") +
     xTicks.map(i => `<text class="axis" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 && n > 1 ? "start" : i === n - 1 && n > 1 ? "end" : "middle"}">${esc(dates[i].slice(5))}</text>`).join("") +
     `<line x1="${L}" x2="${W - R}" y1="${y(1).toFixed(1)}" y2="${y(1).toFixed(1)}" stroke="var(--cv-in)" stroke-width="1.5" stroke-dasharray="5 4"/>` +
     series.map(s => s.pts.length > 1 ? `<path d="${path(s)}" fill="none" stroke="var(${s.color})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` : dot(s, s.pts[0])).join("") +
-    ends.map(e => `<line x1="${x(ix[e.last.date]).toFixed(1)}" x2="${W - R + 4}" y1="${y(e.last.per).toFixed(1)}" y2="${e.y.toFixed(1)}" stroke="var(--border-strong)" stroke-width="1"/>` +
-      `<rect x="${W - R + 6}" y="${(e.y - 3).toFixed(1)}" width="10" height="6" rx="2" fill="var(${e.s.color})"/>` +
-      `<text class="lbl" x="${W - R + 20}" y="${(e.y + 4).toFixed(1)}">${esc(e.s.label)} ${usd(e.last.per)}</text>`).join("") +
     `<g id="cvHover" visibility="hidden"><line id="cvX" y1="${T}" y2="${H - B}" stroke="var(--border-strong)"/><g id="cvDots"></g></g>` +
     `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="cvHit" tabindex="0" aria-label="Move through the days with the arrow keys"/></svg><div class="cv-tip" id="cvTip" hidden></div>`;
   const svg = $("recCurve").querySelector("svg"), tip = $("cvTip");
@@ -1802,7 +1811,7 @@ function drawCurve(one) {
 }
 // Each table shows its first 20 rows (newest first); "Show more" adds 20.
 const REC_STEP = 20;
-const recRows = {picks: REC_STEP, policy: REC_STEP, agents: REC_STEP};
+const recRows = {picks: REC_STEP, policy: REC_STEP, agents: REC_STEP, ai: REC_STEP, sells: REC_STEP};
 function firstRows(rows, n) {
   return {rows: rows.slice(0, n), more: Math.max(0, rows.length - n)};
 }
@@ -1823,7 +1832,11 @@ async function loadTrackRecord() {
     kpi("1st pick: average net return", show(s.best_buy), sub(s.best_buy), "hero") +
     kpi("All picks: average net return", show(s.all_picks), sub(s.all_picks)) +
     kpi("Policy model: average net return", show(s.policy), sub(s.policy)) +
-    kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "No Trades Yet", sub(s.agents, false));
+    kpi("AI's picks: average net return", show(s.ai_picks || {}), sub(s.ai_picks || {})) +
+    kpi("AI agents: average return", s.agents.judged ? spct(s.agents.avg_raw_return) : "No Trades Yet", sub(s.agents, false)) +
+    kpi("Sell calls: right", (s.sells || {}).judged ? `${s.sells.correct} of ${s.sells.judged}` : "None judged yet",
+      (s.sells || {}).judged ? `the stock was lower 20 sessions after the sale · average move after ${spct(s.sells.avg_raw_return)}`
+        : (s.sells || {}).open ? `${s.sells.open} still open: each is judged 20 sessions after the sale` : "No sell call yet");
   // $1 on each recommendation, followed exactly: finished ones at their 20th close, open ones at the latest close.
   const one = d.one_dollar || {};
   const dollarLine = (label, x) => {
@@ -1837,7 +1850,8 @@ async function loadTrackRecord() {
     `<tr><th class="l">Recommendations</th><th>Finished</th><th>Put in</th><th>Worth now</th><th>Profit / loss</th><th>Still open</th><th>Open P/L (latest close)</th></tr>` +
     dollarLine("1st pick each day", one.best_buy) + dollarLine("Every pick (1st + runners-up)", one.all_picks) +
     dollarLine("Weighted split ($1 a day across the picks)", one.weighted) +
-    dollarLine("Policy model's picks", one.policy) + dollarLine("AI agents' Buy calls", one.agents_buys);
+    dollarLine("Policy model's picks", one.policy) + dollarLine("AI's picks (Buy at, then Sell / Stop)", one.ai_picks) +
+    dollarLine("AI agents' Buy calls", one.agents_buys);
   drawCurve(one);
   $("recPaper").innerHTML = d.paper_start ? `<b>Paper trade since ${esc(d.paper_start)}</b>: every group counts from the same data date ` +
     `(the first day all of them were making calls), $1 on each recommendation from the close after it. No real orders.` : "";
@@ -1846,8 +1860,36 @@ async function loadTrackRecord() {
     : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
   const allPicks = d.picks, allPolicy = d.policy || [], allAgents = d.agents;
   const pk = firstRows(allPicks, recRows.picks), po = firstRows(allPolicy, recRows.policy), ag = firstRows(allAgents, recRows.agents);
-  d = {...d, picks: pk.rows, policy: po.rows, agents: ag.rows};
+  const ai = firstRows(d.ai_picks || [], recRows.ai), sl = firstRows(d.sells || [], recRows.sells);
+  d = {...d, picks: pk.rows, policy: po.rows, agents: ag.rows, ai_picks: ai.rows, sells: sl.rows};
   moreButton("recPicksMore", "picks", pk.more); moreButton("recPolicyMore", "policy", po.more); moreButton("recAgentsMore", "agents", ag.more);
+  moreButton("recAiMore", "ai", ai.more); moreButton("recSellsMore", "sells", sl.more);
+  // The AI's picks: how each was bought and how it was sold (Sell target, Stop, the 20th close, or still held).
+  const sold = r => r.exit === "target" ? `<span class="pos"><b>Sell target</b></span> ${usd(r.last)}<div class="muted small">${esc(r.last_date)}, day ${r.sessions}</div>`
+    : r.exit === "stop" ? `<span class="neg"><b>Stop</b></span> ${usd(r.last)}<div class="muted small">${esc(r.last_date)}, day ${r.sessions}</div>`
+    : r.exit === "day 20" ? `20th close ${usd(r.last)}<div class="muted small">${esc(r.last_date)}</div>`
+    : r.status === "open" ? `<span class="muted">held · now ${usd(r.last)}</span><div class="muted small">day ${r.sessions} of ${r.horizon}</div>` : "–";
+  const aiBought = r => !r.bought ? `<span class="muted">not bought</span>`
+    : r.entry != null ? `${usd(r.entry)}<div class="muted small">${esc(r.entry_date)}${r.buy_at == null ? ", next close" : ""}</div>`
+    : `<span class="muted">${esc(r.status)}</span>`;
+  const aiResult = r => !r.bought ? `<span class="muted">AVOID: not judged${r.move != null ? ` · moved ${spct(r.move, 1)} since` : ""}</span>`
+    : r.status === "no fill" ? '<span class="muted">Buy at not reached: not judged</span>' : verdict({...r, rating: null});   // a trade: beat cost, not a direction
+  $("recAi").innerHTML = d.ai_picks.length ? "<tr><th class='l'>Picked</th><th class='l'>Stock</th><th class='l'>AI</th><th>Buy at</th><th>Sell / Stop</th><th>Bought</th><th>Sold</th><th>Return</th><th class='l'>Result (net of cost)</th></tr>" +
+    d.ai_picks.map(r => { const w = aiWord(r.rating, false);
+      return `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">#${r.place}</span></td>` +
+        `<td class="l"><span class="ai-box ${w[1]}">${w[0]}</span></td><td>${r.buy_at == null ? "–" : usd(r.buy_at)}</td>` +
+        `<td><span class="pos">${r.target == null ? "–" : usd(r.target)}</span> / <span class="neg">${r.stop == null ? "–" : usd(r.stop)}</span></td>` +
+        `<td>${aiBought(r)}</td><td>${r.bought ? sold(r) : "–"}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="l">${aiResult(r)}</td></tr>`; }).join("")
+    : "<tr><td class='muted'>No AI's pick saved yet: Ask the AI to pick on the Trade tab.</td></tr>";
+  // The sell calls: sold at the next close; the move after it says whether selling was right.
+  const sellResult = r => r.verdict === "correct" ? `<span class="pos"><b>✓ avoided a ${spct(-r.return, 1)} fall</b></span>`
+    : r.verdict === "wrong" ? `<span class="neg"><b>✗ missed a ${spct(r.return, 1)} gain</b></span>`
+    : r.status === "open" ? `<span class="muted">open · day ${r.sessions} of ${r.horizon}</span>` : `<span class="muted">${esc(r.status || "–")}</span>`;
+  $("recSells").innerHTML = d.sells.length ? "<tr><th class='l'>Data to</th><th class='l'>Stock</th><th class='l'>Call</th><th>You paid</th><th>Sold at</th><th>Now / day 20</th><th>Move after</th><th class='l'>Result</th></tr>" +
+    d.sells.map(r => `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b></td><td class="l" title="${esc((r.reasons || []).join("; "))}">${actBadge(r.action)}</td>` +
+      `<td>${r.bought_at == null ? "–" : usd(r.bought_at)}</td><td>${r.entry == null ? "–" : usd(r.entry)}<div class="muted small">${esc(r.entry_date || "")}</div></td>` +
+      `<td>${r.last == null ? "–" : usd(r.last)}<div class="muted small">${esc(r.last_date || "")}</div></td><td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="l">${sellResult(r)}</td></tr>`).join("")
+    : "<tr><td class='muted'>No sell call yet.</td></tr>";
   $("recPicks").innerHTML = d.picks.length ? "<colgroup><col style='width:12%'><col style='width:12%'><col style='width:13%'><col style='width:14%'><col style='width:11%'><col style='width:8%'><col style='width:30%'></colgroup>" +
     "<tr><th class='l'>Data to</th><th class='l'>Pick</th><th>Bought</th><th>Now / day 20</th><th>Raw return</th><th>SPY</th><th class='l'>Result (net of cost)</th></tr>" +
     d.picks.map(r => `<tr${r.place === 1 ? ' class="chosen"' : ""}><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">${esc(r.role)}${r.place > 1 ? " #" + r.place : ""}</span></td>` +
