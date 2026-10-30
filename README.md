@@ -47,7 +47,7 @@ tradingagents web
 AlphaDesk opens in your browser at **http://127.0.0.1:8765/**. Press **Ctrl+C** in the terminal to stop it.
 
 - `--port 8800` runs it on another port. Only one copy can use a port at a time.
-- Run it from the same folder each time: that folder holds your records (see section 6).
+- Run it from the same folder each time: that folder holds your records (see section 5).
 - If the `tradingagents` command is not found, use `python -m cli.main web` instead.
 
 ## 3. First-time setup (Settings tab)
@@ -77,39 +77,103 @@ AlphaDesk opens in your browser at **http://127.0.0.1:8765/**. Press **Ctrl+C** 
    every stock with every model and makes the daily decision, once per new close. Models are refitted every
    *N* trading sessions (you choose *N*).
 
-## 4. A normal day
+## 4. How to use it, step by step
 
-1. **Open AlphaDesk** after the market closes or before the next open. The models work from the last
-   completed close.
-2. **Trade tab → Make today's decision** (it fits the models first if they need it). Read:
-   - **Model's picks**: the best buy and the runners-up, each with an *Amount* (your budget split across the
-     picks), the *LTP* (live from Yahoo while the market is open, shown with a green dot; otherwise the last
-     close), a *Buy at* limit price, and a *Sell* target and *Stop* loss.
-   - **Sell**: what you hold, the suggested action, profit so far, sell target, stop and deadline.
-3. **Optionally ask the AI.** *Ask the AI to pick* has the AI rank the market and the full agent team analyse
-   its top stocks; *Replace the AVOIDs* screens again for stocks the team rejected. The **AI** button on any
-   row runs the agents on that one stock. You can watch them work live on *The Trading Floor*.
-4. **Place the orders yourself** in your broker's app.
-5. **Record what happened** on the **Portfolio** tab (*Record a trade*: side, ticker, units, price, date).
-   Holdings change only through what you record, never because a plan was shown or saved.
+The screenshots below come from a demo copy of the app: real market data with made-up holdings and a $10,000
+budget. Click any picture to see it full size.
 
-## 5. The tabs
+### Step 1: Make today's decision (Trade tab)
 
-| Tab | What it shows |
-|---|---|
-| **Trade** | Today's decision: the model's picks, what to sell, the AI's pick, the live agent floor, the model's live record, and the *trade outcome model* (buy at the next close, buy on a limit, or hold cash; it abstains until its validation passes). |
-| **Trend** | Market context: economic conditions, *Why it's happening* (one AI call explains the day's moves from headlines and data, citing sources), sector rotation (Improving → Leading → Weakening → Lagging), sectors and disruptive themes over the last month, S&P 500 breadth, and returns. Context only: it is not part of the decision. |
-| **Screener** | Every S&P 500 stock (and your watchlist) on a quality checklist (moat, financial strength, profitability, 0–100), Wall Street consensus and price-target upside, combined into one rank. Also the stock models' signals (breakout, breakdown, crash and deep-drawdown warnings, trend) and every model's ranking. Click a column to sort, a ticker for its page. |
-| **Forecasts** | Return forecasts for the major ETFs or S&P 500 stocks over 5, 20 or 60 sessions from local models (Elastic Net, Momentum, XGBoost variants, Chronos-2, optionally TimesFM 3.0). Each comes with a 5–95% range, its live record, and a walk-forward comparison (IC, R², calibration, coverage). No paid AI. |
-| **Decisions** | Two decisions side by side. *AI decisions*: the agent team's BUY / HOLD / SELL for chosen stocks, next to the app's own model verdict, with a daily and monthly AI budget. *Quant model decision*: the fitted models' ENTER / WAIT / HOLD / EXIT sized to your budget, with positions, candidates, a shadow account and the action history. |
-| **Portfolio** | Your recorded holdings at the latest close (units, cost first-in-first-out, value, profit), the trade log, and **tracked tickers**: stocks you follow without holding, scored every morning too. |
-| **Track record** | Every pick the model made and every rating the agents gave, followed for 20 trading days from when it could first be bought, and judged only once those 20 days are over. Shown as the value of $1 put into each group. |
-| **Settings** | Money, scored companies, the morning schedule, API keys, agent models and prices, and the ETFs to forecast. |
+Open AlphaDesk after the market closes or before the next open; the models work from the last completed close.
+Press **Make today's decision** (tick *fit models if needed* the first time).
 
-**The ticker page** (click any ticker): price chart (1 day, 5 days and longer), the quality checklist,
-valuation, analysts, news, the models' views, the agents' entry plans (Buy at, Sell, Stop, valid until) and
-their full reports. Running the agents from a stock's own page always makes a fresh run; elsewhere a stock
-whose plan is still valid is not run again.
+![The Trade tab](docs/screenshots/trade.png)
+
+- **Model's picks** (left): the best buy and the runners-up. **Amount** splits your trading budget across them
+  (the line under the table says how much of the budget is left). **LTP** is the last price, live from Yahoo
+  with a green dot while the market is open. **Buy at** is the limit price to use; **Sell** and **Stop** are
+  where to take the profit or cut the loss. The **AI** column runs the AI agents on that stock.
+- **Sell** (right): every stock you hold, with the suggested action (HOLD, REDUCE or EXIT), the profit so far,
+  its sell target, stop and deadline, and why. Here MSFT is too large a share of the account, so it says REDUCE.
+- **AI's pick**: *Ask the AI to pick* has an AI rank the market and the full agent team analyse its top
+  stocks; *Replace the AVOIDs* screens again for the ones the team rejected. **The Trading Floor** shows the
+  agents at work, live.
+- **Notifications** repeat anything you need to act on, such as a sale.
+
+### Step 2: Check the market (Trend tab)
+
+Context for the day, not part of the decision: the indices, economic conditions, *Why it's happening* (one AI
+call explains the moves, citing its sources), which sectors are rotating in or out and why, and the sector
+forecast.
+
+![The Trend tab](docs/screenshots/trend.png)
+
+### Step 3: Look closer at a stock (click any ticker)
+
+Every ticker opens its own page: the price chart against SPY, the trend forecast, Wall Street's ratings and
+price targets, earnings estimates, the quality checklist, and on the right the model's **verdict**, its tests,
+its signals and the **entry levels** (Buy at, Stop and Target for buying at the next close or on a dip).
+The agents' plans and full reports are further down.
+
+![A ticker page](docs/screenshots/ticker.png)
+
+### Step 4: Place the order yourself, then record it (Portfolio tab)
+
+AlphaDesk never trades. Place the order in your broker's app, then enter what happened under **Record a
+trade** (side, ticker, units, price, date) and press **Save trade**. Holdings, cost, value and profit update
+from what you record, never from a plan that was only shown.
+
+![The Portfolio tab](docs/screenshots/portfolio.png)
+
+**Tracked tickers** are stocks you follow without holding them; the models score them every morning too.
+
+### Step 5: Get a second opinion from the AI agents (Decisions tab)
+
+Tick the stocks to analyse (the ones you hold are ticked for you), choose the analysts, and press *Run the AI
+on the selected stocks*. Each row shows the agents' view next to the app's own **model verdict**, with a link
+to the full report. The **AI budget** caps what the agents may spend a day and a month; a run that would go
+over it stops.
+
+![The Decisions tab](docs/screenshots/decisions.png)
+
+Further down, **Quant model decision** shows the fitted models' ENTER / WAIT / HOLD / EXIT for every
+candidate and position.
+
+### Step 6: See whether the suggestions were right (Track record tab)
+
+Every recommendation is followed as a paper trade: the model's picks, the second model's suggestions, the
+AI's picks, the agents' ratings and the sell calls. A pick is bought at the next close and sold at its 20th
+close, or earlier when the agents rate it Sell or Underweight, or the model says EXIT or REDUCE. Each is
+judged only once it is over. The chart shows what $1 on each kind of recommendation is worth now; the colour
+key is under it.
+
+![The Track record tab](docs/screenshots/record.png)
+
+**The AI's picks** are followed as the agents planned them: bought when the price reaches *Buy at*, sold at
+the *Sell* target, the *Stop*, a sell call or the 20th close, whichever comes first. The chart has a line for
+each pick bought. **Changes since** lists every later agents' run that changed a pick's call or its prices
+(here NVDA's plan gained a Buy at, Sell and Stop the day after it was picked).
+
+![The AI's picks on the Track record tab](docs/screenshots/record_ai.png)
+
+### Other tabs
+
+**Screener**: every S&P 500 stock ranked on a quality checklist (moat, financial strength, profitability)
+and Wall Street's consensus and price-target upside. *Signals and action* adds the models' trend, breakout and
+crash warnings; *Models* shows every model's ranking. Click a column to sort.
+
+![The Screener tab](docs/screenshots/screener.png)
+
+**Forecasts**: return forecasts for the major ETFs (or S&P 500 stocks) over 5, 20 or 60 sessions from models
+that run on your computer, with no paid AI. Each has a 5–95% range and the chance of a gain; the live record
+and the walk-forward comparison below say how much each model can be trusted.
+
+![The Forecasts tab](docs/screenshots/forecasts.png)
+
+**Settings**: the trading budget, extra companies to score, and the morning schedule (shown here), then the
+API keys, the agents' models and their prices, and the ETFs to forecast.
+
+![The Settings tab](docs/screenshots/settings.png)
 
 ### How to read the prices
 
@@ -120,7 +184,7 @@ whose plan is still valid is not run again.
 - **LTP**: the live price is for display only. No model or saved decision reads it. A stop can gap, so a
   sale at the next close can lose more than the stop.
 
-## 6. Your records and data
+## 5. Your records and data
 
 Everything lives in the folder you start AlphaDesk from:
 
@@ -134,7 +198,7 @@ Everything lives in the folder you start AlphaDesk from:
 Prices, news and fundamentals come from Yahoo Finance and SEC EDGAR (free), economic data from FRED, and
 prediction-market odds from Polymarket. Downloads are cached on disk.
 
-## 7. AI costs
+## 6. AI costs
 
 - No paid AI call runs unless you start one (the AI buttons, *Ask the AI to pick*, *Explain today's moves*,
   *Refresh the brief*), or the morning schedule does work that needs it.
@@ -145,7 +209,7 @@ prediction-market odds from Polymarket. Downloads are cached on disk.
   model that is a few cents; on a large frontier model it can be close to a dollar.
 - Results are saved, so opening a page again does not pay again.
 
-## 8. Command line
+## 7. Command line
 
 | Command | What it does |
 |---|---|
@@ -159,7 +223,7 @@ More detail: [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) (how the agent team wo
 [docs/RUNNING.md](docs/RUNNING.md) (records and bookkeeping commands),
 [docs/FORECASTING.md](docs/FORECASTING.md) and [docs/DECISIONS.md](docs/DECISIONS.md) (the models).
 
-## 9. Limits
+## 8. Limits
 
 - The models learn from past prices. A future crash can be deeper than any past one. The daily model showed
   a small ranking edge in testing, but trading on it did not beat holding SPY.
@@ -167,7 +231,7 @@ More detail: [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) (how the agent team wo
 - Social-media sentiment is only available for recent days, so past runs do not see the sentiment of their date.
 - Nothing here is financial advice.
 
-## 10. Troubleshooting
+## 9. Troubleshooting
 
 | Problem | Fix |
 |---|---|

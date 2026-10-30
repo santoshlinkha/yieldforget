@@ -357,6 +357,37 @@ def test_a_position_is_sold_at_the_next_close_when_the_agents_or_the_model_say_s
     assert still["status"] == "open" and still["sell_called"] == {"date": str(idx[-1].date()), "by": "model"}
 
 
+def test_an_ai_pick_records_each_later_change_of_its_call_or_prices_and_its_daily_worth(monkeypatch):
+    from tradingagents.stocks import track_record as T
+
+    def run(at, action, buy, target, stop):
+        row = {"created_at": at, "action": action, "analysis_date": at[:10], "plan": {},
+               "validation": {"buy_at": {"price": buy}, "levels": {"price_target": target, "stop_loss": stop}}}
+        return {"final": row, "trader": None}
+
+    runs = [run("2026-10-31T15:00:00Z", "Underweight", 98.0, 110.0, 92.0),      # newest first, as plans_for gives
+            run("2026-10-30T15:00:00Z", "Hold", 98.0, 110.0, 92.0),             # the same: not a change
+            run("2026-10-29T15:00:00Z", "Hold", 97.0, 110.0, 90.0),
+            run("2026-10-28T15:00:00Z", "Hold", 96.0, 108.0, 90.0)]             # the plan the pick was made with
+    monkeypatch.setattr("tradingagents.agents.entry_plan.plans_for", lambda con, t: runs)
+    states = [({"date": "2026-10-28", "tickers": ["AAA"]}, "2026-10-28T14:00:00Z")]
+
+    class Con:
+        def execute(self, sql, *a):
+            rows = [(__import__("json").dumps(s), at) for s, at in states] if "settings_history" in sql else []
+            return type("Rows", (), {"fetchall": lambda self: rows, "__iter__": lambda self: iter(rows)})()
+
+    pick = T._ai_picks(Con())[0]
+    assert pick["buy_at"] == 96.0 and [c["changed"] for c in pick["changes"]] == [["buy_at", "target"], ["buy_at", "stop"], ["rating"]]
+    assert pick["changes"][0]["from"] == {"buy_at": 96.0, "target": 108.0} and pick["changes"][-1]["rating"] == "Underweight"
+    idx = pd.bdate_range("2026-01-01", periods=5)
+    close = pd.DataFrame({"AAA": [100.0, 100.0, 105.0, 110.0, 120.0]}, index=idx)
+    p = {"ticker": "AAA", "entry_date": str(idx[1].date()), "entry": 100.0, "last_date": str(idx[3].date()),
+         "status": "done", "return": 0.08}
+    assert T._path(close, p) == [{"date": str(idx[1].date()), "per": 1.0}, {"date": str(idx[2].date()), "per": 1.05},
+                                 {"date": str(idx[3].date()), "per": 1.08}]           # sold at its own price that day
+
+
 def test_the_track_record_is_a_paper_trade_from_one_start_date():
     from tradingagents.stocks.track_record import paper_start
 

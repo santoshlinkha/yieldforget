@@ -135,14 +135,28 @@ def _ai_picks(con) -> list[dict]:
     order = sorted(days)
     out = []
     for n, day in enumerate(order):
-        until = days[order[n + 1]]["from"] if n + 1 < len(order) else None
+        # The plan the page showed that day: made before the day was over (New York) and before the next day's pick.
+        end = (pd.Timestamp(f"{day} 00:00", tz="America/New_York") + pd.Timedelta(days=1)).tz_convert("UTC")
+        until = end.strftime("%Y-%m-%dT%H:%M:%S")
+        if n + 1 < len(order):
+            until = min(until, days[order[n + 1]]["from"])
         scores = next((p.get("scores") or {} for cutoff, p in reversed(decisions) if cutoff <= day), {})
         for i, t in enumerate(days[day]["tickers"]):
             runs = plans_for(con, t)
             row = next(((r["final"] or r["trader"]) for r in runs
-                        if until is None or (r["final"] or r["trader"])["created_at"] < until), None)
+                        if (r["final"] or r["trader"])["created_at"] < until), None)
             if not row:
                 continue
+            # Every later run on the stock that changed the call or its prices: the position as it moved.
+            later = sorted((x for x in (r["final"] or r["trader"] for r in runs) if x["created_at"] > row["created_at"]),
+                           key=lambda x: x["created_at"])
+            changes, before = [], _plan_view(row)
+            for x in later:
+                now = _plan_view(x)
+                what = [k for k in ("rating", "buy_at", "target", "stop") if now[k] != before[k]]
+                if what:
+                    changes.append({**now, "changed": what, "from": {k: before[k] for k in what}})
+                    before = now
             v, plan = row.get("validation") or {}, row.get("plan") or {}
             buy, lv = (v.get("buy_at") or {}).get("price"), v.get("levels") or {}
             rating = str(row.get("action") or "").title()
@@ -150,8 +164,30 @@ def _ai_picks(con) -> list[dict]:
                         "bought": rating in UP + ("Hold",), "analysis_date": row.get("analysis_date"),
                         "buy_at": float(buy) if buy else None, "target": lv.get("price_target"), "stop": lv.get("stop_loss"),
                         "expires": plan.get("expires_at"), "cost_rt": (scores.get(t) or {}).get("cost_rt") or 0.0,
-                        "horizon": 20})
+                        "horizon": 20, "changes": changes})
     return sorted(out, key=lambda r: (r["data_to"], -r["place"]), reverse=True)   # newest day first, in its order
+
+
+def _plan_view(row: dict) -> dict:
+    """An agents' plan as the AI's picks show it: when it was made (New York date), the call and its three prices."""
+    v = row.get("validation") or {}
+    lv = v.get("levels") or {}
+    made = pd.Timestamp(row["created_at"])
+    made = (made.tz_localize("UTC") if made.tzinfo is None else made).tz_convert("America/New_York")
+    return {"date": str(made.date()), "rating": str(row.get("action") or "").title(),
+            "buy_at": (v.get("buy_at") or {}).get("price"), "target": lv.get("price_target"), "stop": lv.get("stop_loss")}
+
+
+def _path(close: pd.DataFrame, p: dict) -> list[dict]:
+    """A bought pick's worth per $1, before costs, at each close from its fill to its sale (the sale's own price
+    on that day) or to the latest close."""
+    if not p.get("entry_date") or p.get("status") not in ("done", "open") or p["ticker"] not in close:
+        return []
+    px = close[p["ticker"]].dropna().loc[pd.Timestamp(p["entry_date"]):pd.Timestamp(p["last_date"])]
+    pts = [{"date": str(d.date()), "per": round(float(v / p["entry"]), 4)} for d, v in px.items()]
+    if pts and p["status"] == "done":
+        pts[-1]["per"] = round(1 + p["return"], 4)
+    return pts
 
 
 def _follow_plan(close: pd.DataFrame, low: pd.DataFrame, high: pd.DataFrame, p: dict) -> dict:
@@ -435,6 +471,7 @@ def build(con, cache_dir: Path, results_dir: Path | None = None, config: dict | 
             continue
         p.update(_follow_plan(close, low, high, p))
         _sell_on_call(close, p, signals)
+        p["path"] = _path(close, p)
         if p["status"] == "done":
             p["verdict"] = "correct" if p["return"] - p["cost_rt"] > 0 else "wrong"
             p["beat_spy"] = p.get("spy") is not None and p["return"] > p["spy"]

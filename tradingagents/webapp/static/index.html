@@ -141,7 +141,7 @@ h4 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: upp
 .cv-key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12.5px; color: var(--text); }
 .cv-key i { display: inline-block; width: 20px; height: 0; border-top: 4px solid var(--cv-value); border-radius: 2px; }
 /* The chart's colour key, under the chart: one swatch per line, with where it ends. */
-#recCurveKey { display: flex; flex-wrap: wrap; row-gap: 4px; margin: 4px 0 12px; padding-top: 6px; border-top: 1px solid var(--border); }
+#recCurveKey, #recAiKey { display: flex; flex-wrap: wrap; row-gap: 4px; margin: 4px 0 12px; padding-top: 6px; border-top: 1px solid var(--border); }
 .cv-key b { font-weight: 600; margin-left: 2px; }
 .cv-key i.in { border-top: 2px dashed var(--cv-in); }
 .zoo-fit td { white-space: normal; }
@@ -916,7 +916,10 @@ details[open] > summary::after { content: "Hide"; }
       </div>
       <div class="card">
         <h3>The AI's picks</h3>
-        <p class="muted small">Every AI's pick in the history (Trade tab), including one later replaced, followed as the agents planned it: a buy limit at <b>Buy at</b> until the plan expires (no Buy at: bought at the next close), then <b>sold</b> at the Sell target, the Stop, a sell call (the agents' Sell/Underweight or the model's EXIT/REDUCE, at the next close) or the 20th close after the fill, whichever came first. A stop and a target reached the same day count as the stop. Rated AVOID: not bought, shown for reference.</p>
+        <p class="muted small">Every AI's pick in the history (Trade tab), including one later replaced, followed as the agents planned it: a buy limit at <b>Buy at</b> until the plan expires (no Buy at: bought at the next close), then <b>sold</b> at the Sell target, the Stop, a sell call (the agents' Sell/Underweight or the model's EXIT/REDUCE, at the next close) or the 20th close after the fill, whichever came first. A stop and a target reached the same day count as the stop. Rated AVOID: not bought, shown for reference. <b>Changes since</b>: each later agents' run on the stock that changed its call or its Buy at, Sell or Stop.</p>
+        <b>Worth of $1 on each AI's pick bought, per $1 put in (before costs)</b>
+        <div class="cv-wrap" id="recAiCurve"></div>
+        <div id="recAiKey"></div>
         <div class="table-wrap"><table id="recAi" class="compact"></table></div><div id="recAiMore"></div>
       </div>
       <div class="card">
@@ -1756,13 +1759,15 @@ const CURVE_KINDS = [["best_buy", "1st pick", "--cv-1"], ["all_picks", "Every pi
   ["policy", "Policy model", "--cv-3"], ["agents_buys", "Agents' Buy calls", "--cv-4"], ["weighted", "Weighted split", "--cv-5"],
   ["ai_picks", "AI's picks", "--cv-6"]];
 function drawCurve(one) {
-  const series = CURVE_KINDS.map(([k, label, color]) => ({k, label, color,
-    pts: ((one[k] || {}).curve || []).filter(p => p.invested > 0).map(p => ({...p, per: p.value / p.invested}))}))
-    .filter(s => s.pts.length);
-  if (!series.length) {
-    $("recCurve").innerHTML = '<p class="muted small">Nothing bought yet: the first recommendation is bought at the close after its data date.</p>';
-    $("recCurveKey").innerHTML = ""; return;
-  }
+  drawLines($("recCurve"), $("recCurveKey"), CURVE_KINDS.map(([k, label, color]) => ({k, label, color,
+    pts: ((one[k] || {}).curve || []).filter(p => p.invested > 0).map(p => ({...p, per: p.value / p.invested}))})),
+    "Nothing bought yet: the first recommendation is bought at the close after its data date.");
+}
+// One chart of worth per $1 over the days: a line per series ({k, label, color, pts: [{date, per, value, invested}]}),
+// the break-even line, a hover read-out, and the colour key under it (each line with where it ends).
+function drawLines(box, keyBox, series, empty) {
+  series = series.filter(s => s.pts.length);
+  if (!series.length) { box.innerHTML = `<p class="muted small">${esc(empty)}</p>`; keyBox.innerHTML = ""; return; }
   const dates = [...new Set(series.flatMap(s => s.pts.map(p => p.date)))].sort(), n = dates.length;
   const at = Object.fromEntries(series.map(s => [s.k, Object.fromEntries(s.pts.map(p => [p.date, p]))]));
   const W = 640, H = 230, L = 50, R = 12, T = 10, B = 24;
@@ -1778,33 +1783,34 @@ function drawCurve(one) {
   const ends = series.map(s => ({s, last: s.pts[s.pts.length - 1]}));
   const xTicks = [0, Math.floor((n - 1) / 2), n - 1].filter((v, i, a) => a.indexOf(v) === i);
   const dot = (s, p) => `<circle cx="${x(ix[p.date]).toFixed(1)}" cy="${y(p.per).toFixed(1)}" r="4" fill="var(${s.color})" stroke="var(--surface)" stroke-width="2"/>`;
-  $("recCurveKey").innerHTML = ends.map(e => `<span class="cv-key" title="Latest: ${usd(e.last.value)} for ${usd(e.last.invested)} put in"><i style="border-top-color:var(${e.s.color})"></i>${esc(e.s.label)} <b>${usd(e.last.per)}</b></span>`).join("") +
+  const worth = p => p.value != null && p.invested != null ? ` <span class="muted">(${usd(p.value)} for ${usd(p.invested)})</span>` : "";
+  keyBox.innerHTML = ends.map(e => `<span class="cv-key"${e.last.value != null ? ` title="Latest: ${usd(e.last.value)} for ${usd(e.last.invested)} put in"` : ""}><i style="border-top-color:var(${e.s.color})${e.s.bold ? ";border-top-width:5px" : ""}"></i>${esc(e.s.label)} <b>${usd(e.last.per)}</b></span>`).join("") +
     `<span class="cv-key"><i class="in"></i>Break-even ($1.00 per $1)</span>`;
-  $("recCurve").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Worth per $1 put in, by group: ${esc(ends.map(e => `${e.s.label} ${usd(e.last.per)}`).join(", "))}">` +
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Worth per $1 put in: ${esc(ends.map(e => `${e.s.label} ${usd(e.last.per)}`).join(", "))}">` +
     ticks.map(t => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/><text class="axis" x="${L - 6}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">$${t.toFixed(3)}</text>`).join("") +
     xTicks.map(i => `<text class="axis" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 && n > 1 ? "start" : i === n - 1 && n > 1 ? "end" : "middle"}">${esc(dates[i].slice(5))}</text>`).join("") +
     `<line x1="${L}" x2="${W - R}" y1="${y(1).toFixed(1)}" y2="${y(1).toFixed(1)}" stroke="var(--cv-in)" stroke-width="1.5" stroke-dasharray="5 4"/>` +
-    series.map(s => s.pts.length > 1 ? `<path d="${path(s)}" fill="none" stroke="var(${s.color})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` : dot(s, s.pts[0])).join("") +
-    `<g id="cvHover" visibility="hidden"><line id="cvX" y1="${T}" y2="${H - B}" stroke="var(--border-strong)"/><g id="cvDots"></g></g>` +
-    `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="cvHit" tabindex="0" aria-label="Move through the days with the arrow keys"/></svg><div class="cv-tip" id="cvTip" hidden></div>`;
-  const svg = $("recCurve").querySelector("svg"), tip = $("cvTip");
+    series.map(s => s.pts.length > 1 ? `<path d="${path(s)}" fill="none" stroke="var(${s.color})" stroke-width="${s.bold ? 3 : 2}" stroke-linejoin="round" stroke-linecap="round"/>` : dot(s, s.pts[0])).join("") +
+    `<g data-cv="hover" visibility="hidden"><line data-cv="x" y1="${T}" y2="${H - B}" stroke="var(--border-strong)"/><g data-cv="dots"></g></g>` +
+    `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" data-cv="hit" tabindex="0" aria-label="Move through the days with the arrow keys"/></svg><div class="cv-tip" data-cv="tip" hidden></div>`;
+  const part = k => box.querySelector(`[data-cv="${k}"]`);
+  const svg = box.querySelector("svg"), tip = part("tip"), hover = part("hover"), line = part("x");
   let cvAt = n - 1;
   const show = i => {
     cvAt = i;
     const d = dates[i], here = series.map(s => ({s, p: at[s.k][d]})).filter(e => e.p);
-    $("cvHover").setAttribute("visibility", "visible");
-    $("cvX").setAttribute("x1", x(i)); $("cvX").setAttribute("x2", x(i));
-    $("cvDots").innerHTML = here.map(e => dot(e.s, e.p)).join("");
-    tip.innerHTML = `<b>${esc(d)}</b>` + here.map(e => `<br><span style="color:var(${e.s.color})">●</span> ${esc(e.s.label)}: <b>${usd(e.p.per)}</b> per $1 ` +
-      `<span class="muted">(${usd(e.p.value)} for ${usd(e.p.invested)})</span>`).join("");
+    hover.setAttribute("visibility", "visible");
+    line.setAttribute("x1", x(i)); line.setAttribute("x2", x(i));
+    part("dots").innerHTML = here.map(e => dot(e.s, e.p)).join("");
+    tip.innerHTML = `<b>${esc(d)}</b>` + here.map(e => `<br><span style="color:var(${e.s.color})">●</span> ${esc(e.s.label)}: <b>${usd(e.p.per)}</b> per $1${worth(e.p)}`).join("");
     tip.hidden = false;
-    const box = svg.getBoundingClientRect(), px = x(i) / W * box.width;
-    tip.style.left = Math.min(Math.max(px - tip.offsetWidth / 2, 0), box.width - tip.offsetWidth) + "px";
-    tip.style.top = (T / H * box.height) + "px";
+    const r = svg.getBoundingClientRect(), px = x(i) / W * r.width;
+    tip.style.left = Math.min(Math.max(px - tip.offsetWidth / 2, 0), r.width - tip.offsetWidth) + "px";
+    tip.style.top = (T / H * r.height) + "px";
   };
-  const hide = () => { $("cvHover").setAttribute("visibility", "hidden"); tip.hidden = true; };
-  const hit = $("cvHit");
-  hit.onmousemove = ev => { const box = svg.getBoundingClientRect(), vx = (ev.clientX - box.left) / box.width * W;
+  const hide = () => { hover.setAttribute("visibility", "hidden"); tip.hidden = true; };
+  const hit = part("hit");
+  hit.onmousemove = ev => { const r = svg.getBoundingClientRect(), vx = (ev.clientX - r.left) / r.width * W;
     show(Math.max(0, Math.min(n - 1, Math.round(n === 1 ? 0 : (vx - L) / (W - L - R) * (n - 1))))); };
   hit.onmouseleave = hide; hit.onblur = hide; hit.onfocus = () => show(cvAt);
   hit.onkeydown = ev => { const dd = {ArrowRight: 1, ArrowLeft: -1}[ev.key]; if (dd) { ev.preventDefault(); show(Math.max(0, Math.min(n - 1, cvAt + dd))); } };
@@ -1864,7 +1870,7 @@ async function loadTrackRecord() {
   const allPicks = d.picks, allPolicy = d.policy || [], allAgents = d.agents;
   const pk = firstRows(allPicks, recRows.picks), po = firstRows(allPolicy, recRows.policy), ag = firstRows(allAgents, recRows.agents);
   const ai = firstRows(d.ai_picks || [], recRows.ai), sl = firstRows(d.sells || [], recRows.sells);
-  d = {...d, picks: pk.rows, policy: po.rows, agents: ag.rows, ai_picks: ai.rows, sells: sl.rows};
+  d = {...d, picks: pk.rows, policy: po.rows, agents: ag.rows, ai_picks: ai.rows, ai_picks_all: d.ai_picks || [], sells: sl.rows};
   moreButton("recPicksMore", "picks", pk.more); moreButton("recPolicyMore", "policy", po.more); moreButton("recAgentsMore", "agents", ag.more);
   moreButton("recAiMore", "ai", ai.more); moreButton("recSellsMore", "sells", sl.more);
   // The AI's picks: how each was bought and how it was sold (Sell target, Stop, the 20th close, or still held).
@@ -1883,7 +1889,7 @@ async function loadTrackRecord() {
       return `<tr><td class="l">${esc(r.data_to)}</td><td class="l"><b>${tk(r.ticker)}</b> <span class="muted small">#${r.place}</span></td>` +
         `<td class="l"><span class="ai-box ${w[1]}">${w[0]}</span></td><td>${r.buy_at == null ? "–" : usd(r.buy_at)}</td>` +
         `<td><span class="pos">${r.target == null ? "–" : usd(r.target)}</span> / <span class="neg">${r.stop == null ? "–" : usd(r.stop)}</span></td>` +
-        `<td>${aiBought(r)}</td><td>${r.bought ? sold(r) : "–"}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="l">${aiResult(r)}</td></tr>`; }).join("")
+        `<td>${aiBought(r)}</td><td>${r.bought ? sold(r) : "–"}</td><td>${r.return == null ? "–" : spct(r.return, 1)}</td><td class="l">${aiResult(r)}</td></tr>` + changes(r); }).join("")
     : "<tr><td class='muted'>No AI's pick saved yet: Ask the AI to pick on the Trade tab.</td></tr>";
   // The sell calls: sold at the next close; the move after it says whether selling was right.
   const sellResult = r => r.verdict === "correct" ? `<span class="pos"><b>✓ avoided a ${spct(-r.return, 1)} fall</b></span>`
@@ -2034,6 +2040,23 @@ async function renderCombined(horizon, runId) {
     let c;
     try { c = await fcCombined.loading; }
     catch (e) { fcCombined.loading = null; setHTML("fcRunInfo", `<p class="note">${esc(e.message)}</p>`); return; }
+  // The chart: one line per AI's pick bought (newest 8), and every AI's pick together (net of costs) in bold.
+  const PICK_COLORS = ["--cv-1", "--cv-2", "--cv-3", "--cv-4", "--cv-5"];
+  const bought = (d.ai_picks_all || []).filter(r => (r.path || []).length).slice(0, 8);
+  drawLines($("recAiCurve"), $("recAiKey"), [
+    ...bought.map((r, i) => ({k: r.key, label: `${r.ticker} ${r.data_to.slice(5)}`, color: PICK_COLORS[i % PICK_COLORS.length], pts: r.path})),
+    {k: "all", label: "All AI's picks (net of costs)", color: "--cv-6", bold: true,
+     pts: ((one.ai_picks || {}).curve || []).filter(p => p.invested > 0).map(p => ({...p, per: p.value / p.invested}))}],
+    "No AI's pick bought yet: a pick is bought once its Buy at is reached, or at the next close.");
+  // How the position moved after the pick: each later run that changed the call or a price.
+  const PLAN_FIELD = {buy_at: "Buy at", target: "Sell", stop: "Stop"};
+  // The app's word for each call (WATCH, AVOID...), or the agents' own when both are the same word (Sell → Underweight).
+  const callWords = (a, b) => aiWord(a, false)[0] === aiWord(b, false)[0] ? [esc(a), esc(b)] : [aiWord(a, false)[0], aiWord(b, false)[0]];
+  const changeText = c => `<div class="small"><span class="muted">${esc(c.date.slice(5))}:</span> ` + c.changed.map(k => k === "rating"
+      ? `${callWords(c.from.rating, c.rating)[0]} → <b>${callWords(c.from.rating, c.rating)[1]}</b>`
+      : `${PLAN_FIELD[k]} ${c.from[k] == null ? "–" : usd(c.from[k])} → <b>${c[k] == null ? "–" : usd(c[k])}</b>`).join(", ") + "</div>";
+  // Under the pick's row, only when the position changed.
+  const changes = r => (r.changes || []).length ? `<tr><td></td><td colspan="8" class="l"><div class="muted small"><b>Changes since:</b></div>${r.changes.map(changeText).join("")}</td></tr>` : "";
     if (fcCombined.key !== key) return;    // a newer view was asked for while this one loaded
     fcCombined.data = c;
   }
