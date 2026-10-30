@@ -139,6 +139,35 @@ def test_a_paid_job_is_refused_without_prices_and_says_why(server):
     assert any("switched off" in line or "no price" in line for line in state["log"])
 
 
+def test_live_prices_are_todays_latest_and_nothing_before_the_open(server, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from tradingagents.dataflows.vendors.yahoo import history
+    from tradingagents.webapp import server as srv
+
+    base, _, _ = server
+    ny = ZoneInfo("America/New_York")
+    calls = []
+
+    def quotes(symbols):
+        calls.append(sorted(symbols))
+        return {"AAA": (pd.Timestamp("2026-10-29 14:00", tz=ny), 101.5),
+                "BBB": (pd.Timestamp("2026-10-28 15:59", tz=ny), 50.0)}      # yesterday's: not today's price
+
+    monkeypatch.setattr(history, "live_quotes", quotes)
+    monkeypatch.setattr(srv.App, "_LIVE", {})
+    monkeypatch.setattr(srv, "_ny_now", lambda: datetime(2026, 10, 29, 9, 0, tzinfo=ny))
+    assert _call(base, "/api/live?tickers=AAA")[1] == {"date": "2026-10-29", "open": False, "quotes": {}}
+    assert not calls                                                       # before the open: Yahoo is not asked
+    monkeypatch.setattr(srv, "_ny_now", lambda: datetime(2026, 10, 29, 14, 1, tzinfo=ny))
+    status, out = _call(base, "/api/live?tickers=aaa,BBB")
+    assert status == 200 and out["open"] and out["quotes"] == {"AAA": {"price": 101.5, "at": "14:00"}}
+    _call(base, "/api/live?tickers=AAA,BBB")
+    assert calls == [["AAA", "BBB"]]                                       # a minute's cache: asked once
+    assert _call(base, "/api/live?tickers=A%3BB")[0] == 400
+
+
 def test_a_ticker_page_answers_even_when_its_sources_fail(server):
     base, _, _ = server
     status, out = _call(base, "/api/ticker?symbol=AAA")

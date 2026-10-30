@@ -253,6 +253,14 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+def _ny_now():
+    """The time in New York, where the market's hours are."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("America/New_York"))
+
+
 _COUNT = re.compile(r"(\d+)\s*(?:of|/)\s*(\d+)")
 
 
@@ -440,7 +448,10 @@ class App:
             out["ai_screen"] = None
         picks = ([out["best"]] if out.get("best") else []) + list(out.get("runners_up") or [])
         if picks:
-            out["allocation"] = self._allocation(picks, inc["budget"]["available"])
+            # Amount splits the budget as set (what each stock would get), not what is left after buys since it was
+            # set; ``left`` says how much of it can still be spent.
+            out["allocation"] = self._allocation(picks, inc["budget"].get("set") or inc["budget"]["available"])
+            out["allocation"]["left"] = round(float(inc["budget"]["available"] or 0.0), 2)
         pv = (decision or {}).get("policy") or {}
         if pv.get("available"):
             st = pv.get("stocks") or {}
@@ -1676,6 +1687,41 @@ class App:
 
     _INTRADAY: dict = {}
 
+    _LIVE: dict = {}
+
+    def live(self, tickers: str) -> dict:
+        """Today's latest price for each ticker (comma separated), from Yahoo's one-minute bars, cached for a minute.
+        Display only: no model, signal or saved decision reads them. Nothing before the open or on a closed day;
+        after the close, the session's last price (``open`` false)."""
+        import time as _time
+        from datetime import time as dtime
+
+        from tradingagents.dataflows.vendors.yahoo import history
+        from tradingagents.ledger.sessions import is_session, session_close
+
+        wanted = sorted({t.strip().upper() for t in str(tickers or "").split(",") if t.strip()})
+        if not wanted or len(wanted) > 50 or not all(re.fullmatch(r"[A-Z0-9.\-^]{1,12}", t) for t in wanted):
+            raise ValueError("tickers: 1 to 50, comma separated")
+        now = _ny_now()
+        day = now.date()
+        if not is_session(day) or now.time() < dtime(9, 30):
+            return {"date": day.isoformat(), "open": False, "quotes": {}}
+        stale = [t for t in wanted if not (hit := self._LIVE.get(t)) or _time.time() - hit[0] >= 60]
+        error = None
+        if stale:
+            try:
+                got = history.live_quotes(stale)
+            except Exception as exc:   # the page keeps the last close
+                got, error = {}, f"Yahoo live prices unavailable: {exc}"
+            for t in stale:
+                at, px = got.get(t, (None, None))
+                local = at.tz_convert("America/New_York") if at is not None and at.tzinfo else at
+                self._LIVE[t] = (_time.time(), {"price": round(px, 4), "at": local.strftime("%H:%M")}
+                                 if local is not None and local.date() == day else None)
+        quotes = {t: self._LIVE[t][1] for t in wanted if self._LIVE.get(t) and self._LIVE[t][1]}
+        return {"date": day.isoformat(), "open": now.time() < session_close(day), "quotes": quotes,
+                **({"error": error} if error else {})}
+
     def intraday(self, symbol: str, span: str) -> dict:
         """Intraday prices for the 1D (5-minute bars) and 5D (30-minute bars) chart, with SPY, from Yahoo; cached for
         5 minutes. Display only: no model reads them."""
@@ -2057,8 +2103,8 @@ class App:
             if not row or row.get("expired") or str(row.get("action") or "").lower() not in ("buy", "overweight"):
                 continue
             plan = row.get("plan") or {}
-            entry = (((row.get("validation") or {}).get("buy_at") or {}).get("price") or plan.get("entry_price")
-                     or plan.get("entry_range_low"))
+            entry = (((row.get("validation") or {}).get("buy_at") or {}).get("price") or plan.get("entry_range_low")
+                     or plan.get("entry_price"))
             ltp = prices.get(t)
             if entry is None or ltp is None or not float(entry) < ltp:
                 continue
@@ -2809,6 +2855,8 @@ def make_handler(app: App):
                     self._json(app.signals(query.get("ticker")))
                 elif url.path == "/api/analyze":
                     self._json(app.analysis_state())
+                elif url.path == "/api/live":
+                    self._json(app.live(query.get("tickers", "")))
                 elif url.path == "/api/intraday":
                     self._json(app.intraday(query.get("symbol", ""), query.get("span", "1d")))
                 elif url.path == "/api/tracked":

@@ -179,6 +179,26 @@ def _day(text) -> date | None:
         return None
 
 
+SELLER_SIDES = ("Sell", "Underweight")
+
+
+def _long_exits(side: str, base: float, stop: float | None, target: float | None,
+                source: dict | None) -> tuple[float | None, float | None, dict, list[str]]:
+    """The agents' exits a long position can use. After a Sell or Underweight call their levels are a seller's
+    (a stop above, a target below), so none is used; after any call a stop not below ``base`` or a target not
+    above it is not used either. Returns the stop and target left, what was dropped and why."""
+    dropped, why = {}, []
+    for k, name, v, wrong in (("stop_loss", "stop-loss", stop, lambda v: v >= base),
+                              ("price_target", "price target", target, lambda v: v <= base)):
+        if v is None or (source or {}).get(k) == "model":
+            continue
+        if side in SELLER_SIDES or wrong(v):
+            dropped[k] = v
+            why.append(f"the agents' {name} {v} is not used: " + (f"after the {side} call it is a seller's level"
+                       if side in SELLER_SIDES else f"it is not {'below' if k == 'stop_loss' else 'above'} the entry {base}"))
+    return (None if "stop_loss" in dropped else stop, None if "price_target" in dropped else target, dropped, why)
+
+
 def validate(plan: dict | None, action: str | None, ref: dict, account: dict, today: date | None = None,
              stop_loss: float | None = None, price_target: float | None = None, sigma_h: float | None = None,
              source: dict | None = None, model_buy: float | None = None) -> dict:
@@ -187,8 +207,8 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
     is a block (the plan cannot be used) or a warning (it can, with care). An exit the agents did not give
     comes from the internal model's barrier rule when ``sigma_h`` (the stock's volatility over the horizon)
     is known: stop at E * exp(-sigma_h), sell target at E * exp(+sigma_h), for the entry E; ``levels.source``
-    says which level came from where. ``buy_at`` is one buy price: the plan's entry price, else the low end of
-    its range, else ``model_buy`` (the internal model's)."""
+    says which level came from where. ``buy_at`` is one buy price: the low end of the plan's range, else its
+    entry price, else ``model_buy`` (the internal model's)."""
     from tradingagents.ledger.sessions import is_session, next_session, sessions_between
 
     today = today or date.today()
@@ -244,7 +264,7 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
         warnings.append(f"no currency given: read as the quote's ({ref.get('currency') or NOT_GIVEN})")
     used = price if price is not None else (high if high is not None else None)
     ok = lambda v: isinstance(v, (int, float)) and math.isfinite(v) and v > 0  # noqa: E731
-    buy_at, buy_src = ((price, "agents") if ok(price) else (low, "agents") if ok(low)
+    buy_at, buy_src = ((low, "agents") if ok(low) else (price, "agents") if ok(price)
                        else (round(model_buy, 2), "model") if model_buy and ok(model_buy) else (None, None))
     out["buy_at"] = {"price": buy_at, "source": buy_src}
     ref_px = ref.get("price")
@@ -309,12 +329,18 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
         source = dict(source or {})
         for k, v in (("stop_loss", stop_loss), ("price_target", price_target)):
             source.setdefault(k, "agents" if v is not None else None)
+        stop_loss, price_target, dropped, why = _long_exits(side, used, stop_loss, price_target, source)
+        warnings.extend(why)
+        for k in dropped:
+            source[k] = None
         if sigma_h and math.isfinite(sigma_h) and sigma_h > 0:
             if stop_loss is None:
                 stop_loss, source["stop_loss"] = round(used * math.exp(-sigma_h), 2), "model"
             if price_target is None:
                 price_target, source["price_target"] = round(used * math.exp(sigma_h), 2), "model"
         levels = {"stop_loss": stop_loss, "price_target": price_target, "source": source, "base": used}
+        if dropped:
+            levels["dropped"] = dropped
         if stop_loss is not None and stop_loss >= used:
             warnings.append(f"stop-loss {stop_loss} is not below the entry {used}")
         if price_target is not None and price_target <= used:
@@ -327,11 +353,15 @@ def validate(plan: dict | None, action: str | None, ref: dict, account: dict, to
 
     if out["levels"] is None and buy_at and sigma_h and math.isfinite(sigma_h) and sigma_h > 0:
         # No price the plan could be sized on: the exits around the Buy at price, from the internal model.
-        src = {"stop_loss": "agents" if stop_loss is not None else "model",
-               "price_target": "agents" if price_target is not None else "model", **(source or {})}
+        stop_loss, price_target, dropped, why = _long_exits(side, buy_at, stop_loss, price_target, source)
+        warnings.extend(why)
+        src = {**{"stop_loss": "agents", "price_target": "agents"}, **(source or {})}
+        src.update({k: "model" for k, v in (("stop_loss", stop_loss), ("price_target", price_target)) if v is None})
         out["levels"] = {"stop_loss": stop_loss if stop_loss is not None else round(buy_at * math.exp(-sigma_h), 2),
                          "price_target": price_target if price_target is not None
                          else round(buy_at * math.exp(sigma_h), 2), "source": src, "base": buy_at}
+        if dropped:
+            out["levels"]["dropped"] = dropped
     state = "blocked" if blocks else ("expired" if expires and expires < today else
                                       ("conditional" if status == "conditional" else "actionable"))
     return {**out, "state": state, "feasible": not blocks and state != "expired"}
@@ -393,6 +423,20 @@ def plans_for(con, ticker: str, today: date | None = None) -> list[dict]:
             r[k] = json.loads(raw) if raw else None
         expires = _day((r["plan"] or {}).get("expires_at"))
         r["expired"] = bool(expires and expires < today)
+        ba, low = (r["validation"] or {}).get("buy_at"), (r["plan"] or {}).get("entry_range_low")
+        if ba and ba.get("source") == "agents" and isinstance(low, (int, float)) and math.isfinite(low) and low > 0:
+            ba["price"] = low     # a plan saved when Buy at was the entry price before the range's low end
+        lv = (r["validation"] or {}).get("levels")
+        if lv and "dropped" not in lv and lv.get("base"):
+            # A plan saved before seller's levels were dropped: drop them now (no volatility saved to refill from).
+            stop, target, dropped, why = _long_exits(str(r["action"] or "").title(), lv["base"], lv.get("stop_loss"),
+                                                     lv.get("price_target"), lv.get("source"))
+            if dropped:
+                lv.update({"stop_loss": stop, "price_target": target, "dropped": dropped})
+                lv["source"] = {**(lv.get("source") or {}), **{k: None for k in dropped}}
+                lv.pop("reward_to_risk", None)
+                lv.pop("loss_at_stop_usd", None)
+                r["validation"]["warnings"] = list(r["validation"].get("warnings") or []) + why
     finals = [r for r in rows if r["stage"] == "portfolio_manager"]
     for newer, older in zip(finals, finals[1:]):
         older["superseded_by"] = newer["id"]

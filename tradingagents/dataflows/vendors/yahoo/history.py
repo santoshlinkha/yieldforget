@@ -71,6 +71,30 @@ def intraday_close(symbol: str, period: str, interval: str) -> pd.Series:
     return _ticker(symbol).history(period=period, interval=interval)["Close"].dropna()
 
 
+def live_quotes(symbols) -> dict[str, tuple[pd.Timestamp, float]]:
+    """Each symbol's latest one-minute regular-session price from Yahoo, with its time, in one request
+    (display only; not stored). A symbol Yahoo has no bar for today is left out."""
+    import yfinance as yf
+
+    from tradingagents.dataflows.symbols import normalize_symbol
+    from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+
+    names = {normalize_symbol(s): s for s in symbols}
+    frame = yf_retry(lambda: yf.download(list(names), period="1d", interval="1m", prepost=False, auto_adjust=False,
+                                         progress=False, threads=False, group_by="column"))
+    if frame is None or frame.empty:
+        return {}
+    close = frame["Close"]
+    if isinstance(close, pd.Series):
+        close = close.to_frame(next(iter(names)))
+    out = {}
+    for col in close.columns:
+        s = close[col].dropna()
+        if not s.empty and col in names:
+            out[names[col]] = (s.index[-1], float(s.iloc[-1]))
+    return out
+
+
 def upgrades(symbol: str, cache_dir=None) -> pd.DataFrame:
     """Dated analyst actions, oldest first, indexed by their time (no time zone)."""
     from tradingagents.dataflows.vendors.yahoo.common import yf_retry

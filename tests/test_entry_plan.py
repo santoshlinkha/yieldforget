@@ -113,12 +113,66 @@ def test_missing_exits_come_from_the_trader_then_the_internal_model():
     assert none["levels"]["stop_loss"] is None and none["levels"]["price_target"] is None
 
 
+def test_a_sellers_exits_are_not_used_for_a_buy():
+    import math
+
+    # After a Sell / Underweight call the agents' stop sits above and their target below: the model's instead.
+    v = EP.validate(plan(), "Underweight", REF, ACCOUNT, TODAY, stop_loss=101.95, price_target=93.0, sigma_h=0.1)
+    lv = v["levels"]
+    assert lv["dropped"] == {"stop_loss": 101.95, "price_target": 93.0}
+    assert lv["stop_loss"] == round(98.0 * math.exp(-0.1), 2) and lv["source"]["stop_loss"] == "model"
+    assert lv["price_target"] == round(98.0 * math.exp(0.1), 2) and lv["source"]["price_target"] == "model"
+    assert any("seller's level" in w for w in v["warnings"])
+    # A Buy with one level on the wrong side drops only that one; no volatility known: nothing in its place.
+    w = EP.validate(plan(), "Buy", REF, ACCOUNT, TODAY, stop_loss=94.0, price_target=96.0)
+    assert w["levels"]["stop_loss"] == 94.0 and w["levels"]["price_target"] is None
+    assert w["levels"]["dropped"] == {"price_target": 96.0}
+
+
+def test_a_plan_saved_with_a_sellers_exits_reads_back_without_them(tmp_path):
+    import json
+
+    from tradingagents.ledger.store import Store
+
+    store = Store(tmp_path / "book")
+    EP.record(store, "AAA", "2026-10-23", "run-1", "gemini", REF, ACCOUNT, None,
+              {"rating": "Underweight", "plan": plan()}, today=TODAY)
+    # As saved before the check: the agents' levels kept on the wrong side, Buy at the entry price.
+    row = store.con.execute("SELECT id, validation_json FROM entry_plans").fetchone()
+    old = json.loads(row[1])
+    old["levels"] = {"stop_loss": 101.95, "price_target": 93.0, "base": 98.0,
+                     "source": {"stop_loss": "agents", "price_target": "agents"}}
+    old["buy_at"] = {"price": 98.0, "source": "agents"}
+    runs = EP.plans_for(_with_validation(store, row[0], old), "AAA", TODAY)
+    v = runs[0]["final"]["validation"]
+    assert v["levels"]["stop_loss"] is None and v["levels"]["price_target"] is None
+    assert v["levels"]["dropped"] == {"stop_loss": 101.95, "price_target": 93.0}
+    assert v["buy_at"]["price"] == 97.0
+
+
+def _with_validation(store, plan_id, validation):
+    """A copy of the plans table with one row's saved validation replaced (the table itself is append-only)."""
+    import json
+    import sqlite3
+
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    cols = [r[1] for r in store.con.execute("PRAGMA table_info(entry_plans)")]
+    con.execute(f"CREATE TABLE entry_plans ({', '.join(cols)})")
+    for r in store.con.execute("SELECT * FROM entry_plans"):
+        r = dict(zip(cols, r))
+        if r["id"] == plan_id:
+            r["validation_json"] = json.dumps(validation)
+        con.execute(f"INSERT INTO entry_plans VALUES ({', '.join('?' * len(cols))})", [r[c] for c in cols])
+    return con
+
+
 def test_buy_at_is_one_price_the_low_end_of_a_range_else_the_internal_models():
     import math
 
-    assert EP.validate(plan(), "Buy", REF, ACCOUNT, TODAY)["buy_at"] == {"price": 98.0, "source": "agents"}
-    ranged = EP.validate(plan(entry_price=None), "Buy", REF, ACCOUNT, TODAY)
-    assert ranged["buy_at"] == {"price": 97.0, "source": "agents"}                 # the low end of 97-99
+    assert EP.validate(plan(), "Buy", REF, ACCOUNT, TODAY)["buy_at"] == {"price": 97.0, "source": "agents"}  # 97-99, not 98
+    single = EP.validate(plan(entry_range_low=None, entry_range_high=None), "Buy", REF, ACCOUNT, TODAY)
+    assert single["buy_at"] == {"price": 98.0, "source": "agents"}                 # no range: the entry price
     bare = plan(entry_price=None, entry_range_low=None, entry_range_high=None, entry_type="limit")
     v = EP.validate(bare, "Buy", REF, ACCOUNT, TODAY, sigma_h=0.1, model_buy=96.4)
     assert v["buy_at"] == {"price": 96.4, "source": "model"}

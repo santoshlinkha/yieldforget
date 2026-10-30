@@ -668,21 +668,23 @@ function planSummary(run) {
   const tag = run.current ? "" : (row.expired ? " · expired" : (f && f.superseded_by ? " · superseded" : ""));
   const cur = p.currency ? " " + esc(p.currency) : "";
   const money2 = x => x == null || x === "" ? null : `${esc(x)}${cur}`;
+  // A level the agents gave on the wrong side for a buy (a seller's, after a SELL / AVOID call) is not shown.
+  const dropped = k => (lv.dropped || {})[k] != null ? `<div class="muted small" title="${esc(((v.warnings || []).find(w => w.startsWith("the agents' " + (k === "stop_loss" ? "stop-loss" : "price target"))) || ""))}">agents' ${esc(lv.dropped[k])} not used (wrong side for a buy)</div>` : "";
   const fromWhere = k => {
     const src = (lv.source || {})[k];
-    return src === "model" ? `<div class="muted small" title="The agents gave no level: the internal model's exit for this entry (one horizon's volatility away)">internal model</div>`
-      : src === "trader" ? `<div class="muted small">the trader's</div>` : "";
+    return (src === "model" ? `<div class="muted small" title="The agents gave no usable level: the internal model's exit for this entry (one horizon's volatility away)">internal model</div>`
+      : src === "trader" ? `<div class="muted small">the trader's</div>` : "") + dropped(k);
   };
   // One Buy at price (the low end of a range), else the internal model's; the range itself beneath it.
   const ba = v.buy_at || {};
-  const buyPx = ba.price != null ? ba.price : p.entry_price != null ? p.entry_price : p.entry_range_low;
+  const buyPx = ba.price != null ? ba.price : p.entry_range_low != null ? p.entry_range_low : p.entry_price;
   const entry = buyPx != null ? money2(buyPx) + (p.entry_range_low != null && p.entry_range_high != null
       ? `<div class="muted small">range ${esc(p.entry_range_low)} – ${esc(p.entry_range_high)}</div>` : "") +
       (ba.source === "model" ? `<div class="muted small">internal model</div>` : "") : null;
   const tiles = [
     ["Buy at", entry ? `<b>${entry}</b>${p.entry_type ? `<div class="muted small">${esc(p.entry_type)} order</div>` : ""}` : null],
-    ["Sell target (book profit)", money2(lv.price_target) ? `<b class="pos">${money2(lv.price_target)}</b>${fromWhere("price_target")}` : null],
-    ["Stop loss (exit)", money2(lv.stop_loss) ? `<b class="neg">${money2(lv.stop_loss)}</b>${fromWhere("stop_loss")}` : `<span class="muted small">not given by the agents</span>`],
+    ["Target", money2(lv.price_target) ? `<b class="pos">${money2(lv.price_target)}</b>${fromWhere("price_target")}` : dropped("price_target") ? `<b>–</b>${dropped("price_target")}` : null],
+    ["Stop", money2(lv.stop_loss) ? `<b class="neg">${money2(lv.stop_loss)}</b>${fromWhere("stop_loss")}` : dropped("stop_loss") ? `<b>–</b>${dropped("stop_loss")}` : `<span class="muted small">not given by the agents</span>`],
     [p.status === "wait" ? "Wait until" : "Entry condition", p.trigger ? bullets(p.trigger) : null, "wide"],
     ["When", p.earliest_execution ? `from ${esc(p.earliest_execution)}` : null],
     ["Valid until", p.expires_at ? esc(p.expires_at) : null]].filter(x => x[1]);
@@ -800,6 +802,18 @@ async function loadEntryPlans() {
     planRun(first) + (rest.length ? `<details><summary class="small">${rest.length} earlier plan${rest.length === 1 ? "" : "s"} (superseded or expired)</summary>${rest.map(run => `<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px">${planRun(run)}</div>`).join("")}</details>` : "");
 }
 
+// The header's live price (Yahoo, display only), against the previous session's close; the last close stays when
+// there is none (closed, before the open, Yahoo down). Refreshed every minute while the page is in view.
+async function livePrice(p) {
+  let r;
+  try { const res = await fetch("/api/live?tickers=" + encodeURIComponent(symbol)); r = await res.json(); if (!res.ok) return; } catch { return; }
+  const x = (r.quotes || {})[symbol];
+  if (!x) return;
+  const prev = p.as_of === r.date ? p.last / (1 + p.returns["1d"]) : p.last;
+  $("px").innerHTML = `${money(x.price)} ${spct(x.price / prev - 1, 2)}<span class="muted small" style="font-weight:400;margin-left:6px">${r.open ? "live" : "today's last"} ${esc(x.at)}</span>`;
+  $("px").title = `Yahoo, ${x.at} New York; last close ${p.last.toFixed(2)} on ${p.as_of}`;
+  if (r.open) setTimeout(() => { if (!document.hidden) livePrice(p); else setTimeout(() => livePrice(p), 60000); }, 60000);
+}
 async function load() {
   loadEntryPlans();
   document.title = `${symbol} · AlphaDesk`;
@@ -815,6 +829,7 @@ async function load() {
   const p = d.price;
   if (p && !p.error) {
     $("px").innerHTML = `${money(p.last)} ${spct(p.returns["1d"], 2)}`;
+    livePrice(p);
     $("asof").textContent = `Prices to the close of ${p.as_of}; history from ${p.first}`;
     const r = p.returns;
     $("stats").innerHTML = [["1 week", spct(r["1w"])], ["1 month", spct(r["1m"])], ["3 months", spct(r["3m"])], ["1 year", spct(r["1y"])],

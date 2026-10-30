@@ -516,6 +516,9 @@ footer { color: var(--faint); font-size: 12px; border-top: 1px solid var(--borde
 .chip input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .chip input:checked + span::before { background: currentColor; }
 .chip:hover span { border-color: var(--accent); }
+/* A live price (Yahoo, display only): a green dot while the market is open, grey after the close. */
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #16a34a; margin-left: 4px; vertical-align: middle; }
+.live-dot.shut { background: var(--muted, #94a3b8); }
 .vb { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; padding: 2px 9px; border-radius: 999px; }
 .vb.BUY { color: var(--buy, #059669); } .vb.SELL, .vb.AVOID { color: var(--sell, #dc2626); } .vb.HOLD { color: var(--accent); } .vb.WATCH, .vb.REVIEW { color: #d97706; } .vb.ABSTAIN { color: var(--muted); }
 .econ { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); margin: 0 0 14px; }
@@ -1148,6 +1151,41 @@ let fcAll = false;
 // --- the trade view: budget, best buy and its price, sells, SGOV interest, the model's record ---
 const money = v => v == null ? "–" : usd(v);
 const STATUS = {ok: ["ok", "Healthy"], falling: ["note", "Falling"], dried: ["note", "Dried up"], unknown: ["muted", "Unknown"]};
+// Live prices (Yahoo, display only; no model reads them): after a table renders, every [data-live] cell takes the
+// ticker's latest price, [data-live-net] its profit at that price, and a [data-live-row] earlier pick whose Buy at
+// is no longer below it is hidden. Without a live price (closed, before the open, Yahoo down) the last close stays.
+// Under a pick table: the budget the Amounts split, and how much of it is left after the buys since it was set.
+const budgetLeft = a => a && a.budget ? `<caption style="caption-side:bottom;text-align:left" class="muted small">Amount splits the ` +
+  `${usd(a.budget)} budget as set; ${a.left != null && a.left < a.budget ? `<b>${usd(a.left)} left</b> after buys since it was set` : "all of it is left"}.</caption>` : "";
+async function applyLive() {
+  const tickers = [...new Set([...document.querySelectorAll("[data-live],[data-live-net],[data-live-row]")]
+    .map(e => e.dataset.live || e.dataset.liveNet || e.dataset.liveRow))];
+  if (!tickers.length) return;
+  let r;
+  try { r = await apiItem("/api/live?tickers=" + encodeURIComponent(tickers.join(","))); } catch { return; }
+  const q = r.quotes || {};
+  const tip = (t, c) => `${r.open ? "Live" : "Today's last"} price at ${q[t].at} New York (Yahoo)${c != null ? `; last close ${usd(+c)}` : ""}`;
+  document.querySelectorAll("[data-live]").forEach(e => {
+    const t = e.dataset.live, x = q[t];
+    if (!x) return;
+    e.innerHTML = `${usd(x.price)}<span class="live-dot${r.open ? "" : " shut"}"></span>`;
+    e.title = tip(t, e.dataset.close);
+  });
+  document.querySelectorAll("[data-live-net]").forEach(e => {
+    const x = q[e.dataset.liveNet], sh = +e.dataset.shares, en = +e.dataset.entry;
+    if (!x || !sh || !en) return;
+    const v = sh * (x.price - en);
+    e.className = v > 0 ? "pos" : v < 0 ? "neg" : "";
+    e.innerHTML = `<b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b>`;
+    e.title = tip(e.dataset.liveNet);
+  });
+  document.querySelectorAll("[data-live-row]").forEach(e => {
+    const x = q[e.dataset.liveRow];
+    if (x) e.hidden = !(+e.dataset.entry < x.price);
+  });
+}
+setInterval(() => { if (!document.hidden) applyLive(); }, 60000);
+
 async function loadTrade() {
   let t;
   try { t = await api("/api/trade"); } catch (e) { $("buyBox").innerHTML = `<p class="note">${esc(e.message)}</p>`; return; }
@@ -1185,12 +1223,13 @@ async function loadTrade() {
     // Net: the profit or loss so far in dollars (shares × (last close − your fill)), before the sale's cost.
     const netCell = s => {
       const v = s.shares != null && s.last_close != null && s.entry != null ? s.shares * (s.last_close - s.entry) : null;
-      return v == null ? "<td>–</td>" : `<td class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
+      const live = ` data-live-net="${esc(s.ticker)}" data-shares="${s.shares ?? ""}" data-entry="${s.entry ?? ""}"`;
+      return v == null ? `<td${live}>–</td>` : `<td${live} class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}"><b>${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}</b></td>`;
     };
     $("sellBox").innerHTML = t.sells.length ? `<table class="compact sell-fit"><colgroup><col style="width:8%"><col style="width:16%"><col style="width:13%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:15%"><col style="width:10%"></colgroup>` +
       `<tr><th class="l">Ticker</th><th>Action</th><th>Now</th><th>Net</th><th title="Sell target">Sell</th><th title="Stop loss">Stop</th><th>Deadline</th><th title="The AI agents' call on today's data; AI: not run today (click to run)">AI</th></tr>` +
       t.sells.map(s => `<tr><td class="l"><b>${tk(s.ticker)}</b></td><td>${actBadge(s.action)}${s.execute ? `<div class="muted small">at the close of ${esc(s.execute)}</div>` : ""}</td>
-        <td>${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td title="${esc(s.deadline || "")}">${esc(String(s.deadline || "–").replace(/^20(\d\d-)/, "$1"))}</td>` +
+        <td data-live="${esc(s.ticker)}" data-close="${s.last_close ?? ""}">${money(s.last_close)}</td>${netCell(s)}<td class="pos">${money(s.sell_target)}</td><td class="neg">${money(s.sell_stop)}</td><td title="${esc(s.deadline || "")}">${esc(String(s.deadline || "–").replace(/^20(\d\d-)/, "$1"))}</td>` +
         `<td><button class="ai-call" data-agents="${esc(s.ticker)}" data-aicall="${esc(s.ticker)}" title="Run the AI agents on ${esc(s.ticker)}">AI</button></td></tr>
         <tr><td></td><td colspan="7" class="muted small l">${esc((s.reasons || []).join("; "))}</td></tr>`).join("") + "</table>"
       : "<p class='muted'>No stocks held: nothing to sell.</p>";
@@ -1200,17 +1239,19 @@ async function loadTrade() {
     const allPicks = [...(x ? [x] : []), ...t.runners_up];
     $("runnersTable").innerHTML = allPicks.length
       ? `<colgroup><col style="width:11%"><col style="width:15%"><col style="width:15%"><col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:19%"></colgroup>` +
-        `<tr><th class="l">Ticker</th><th class="num" title="Dollars from the trading budget split">Amount</th><th class="num" title="Last traded price: the latest close (not an order price; the buy is at the next close)">LTP</th>` +
+        `<tr><th class="l">Ticker</th><th class="num" title="The trading budget as set, split across the picks: what each would get">Amount</th><th class="num" title="Last traded price: live from Yahoo while the market is open (green dot), else the latest close; not an order price (the buy is at the next close; the Sell and Stop here are from the close)">LTP</th>` +
         `<th class="num" title="Buy at: the patient limit at the model's median dip when it has one (untested), else about the LTP (the tested rule buys at the next close, whatever it is)">Buy at</th>` +
         `<th class="num" title="Sell target price: from the LTP; the real target is this far above your fill">Sell</th><th class="num" title="Stop loss price: from the LTP; the real stop is this far below your fill">Stop</th><th class="c"><button type="button" class="th-run" id="aiAllPicks" title="Run the AI agents on every pick, one after another (a stock already analysed today is not run again)">Run AI</button></th></tr>` +
         allPicks.map((x, i) => `<tr${i === 0 ? ' class="first-pick"' : ""}><td class="l"><b>${tk(x.ticker)}</b></td>` +
-          `<td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num">${usd(x.last_close)}</td>` +
+          `<td class="num">${alloc.dollars[x.ticker] != null ? usd(alloc.dollars[x.ticker]) : "–"}</td><td class="num" data-live="${esc(x.ticker)}" data-close="${x.last_close ?? ""}">${usd(x.last_close)}</td>` +
           `<td class="num"><b>${x.patient && x.patient.price != null ? usd(x.patient.price) : x.last_close != null ? "≈" + usd(x.last_close) : "–"}</b></td>` +
           `<td class="num pos" title="${spct(x.target_pct, 1)}">${x.last_close != null && x.target_pct != null ? usd(x.last_close * (1 + x.target_pct)) : "–"}</td>` +
           `<td class="num neg" title="${spct(x.stop_pct, 1)}">${x.last_close != null && x.stop_pct != null ? usd(x.last_close * (1 + x.stop_pct)) : "–"}</td>` +
           `<td class="c rn-agents"><div class="rn-ag"><div class="rn-ag-body" data-agentcell="${esc(x.ticker)}"></div><button class="ghost small-btn rn-ai" data-agents="${esc(x.ticker)}" title="Run the AI agents on ${esc(x.ticker)}" aria-label="Run the AI agents on ${esc(x.ticker)}">AI</button></div></td></tr>`).join("")
       : "<tr><td class='muted'>None today.</td></tr>";
+    if (allPicks.length) $("runnersTable").insertAdjacentHTML("beforeend", budgetLeft(alloc));
     $("runnersAll").hidden = false;
+    applyLive();
     const asked = (t.ai_pick || {}).today;       // once a day: the button rests until tomorrow
     $("runnersAll").disabled = !!asked;
     $("runnersAll").textContent = asked ? `Asked today (${esc((t.ai_pick.asked_at || "").slice(11, 16))})` : "Ask the AI to pick";
@@ -1438,9 +1479,10 @@ const AI_RANK = {buy: 5, overweight: 4, hold: 3, underweight: 2, sell: 1};
 // The AI's picks: its own ranking of the market, and what the full team decided on each it analysed. The trading
 // budget is split across the ones the team would buy, at the team's own entry price, sell target and stop.
 async function renderAiPick(seen, scr) {
-  // The agents' own prices for every stock they analysed; the budget (Amount) only for the ones they would buy.
+  // The agents' own prices for every stock they analysed; the budget (Amount) for the ones not rated AVOID.
   const plans = await Promise.all(seen.map(x => apiItem("/api/entry-plans?ticker=" + encodeURIComponent(x.ticker)).catch(() => ({runs: []}))));
-  const buys = seen.filter(x => x.r.available && aiWord(x.r.agent_rating, false)[0] === "BUY");
+  // Amount: the budget split across every pick the team did not rate AVOID (BUY or WATCH), as the model's picks are.
+  const buys = seen.filter(x => x.r.available && aiWord(x.r.agent_rating, false)[0] !== "AVOID");
   const a = (lastTrade && lastTrade.allocation) || {weights: {}, budget: 0};
   const raw = buys.map(b => a.weights[b.ticker] ?? 1 / buys.length), sum = raw.reduce((x, y) => x + y, 0) || 1;
   const weight = Object.fromEntries(buys.map((b, k) => [b.ticker, raw[k] / sum]));
@@ -1449,16 +1491,21 @@ async function renderAiPick(seen, scr) {
     const decided = x.r.available ? aiWord(x.r.agent_rating, false) : null;
     const run = (plans[k].runs || [])[0] || {}, row = run.final || run.trader || {}, p = row.plan || {};
     const lv = (row.validation || {}).levels || {}, w = weight[x.ticker];
-    // One Buy at price: the agents' entry price, else the low end of their range, else the internal model's.
+    // One Buy at price: the low end of the agents' range, else their entry price, else the internal model's.
     const ba = (row.validation || {}).buy_at || {};
-    const buy = ba.price != null ? ba.price : p.entry_price != null ? p.entry_price : p.entry_range_low;
+    const buy = ba.price != null ? ba.price : p.entry_range_low != null ? p.entry_range_low : p.entry_price;
     const price = buy != null ? num(buy) + (ba.source === "model" ? `<span class="muted small" title="The agents gave no buy price: the internal model's"> m</span>` : "") : "–";
     const why = x.pick ? [x.pick.why, `Technical: ${x.pick.technical}`, `Sentiment: ${x.pick.sentiment}`, `News: ${x.pick.news}`, `Fundamentals: ${x.pick.fundamentals}`].join("\n") : "";
     return `<tr><td class="num">${x.pick ? x.pick.rank : ""}</td><td class="l" title="${esc(why)}"><b>${tk(x.ticker)}</b></td>` +
       `<td class="l">${decided ? `<a class="ai-box ${decided[1]}" href="/ticker/${encodeURIComponent(x.ticker)}#reports" target="_blank" rel="noopener">${decided[0]}</a>` : ""}</td>` +
-      `<td class="num">${x.pick && x.pick.ltp != null ? usd(x.pick.ltp) : "–"}</td>` +
+      `<td class="num" data-live="${esc(x.ticker)}" data-close="${x.pick && x.pick.ltp != null ? x.pick.ltp : ""}">${x.pick && x.pick.ltp != null ? usd(x.pick.ltp) : "–"}</td>` +
       `<td class="num">${w != null && a.budget ? usd(w * a.budget) : ""}</td>` +
-      `<td class="num"><b>${decided ? price : ""}</b></td><td class="num pos">${decided ? num(lv.price_target) : ""}</td><td class="num neg">${decided ? num(lv.stop_loss) : ""}</td></tr>`;
+      `<td class="num"><b>${decided ? price : ""}</b></td>` +
+      [["price_target", "pos"], ["stop_loss", "neg"]].map(([k, c]) => {
+        const off = (lv.dropped || {})[k], m = (lv.source || {})[k] === "model";
+        const tip = off != null ? `The agents' ${off} is on the wrong side for a buy: not used${m ? "; the internal model's instead" : ""}` : m ? "The internal model's" : "";
+        return `<td class="num ${c}"${tip ? ` title="${esc(tip)}"` : ""}>${decided ? num(lv[k]) + (m ? `<span class="muted small"> m</span>` : "") : ""}</td>`;
+      }).join("") + `</tr>`;
   });
   // Earlier AI picks still open: their plan is current and unexpired, and the entry is below today's price.
   const openRows = () => {
@@ -1467,9 +1514,9 @@ async function renderAiPick(seen, scr) {
     return `<tr class="grp"><td colspan="8" class="l" title="Picked on an earlier ask; the agents' plan is still valid and its Buy at price is below the LTP, so it can still fill">Earlier picks, still valid (Buy at below LTP)</td></tr>` +
       old.map(o => {
         const w = aiWord(o.rating, false);
-        return `<tr><td class="num muted small">${esc(String(o.picked || "").slice(5))}</td><td class="l"><b>${tk(o.ticker)}</b></td>` +
+        return `<tr data-live-row="${esc(o.ticker)}" data-entry="${o.entry}"><td class="num muted small">${esc(String(o.picked || "").slice(5))}</td><td class="l"><b>${tk(o.ticker)}</b></td>` +
           `<td class="l"><a class="ai-box ${w[1]}" href="/ticker/${encodeURIComponent(o.ticker)}#reports" target="_blank" rel="noopener" title="Plan from ${esc(o.analysis_date || "")}${o.expires ? ", valid until " + esc(o.expires) : ""}">${w[0]}</a></td>` +
-          `<td class="num">${usd(o.ltp)}</td><td class="num"></td><td class="num"><b>${usd(o.entry)}</b></td>` +
+          `<td class="num" data-live="${esc(o.ticker)}" data-close="${o.ltp}">${usd(o.ltp)}</td><td class="num"></td><td class="num"><b>${usd(o.entry)}</b></td>` +
           `<td class="num pos">${num(o.target)}</td><td class="num neg">${num(o.stop)}</td></tr>`;
       }).join("");
   };
@@ -1483,12 +1530,13 @@ async function renderAiPick(seen, scr) {
   $("aiPickBox").innerHTML = `<div class="table-wrap"><table class="compact ai-picks"><colgroup><col style="width:6%"><col style="width:12%">` +
     `<col style="width:14%"><col style="width:13%"><col style="width:13%"><col style="width:16%"><col style="width:13%"><col style="width:13%"></colgroup>` +
     `<tr><th class="num" title="The AI's own rank">#</th><th class="l">Ticker</th><th class="l" title="The full team's decision (click for the report)">AI</th>` +
-    `<th class="num" title="Last traded price: the latest close">LTP</th><th class="num" title="Dollars from the trading budget (only for a BUY)">Amount</th>` +
+    `<th class="num" title="Last traded price: live from Yahoo while the market is open (green dot), else the latest close">LTP</th><th class="num" title="The trading budget as set, split across the picks not rated AVOID: what each would get">Amount</th>` +
     `<th class="num" title="Buy at: the agents' entry price (the low end of a range), else the internal model's">Buy at</th><th class="num" title="Sell price: where the profit is booked (the agents', else the internal model's)">Sell</th><th class="num" title="The agents' stop loss">Stop</th></tr>` +
-    rows.join("") + openRows() + `</table></div>` +
+    rows.join("") + openRows() + budgetLeft(a) + `</table></div>` +
     (scr ? `<p class="muted small" style="margin:6px 0 0">The AI ranked ${scr.considered} stocks from their facts (${esc(String(scr.model || "").split("/").pop())}); ` +
-    `the full team analysed its top ${seen.length}. Buy at, Target and Stop are the agents' own plan; Amount only for a BUY. Hover a ticker for its reasons.</p>`
+    `the full team analysed its top ${seen.length}. Buy at, Target and Stop are the agents' own plan; Amount: the budget split across the picks not rated AVOID. Hover a ticker for its reasons.</p>`
       : `<p class="muted small" style="margin:6px 0 0">The AI has not been asked today; these are earlier picks whose plan is still valid.</p>`);
+  applyLive();
 }
 async function runAgents() {
   try { await api("/api/analyze", {ticker: agentTicker, date: agentDay, analysts: ["market", "social", "news", "fundamentals"]}); }
